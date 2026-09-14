@@ -19,3 +19,4 @@ test-results/
 *.db-shm
 *.db-wal
 backend/build/
+sources/
