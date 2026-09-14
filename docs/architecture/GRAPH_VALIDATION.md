@@ -24,7 +24,7 @@
 
 ## Конфигурационный preflight
 
-`POST /api/bindings/{id}/preflight` принимает необязательное тело `{inputs, overrides}`. Возвращает:
+`POST /api/bindings/{id}/preflight` принимает необязательное тело `{inputs, overrides, execution_mode, fake_scenario}`. Режим real выбран по умолчанию; явный simulated описан в [контракте движка](ENGINE_RUNTIME.md). Возвращает:
 
 - ошибки/предупреждения, graph_hash и итоговый execution_hash;
 - resolved_settings и источники переопределений;
@@ -38,7 +38,7 @@ Preflight не резервирует каталог, не вызывает мо
 
 Поддержан общий словарь параметров генерации (reasoning_effort, temperature, top_p, token caps, seed, stop, penalties) с проверкой типов/диапазонов. При фактическом подключении адаптер должен дополнительно сверить точный набор и значения для выбранной модели, формат, контекст и permissions. Неизвестный строгий бюджет, включая стоимость/tokens без подтверждённой телеметрии, блокируется. `max_calls`, `max_node_visits`, `max_backward_transitions`, `max_duration_seconds` ограничиваются сервером. Правило fallback не выводится из HTTP 429/5xx или тайм-аута.
 
-Start повторяет конфигурационные проверки с теми же inputs/overrides и сохраняет engine_version. Git-пробы запуска выполняются перед короткой write-транзакцией, их результат передаётся preflight. Изменяемые проверки под резервацией перед каждым dispatch всё ещё нужны на этапах 4–8; их успешное выполнение сейчас не заявляется.
+Start повторяет конфигурационные проверки с теми же inputs/overrides и сохраняет engine_version. Git-пробы запуска выполняются перед короткой write-транзакцией, их результат передаётся preflight. Движок этапа 4 проверяет directory identity, scope и доступность ресурсов/секретов под своей резервацией перед dispatch. Реальные capability, permissions, baseline/hooks и актуальность evidence требуют этапов 5–8. Simulated preflight может возвращать dispatch_ready=true только для поддержанных тестовых исполнителей, без реальной сети и записи в проект.
 
 ## Хэши, перенос и доверие
 

@@ -1,0 +1,232 @@
+{
+  "envelope": {
+    "properties": {
+      "agent_session_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Agent Session Id"
+      },
+      "command_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Command Id"
+      },
+      "event_version": {
+        "default": 1,
+        "title": "Event Version",
+        "type": "integer"
+      },
+      "node_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Node Id"
+      },
+      "occurred_at": {
+        "title": "Occurred At",
+        "type": "number"
+      },
+      "payload": {
+        "additionalProperties": true,
+        "title": "Payload",
+        "type": "object"
+      },
+      "persisted_at": {
+        "title": "Persisted At",
+        "type": "number"
+      },
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "sequence": {
+        "title": "Sequence",
+        "type": "integer"
+      },
+      "step_attempt_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Step Attempt Id"
+      },
+      "step_execution_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Step Execution Id"
+      },
+      "type": {
+        "enum": [
+          "artifact.recorded",
+          "assignment.applied",
+          "attempt.finished",
+          "attempt.prepared",
+          "attempt.progress",
+          "attempt.retry_scheduled",
+          "attempt.started",
+          "attempt.text_delta",
+          "budget.exceeded",
+          "budget.updated",
+          "command.finished",
+          "condition.evaluated",
+          "control.applied",
+          "error.reported",
+          "error.technical",
+          "evidence.collected",
+          "limits.warning",
+          "model_group.candidate_selected",
+          "model_group.candidate_skipped",
+          "model_group.candidate_switched",
+          "model_group.exhausted",
+          "node.entered",
+          "node.left",
+          "run.cancelled",
+          "run.completed",
+          "run.created",
+          "run.failed",
+          "run.paused",
+          "run.started",
+          "run.state_changed",
+          "run.stopped",
+          "run.waiting",
+          "run.waiting_input",
+          "transition.selected"
+        ],
+        "title": "Type",
+        "type": "string"
+      },
+      "worker_generation": {
+        "title": "Worker Generation",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "run_id",
+      "sequence",
+      "type",
+      "occurred_at",
+      "persisted_at",
+      "worker_generation",
+      "payload"
+    ],
+    "title": "EventEnvelope",
+    "type": "object"
+  },
+  "errors": [
+    "unknown_external_result",
+    "invalid_response_format",
+    "model_unavailable",
+    "model_group_exhausted",
+    "permission_required",
+    "configuration_invalid",
+    "limit_exceeded",
+    "workspace_conflict"
+  ],
+  "event_version": 1,
+  "events": [
+    "artifact.recorded",
+    "assignment.applied",
+    "attempt.finished",
+    "attempt.prepared",
+    "attempt.progress",
+    "attempt.retry_scheduled",
+    "attempt.started",
+    "attempt.text_delta",
+    "budget.exceeded",
+    "budget.updated",
+    "command.finished",
+    "condition.evaluated",
+    "control.applied",
+    "error.reported",
+    "error.technical",
+    "evidence.collected",
+    "limits.warning",
+    "model_group.candidate_selected",
+    "model_group.candidate_skipped",
+    "model_group.candidate_switched",
+    "model_group.exhausted",
+    "node.entered",
+    "node.left",
+    "run.cancelled",
+    "run.completed",
+    "run.created",
+    "run.failed",
+    "run.paused",
+    "run.started",
+    "run.state_changed",
+    "run.stopped",
+    "run.waiting",
+    "run.waiting_input",
+    "transition.selected"
+  ],
+  "max_payload_bytes": 16384,
+  "schema_version": "1.0.0",
+  "types": [
+    "artifact.recorded",
+    "assignment.applied",
+    "attempt.finished",
+    "attempt.prepared",
+    "attempt.progress",
+    "attempt.retry_scheduled",
+    "attempt.started",
+    "attempt.text_delta",
+    "budget.exceeded",
+    "budget.updated",
+    "command.finished",
+    "condition.evaluated",
+    "control.applied",
+    "error.reported",
+    "error.technical",
+    "evidence.collected",
+    "limits.warning",
+    "model_group.candidate_selected",
+    "model_group.candidate_skipped",
+    "model_group.candidate_switched",
+    "model_group.exhausted",
+    "node.entered",
+    "node.left",
+    "run.cancelled",
+    "run.completed",
+    "run.created",
+    "run.failed",
+    "run.paused",
+    "run.started",
+    "run.state_changed",
+    "run.stopped",
+    "run.waiting",
+    "run.waiting_input",
+    "transition.selected"
+  ]
+}

@@ -50,6 +50,92 @@
         "title": "ActiveInterval",
         "type": "object"
       },
+      "ArtifactView": {
+        "properties": {
+          "body": {
+            "title": "Body"
+          },
+          "byte_length": {
+            "title": "Byte Length",
+            "type": "integer"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "redaction": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Redaction",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_type": {
+            "title": "Schema Type",
+            "type": "string"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "step_attempt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Attempt Id"
+          },
+          "step_execution_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Execution Id"
+          },
+          "truncation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Truncation"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "schema_type",
+          "source_kind",
+          "byte_length",
+          "content_hash",
+          "step_execution_id",
+          "step_attempt_id",
+          "redaction",
+          "truncation"
+        ],
+        "title": "ArtifactView",
+        "type": "object"
+      },
       "Chat": {
         "additionalProperties": false,
         "properties": {
@@ -279,6 +365,394 @@
           "expected_version"
         ],
         "title": "DraftPublish",
+        "type": "object"
+      },
+      "EventBatchResponse": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EventEnvelope"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "final_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final State"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "last_sequence": {
+            "title": "Last Sequence",
+            "type": "integer"
+          },
+          "min_retained_sequence": {
+            "default": 0,
+            "title": "Min Retained Sequence",
+            "type": "integer"
+          },
+          "reset_required": {
+            "default": false,
+            "title": "Reset Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "events",
+          "last_sequence"
+        ],
+        "title": "EventBatchResponse",
+        "type": "object"
+      },
+      "EventEnvelope": {
+        "properties": {
+          "agent_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Session Id"
+          },
+          "command_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
+          "event_version": {
+            "default": 1,
+            "title": "Event Version",
+            "type": "integer"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "persisted_at": {
+            "title": "Persisted At",
+            "type": "number"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "step_attempt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Attempt Id"
+          },
+          "step_execution_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Execution Id"
+          },
+          "type": {
+            "enum": [
+              "artifact.recorded",
+              "assignment.applied",
+              "attempt.finished",
+              "attempt.prepared",
+              "attempt.progress",
+              "attempt.retry_scheduled",
+              "attempt.started",
+              "attempt.text_delta",
+              "budget.exceeded",
+              "budget.updated",
+              "command.finished",
+              "condition.evaluated",
+              "control.applied",
+              "error.reported",
+              "error.technical",
+              "evidence.collected",
+              "limits.warning",
+              "model_group.candidate_selected",
+              "model_group.candidate_skipped",
+              "model_group.candidate_switched",
+              "model_group.exhausted",
+              "node.entered",
+              "node.left",
+              "run.cancelled",
+              "run.completed",
+              "run.created",
+              "run.failed",
+              "run.paused",
+              "run.started",
+              "run.state_changed",
+              "run.stopped",
+              "run.waiting",
+              "run.waiting_input",
+              "transition.selected"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "worker_generation": {
+            "title": "Worker Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "sequence",
+          "type",
+          "occurred_at",
+          "persisted_at",
+          "worker_generation",
+          "payload"
+        ],
+        "title": "EventEnvelope",
+        "type": "object"
+      },
+      "ExternalOutcome": {
+        "description": "Single-word verdict the adapter returns about the external call.",
+        "enum": [
+          "succeeded",
+          "retryable_failure",
+          "confirmed_failure",
+          "unavailable",
+          "unknown",
+          "permission_denied",
+          "invalid_format",
+          "transport_dropped",
+          "process_died"
+        ],
+        "title": "ExternalOutcome",
+        "type": "string"
+      },
+      "FakeResponseSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_index": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Attempt Index",
+            "type": "integer"
+          },
+          "budget_quality": {
+            "default": "unknown",
+            "enum": [
+              "observed",
+              "estimated",
+              "unknown"
+            ],
+            "title": "Budget Quality",
+            "type": "string"
+          },
+          "cost_estimated": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Estimated"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "enum": [
+                  "passed",
+                  "failed",
+                  "inconclusive",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision"
+          },
+          "delay_seconds": {
+            "default": 0,
+            "maximum": 60.0,
+            "minimum": 0.0,
+            "title": "Delay Seconds",
+            "type": "number"
+          },
+          "deltas": {
+            "items": {
+              "maxLength": 65536,
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Deltas",
+            "type": "array"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "files": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "maxProperties": 50,
+            "title": "Files",
+            "type": "object"
+          },
+          "no_effect": {
+            "default": false,
+            "title": "No Effect",
+            "type": "boolean"
+          },
+          "node_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Node Id",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ExternalOutcome",
+            "default": "succeeded"
+          },
+          "raw_text": {
+            "default": "{}",
+            "maxLength": 10485760,
+            "title": "Raw Text",
+            "type": "string"
+          },
+          "retry_safety": {
+            "default": "unknown",
+            "enum": [
+              "safe",
+              "unsafe",
+              "unknown"
+            ],
+            "title": "Retry Safety",
+            "type": "string"
+          },
+          "tokens_used": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Used"
+          },
+          "validated_result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validated Result"
+          },
+          "visit_index": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visit Index"
+          }
+        },
+        "required": [
+          "node_id"
+        ],
+        "title": "FakeResponseSpec",
+        "type": "object"
+      },
+      "FakeScenarioSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "responses": {
+            "items": {
+              "$ref": "#/components/schemas/FakeResponseSpec"
+            },
+            "maxItems": 200,
+            "title": "Responses",
+            "type": "array"
+          }
+        },
+        "title": "FakeScenarioSpec",
         "type": "object"
       },
       "GraphImportRequest": {
@@ -2050,6 +2524,25 @@
       "PreflightRequest": {
         "additionalProperties": false,
         "properties": {
+          "execution_mode": {
+            "default": "real",
+            "enum": [
+              "real",
+              "simulated"
+            ],
+            "title": "Execution Mode",
+            "type": "string"
+          },
+          "fake_scenario": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FakeScenarioSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "inputs": {
             "additionalProperties": true,
             "title": "Inputs",
@@ -2622,9 +3115,19 @@
             "title": "Project Id",
             "type": "string"
           },
+          "runtime": {
+            "additionalProperties": true,
+            "title": "Runtime",
+            "type": "object"
+          },
           "schema_version": {
             "title": "Schema Version",
             "type": "string"
+          },
+          "simulated": {
+            "default": false,
+            "title": "Simulated",
+            "type": "boolean"
           },
           "snapshot_hash": {
             "title": "Snapshot Hash",
@@ -2742,6 +3245,28 @@
         "title": "RunCommand",
         "type": "object"
       },
+      "RunSnapshot": {
+        "properties": {
+          "last_sequence": {
+            "title": "Last Sequence",
+            "type": "integer"
+          },
+          "min_retained_sequence": {
+            "title": "Min Retained Sequence",
+            "type": "integer"
+          },
+          "run": {
+            "$ref": "#/components/schemas/Run"
+          }
+        },
+        "required": [
+          "run",
+          "last_sequence",
+          "min_retained_sequence"
+        ],
+        "title": "RunSnapshot",
+        "type": "object"
+      },
       "RunStart": {
         "additionalProperties": false,
         "properties": {
@@ -2759,6 +3284,25 @@
               }
             ],
             "title": "Chat Id"
+          },
+          "execution_mode": {
+            "default": "real",
+            "enum": [
+              "real",
+              "simulated"
+            ],
+            "title": "Execution Mode",
+            "type": "string"
+          },
+          "fake_scenario": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FakeScenarioSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "idempotency_key": {
             "maxLength": 64,
@@ -5874,6 +6418,103 @@
         ]
       }
     },
+    "/api/runs/{run_id}/artifacts": {
+      "get": {
+        "operationId": "run_artifacts_endpoint_api_runs__run_id__artifacts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactView"
+                  },
+                  "title": "Response Run Artifacts Endpoint Api Runs  Run Id  Artifacts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Artifacts Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "run_artifact_endpoint_api_runs__run_id__artifacts__artifact_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Artifact Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
     "/api/runs/{run_id}/commands": {
       "get": {
         "operationId": "list_command_journal_endpoint_api_runs__run_id__commands_get",
@@ -5965,6 +6606,222 @@
           }
         },
         "summary": "Submit Command Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/events": {
+      "get": {
+        "operationId": "list_run_events_endpoint_api_runs__run_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventBatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Run Events Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/events/replay": {
+      "get": {
+        "description": "Read the first retained page; paginate using last_sequence.",
+        "operationId": "replay_run_events_endpoint_api_runs__run_id__events_replay_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventBatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replay Run Events Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/snapshot": {
+      "get": {
+        "operationId": "run_snapshot_endpoint_api_runs__run_id__snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Snapshot Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/stream": {
+      "get": {
+        "description": "SSE stream of durable Run events with cookie-auth and reset_required.",
+        "operationId": "run_event_stream_endpoint_api_runs__run_id__stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 9223372036854775807,
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Event Stream Endpoint",
         "tags": [
           "domain"
         ]

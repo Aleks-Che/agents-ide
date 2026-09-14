@@ -109,6 +109,9 @@ def execution_hash(
     configuration: dict[str, Any],
     dependencies: dict[str, Any],
     inputs: dict[str, Any] | None = None,
+    *,
+    execution_mode: str = "real",
+    fake_scenario: dict[str, Any] | None = None,
 ) -> str:
     return content_hash(
         {
@@ -116,6 +119,11 @@ def execution_hash(
             "configuration": configuration,
             "dependencies": dependencies,
             "inputs": json.loads(version.inputs_json) if inputs is None else inputs,
+            **(
+                {"execution_mode": execution_mode, "fake_scenario": fake_scenario}
+                if execution_mode == "simulated"
+                else {}
+            ),
         }
     )
 

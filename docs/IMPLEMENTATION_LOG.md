@@ -14,7 +14,7 @@
 
 ## Открытые вопросы и ограничения
 
-Состояние на 2026-09-14 после ревью этапов 2, 2A и 3. Перечисленные ограничения не блокируют разработку движка на fake; допуски к реальному исполнению проверяются отдельно.
+Состояние на 2026-09-14 после ревью этапов 2, 2A, 3 и 4. Fake-движок выполняет критерий repair-цикла; интеграция resume/recovery остаётся открытой до этапа 5. Допуски к реальному исполнению проверяются отдельно.
 
 | ID | Статус | На что влияет | Что проверить или сделать |
 | --- | --- | --- | --- |
@@ -30,11 +30,86 @@
 
 Основания и точные границы: [матрица интеграций](integrations/CAPABILITIES.md), [решения каркаса](architecture/FOUNDATION_DECISIONS.md), [runtime-контракты](architecture/RUNTIME_CONTRACTS.md).
 
-V-008 — открытая интеграционная часть этапа 3, закрывается совместно с 4–8: worker должен повторять проверки под резервацией, передавать cycle/scope/evidence в AST, хранить счётчики loops и атомарно сохранять assignments. Адаптеры подтверждают точный набор параметров, формат/контекст, бюджеты и permissions; Git — baseline/allowlist/hooks. Сейчас preflight явно возвращает `dispatch_ready=false`, capability/permissions unverified. Объявлять этап 3 полностью закрытым до этих проверок нельзя.
+V-008 — интеграционная часть этапа 3 закрыта частично: движок 4 передаёт cycle/scope, сохраняет loops/assignments/счётчики и повторяет directory/resource/secret-проверки под резервацией. Для явного simulated допустим dispatch_ready=true. Реальные адаптеры ещё должны подтвердить точные capability, формат/контекст, бюджеты и permissions; Git — baseline/allowlist/hooks, evidence — версию файлов. Для real dispatch_ready=false; объявлять весь этап 3 закрытым пока нельзя.
 
 V-009 — совместимость ранних графов этапа 3: ранее принимались неоднозначные переходы, циклы без лимитов и неизвестные поля. Теперь публикация/старт их отклоняют. Миграция 0006 сохраняет историю и добавляет только origin; исправление требует новой версии. Новые итоговые хэши включают фактические inputs, старые snapshot/hash не переписываются.
 
+V-010 — закрыт ревью этапа 4: полный impl → verifier failed → Condition(false) → impl repair → verifier passed → Condition(true) → End проверен через API и worker. Проверены смена промпта/feedback, два visit/cycle, decision=false/true и лимиты. Никаких when на не-Condition узле или переноса этой проверки в этап 8 не требуется.
+
+V-011 — открытая интеграция этапов 4–5: runtime checkpoint, позиция кандидата, retry_at, счётчики и история сохранены; resume/resolve/reconciliation и явный повторный проход группы пока не реализованы. Повтор execute не начинает Start заново, потеря владельца ведёт в recovering, неизвестный исход не разрешает fallback. Для начатого/приостановленного Run неподдержанные команды отвечают control_unimplemented; waiting_input не рекламирует доступное продолжение. Полные interrupt/kill/ProcessSupervisor и гонки управления закрываются на этапе 5.
+
+V-012 — старые данные первоначального этапа 4: lease-изменения могли не сохраниться, StepAttempt/StepExecution остаться running, а body артефакта потеряться. Миграция 0007 сохраняет историю, добавляет checkpoint/selection/body и не выдумывает утраченные результаты. Старое посещение без checkpoint не повторяется; задания без владельца требуют recovering. Body старого manifest может быть null. Для сверки этих Run нужен этап 5, удалять историю или переотправлять вызовы автоматически нельзя.
+
 ## Записи
+
+### 2026-09-14 · Этап 4 · Ревью движка, очереди и SSE
+
+**Статус:** критические дефекты исправлены, fake-критерий выполнен; один интеграционный пункт resume возвращён в открытое состояние (V-011). Исходные 197 тестов проходили, но не проверяли настоящий repair-цикл, durable lease/результаты, бюджет и опасный fallback. Первые новые fixtures потребовали корректировки ожиданий HTTP 201; итоговые проверки проверяют сохранённые эффекты и точные состояния.
+
+| Найденное несоответствие | Исправление |
+| --- | --- |
+| SQL COMMIT выполнялся до flush ORM: claim/refresh/release теряли изменения; terminal/waiting Run можно было запускать повторно | ORM commit под BEGIN IMMEDIATE; атомарные lease/generation/reservation, фильтр состояния, лимит 2 Run; очередь потребляется вместе с остановкой/завершением. |
+| Lease не ограничивал записи Runner; heartbeat worker останавливался на долгом вызове | Проверки владельца/резервации/срока на каждой транзакции и перед commit, abort при неудачном продлении; отдельный heartbeat и два рабочих потока. Истечение ведёт в recovering. |
+| Condition/assignments видели latest={}, посещения не завершались, результат попытки менялся в detached ORM-объекте | Результат перечитывается в новой сессии, status/result/decision/attempt_count сохраняются; latest только succeeded текущего cycle/scope; cursor/assignments/переход атомарны. |
+| Счётчики жили в памяти, Condition-loop не учитывался, сценарий не различал повторные visits | Миграция 0007, runtime checkpoint с usage/loops/retry_at/кандидатом; лимиты проверяются перед действием. Сценарий адресует visit_index/attempt_index. |
+| Unknown/transport/process errors автоматически повторялись; permission/invalid JSON переключали провайдера | Retry/fallback требуют safe + no_effect; ошибки формата/permission/конфигурации имеют свои политики; unknown блокирует новые вызовы. Retry считает политику отдельно для кандидата и сохраняет backoff. |
+| Любой обычный Run молча исполнялся fake; неготовые Command/Git/PlanControl считались успешными | Явный execution_mode=simulated, сценарий и режим в доверяемом hash; real и неготовые исполнители блокируются. Fake-правки только в отдельном каталоге, без сети/Command. |
+| output_schema игнорировалась, failed/unknown смешивались со статусом вызова | Сервер разбирает и валидирует JSON/verdict, сохраняет boolean/null decision; бизнес-failed не является технической ошибкой. Unknown имеет отдельный маршрут. |
+| ArtifactManifest.body не был колонкой; секреты во вложенном JSON не очищались; байтовый cap нарушался на Unicode | Сохранённый body_json, рекурсивная redaction, валидный JSON при усечении, реальные input/prompt/result/assignments и связанные ID попыток. Event cap 16 KiB, большие payload через artifact_id. |
+| SSE повторно использовал закрытую сессию БД, терял страницы terminal Run, игнорировал Last-Event-ID/reset/auth revocation | Короткие согласованные чтения, snapshot/cursor, один poller на Run, id/reconnect, pagination/deduplication, heartbeat, буфер 1 MiB и отзыв cookie-сессии. |
+| API-каталог событий расходился с Runner, текстовые события не передавались | Единый каталог и генерируемый events.json/TypeScript envelope, callback delta с немедленной фиксацией и привязкой к исходной попытке. |
+
+**Проверки и приёмка:** добавлены 44 регрессионных случая в [test_stage4_review](../backend/tests/integration/test_stage4_review.py) и две проверки реального worker в [test_stage4_engine_runner](../backend/tests/integration/test_stage4_engine_runner.py). Покрыты настоящий repair, unknown, структурированный ответ, retry/fallback/лимиты, истечение lease, конкурентный claim, артефакты, timeout и запрет поздней правки, SSE >200 событий/retention/отзыв сессии и старые visits без checkpoint. Ранее названные repair/limit-тесты переименованы по действительным утверждениям; пустой граф не считается тестом ограничения бюджета.
+
+Итоговый полный прогон на Windows/Python 3.12.7: **243 passed**, 2 прежних предупреждения Starlette/httpx и anyio, 137,09 секунды (197 исходных + 46 новых). Ruff check/format — без замечаний, mypy — 60 модулей для Windows и Linux target. OpenAPI, node/event JSON и TypeScript синхронизированы. Frontend ESLint/Prettier, 2 Vitest, 1 Playwright pairing/reload/revoke и TypeScript/Vite build прошли. Финальный wheel собран, переустановлен в отдельное чистое окружение и мигрировал новую БД до 0007. Это локальные проверки Windows; выполнение Linux runtime и удалённого CI не заявляется.
+
+**Контракт и продолжение:** [ENGINE_RUNTIME](architecture/ENGINE_RUNTIME.md), [миграция 0007](../backend/src/agents_ide/persistence/migrations/versions/0007_engine_review.py). Снимки не переписываются. Поддержаны pause/stop/cancel на безопасных границах; при неизвестном исходе отмена не подтверждается. В этапе 5 реализовать полноценные команды, recovery и продолжение checkpoint; в 6–8 — реальные адаптеры, evidence и Git. UI graph/run и нагрузочная retention-приёмка ещё впереди. Реальные платные вызовы и удалённый GitHub CI в ревью не запускались.
+
+### 2026-09-14 · Этап 4 · Движок на fake-исполнителе
+
+**Исторический отчёт до ревью:** заявлялось завершение этапа, 11 новых тестов и 197 passed. Утверждения о repair, durable lease/результатах, безопасном fallback и SSE были неполными; актуальные исправления и границы приведены в записи выше. Текст ниже сохранён как история первоначального прохода.
+
+**Реализовано.**
+
+- [`adapters/base.py`](../backend/src/agents_ide/adapters/base.py) — контракты `AgentAdapter`/`LLMAdapter` и общие обёртки `AgentResult`/`LLMResult` с `ExternalOutcome`. Синхронные адаптеры: реальные harness в этапе 6 будут оборачивать свои потоки.
+- [`adapters/fake.py`](../backend/src/agents_ide/adapters/fake.py) — `FakeAgentAdapter`/`FakeLLMAdapter` со сценарием, маркировкой `simulated` и опцией `force_decision=` в промпте для тестов.
+- [`engine/runner.py`](../backend/src/agents_ide/engine/runner.py) — основной `Runner`: последовательное выполнение, выбор перехода (с поддержкой Condition), применение assignments, выбор кандидата по snapshot, события, артефакты, terminal/waiting состояния, лимиты визитов/вызовов/обратных переходов/времени.
+- [`engine/candidates.py`](../backend/src/agents_ide/engine/candidates.py) — выбор первого доступного кандидата, пропуск отключённых/архивных/несовместимых, forward-only fallback, исключение подтверждённо отказавших в текущем посещении.
+- [`engine/visits.py`](../backend/src/agents_ide/engine/visits.py) — управление `visit_index`, `cycle_id`, `StepExecution`/`StepAttempt`, последние результаты для AST.
+- [`engine/events.py`](../backend/src/agents_ide/engine/events.py) — каталог событий и `MAX_PAYLOAD_BYTES` для payload-bounded событий.
+- [`engine/artifacts.py`](../backend/src/agents_ide/engine/artifacts.py) — `ArtifactManifest`, sanitization секретов и bounded payload.
+- [`engine/queue.py`](../backend/src/agents_ide/engine/queue.py) — `BEGIN IMMEDIATE` claim/refresh/release с поколением и lease; реализует короткие транзакции этапа 2.
+- [`engine/events_stream.py`](../backend/src/agents_ide/engine/events_stream.py) — fetch_events_after, fetch_full_history, format_sse, reset_required/cookie-auth.
+- [`worker/main.py`](../backend/src/agents_ide/worker/main.py) — воркер теперь реально claim-ит задания и запускает `Runner` в фоне с продлением lease.
+- [`api/domain.py`](../backend/src/agents_ide/api/domain.py) — добавлены `/api/runs/{id}/events`, `/events/replay` и `/stream` (SSE с cookie-auth и reset_required).
+- [`tests/integration/test_stage4_engine_runner.py`](../backend/tests/integration/test_stage4_engine_runner.py) — 11 интеграционных тестов: idempotent start, попытка/артефакт, candidate_selected для direct и group, SSE-replay, waiting_input при исчерпании, candidate_skipped/switched.
+
+**Нюансы и решения.**
+
+- `_current_work_state` для `_record_artifact` восстанавливает work_state из snapshot для совместимости с поздним добавлением `_record_artifact`. Для повторных прогонов run work_state хранится в snapshot.
+- `_select_transition` пока поддерживает `when` только на ребрах от `Condition`; для других узлов маршрут берёт первое ребро. Расширение под repair-цикл оставлено пресету этапа 8 (PlanControl).
+- `_normalize_decision` сопоставляет `passed`/`true`/`ok` → passed, `failed`/`false` → failed, `unknown`/`inconclusive` → unknown.
+- `_exhausted` помещает Run в `waiting_input(model_group_exhausted)` с причинами каждого кандидата и сохранением счётчиков; resume допускается только явный новый проход списка.
+- Сценарий fake-адаптера встроен в snapshot через ключ `fake_scenario` (вводится через `FakeScenario`). Текущий API не позволяет встраивать его через HTTP — это сознательное ограничение, чтобы тесты не зависели от production-API; детальный сценарий передаётся напрямую через адаптер.
+
+**Проверки.**
+
+- Backend на Windows/Python 3.12.7: **197 passed** (186 предыдущих + 11 новых). Добавлены тесты:
+  - `test_runner_drive_completed_graph_on_fake` — выполняет граф impl→check→End через реальный worker;
+  - `test_runner_records_attempt_and_artifact` — события attempt.started/finished и artifact.recorded;
+  - `test_runner_sse_stream_returns_events_then_closes` — поток событий через cookie-auth SSE;
+  - `test_runner_idempotency_returns_same_run` — повторный `idempotency_key` возвращает тот же Run;
+  - `test_runner_pause_command_rejected_until_started` — журнал команд пуст до старта;
+  - `test_runner_writes_candidate_selection_events` — `model_group.candidate_selected` для direct;
+  - `test_runner_selects_first_group_member` — для группы `heavy` (2 кандидата) выбирается первый;
+  - `test_runner_records_repair_after_failed_verification` — verifier с `force_decision=failed` завершает visit и помечает decision;
+  - `test_runner_emits_replay_endpoint` — `/events/replay` отдаёт историю с `reset_required=true`;
+  - `test_runner_records_artifact_for_attempt` — `ArtifactManifest` создаётся для успешной попытки;
+  - `test_runner_terminates_on_limit_exceeded` — Run с минимальным графом завершается корректно.
+- `ruff check src/ tests/` без замечаний. `mypy src/` и `--platform linux` зелёные.
+- `scripts/generate_contracts.py --check` подтверждает синхронность OpenAPI/TS.
+
+**Границы и продолжение.** Этап 5 (управление, lease/heartbeat/recovery, ProcessSupervisor) запускается следующим: кандидат selection уже работает, retry/fallback выполняется, но worker всё ещё не реагирует на команды `pause`/`stop`/`cancel` во время выполнения — это добавляется в этапе 5 вместе с восстановлением прерванных Run. Реальные harness (Codex/OpenCode) относятся к этапам 6A/6B; подключение LLM и Command — к этапу 7; пресет — к этапу 8; UI и наблюдение — к этапам 9–11.
 
 ### 2026-09-14 · Этап 3 · Ревью схем, AST, переходов и preflight
 

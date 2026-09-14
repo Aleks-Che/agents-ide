@@ -773,10 +773,18 @@ def preflight(
     *,
     inputs: dict[str, Any] | None = None,
     overrides: SettingsOverrides | None = None,
+    execution_mode: str = "real",
+    fake_scenario: dict[str, Any] | None = None,
     workspace_state: tuple[str, str, int, int, GitMetadata | None] | None = None,
 ) -> ValidationReport:
     from agents_ide.domain.graph_preflight import preflight as run_preflight
 
     return run_preflight(
-        session, binding, inputs=inputs, overrides=overrides, workspace_state=workspace_state
+        session,
+        binding,
+        inputs=inputs,
+        overrides=overrides,
+        workspace_state=workspace_state,
+        execution_mode=execution_mode,
+        fake_scenario=fake_scenario,
     )

@@ -240,6 +240,7 @@ class Run(Base):
     worker_generation: Mapped[int] = mapped_column(Integer, default=0)
     waiting_reason_json: Mapped[str | None] = mapped_column(Text)
     active_intervals_json: Mapped[str] = mapped_column(Text, default="[]")
+    runtime_json: Mapped[str] = mapped_column(Text, default="{}")
     resume_target_json: Mapped[str | None] = mapped_column(Text)
     stop_goal: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
@@ -308,6 +309,9 @@ class StepAttempt(Base):
     tokens_used: Mapped[int | None] = mapped_column(Integer)
     cost_estimated: Mapped[float | None] = mapped_column(Float)
     budget_quality: Mapped[str | None] = mapped_column(String(16))
+    selection_json: Mapped[str] = mapped_column(Text, default="{}")
+    request_artifact_id: Mapped[str | None] = mapped_column(String(32))
+    result_artifact_id: Mapped[str | None] = mapped_column(String(32))
 
 
 class AgentSession(Base):
@@ -354,6 +358,7 @@ class ArtifactManifest(Base):
     __tablename__ = "artifact_manifests"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    body_json: Mapped[str | None] = mapped_column(Text)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
     schema_type: Mapped[str] = mapped_column(String(64))
     byte_length: Mapped[int] = mapped_column(BigInteger)

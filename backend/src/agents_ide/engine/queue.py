@@ -1,0 +1,242 @@
+"""Short serialized queue transactions. Expiry requires recovery, never replay."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, sessionmaker
+
+from agents_ide.domain.common import new_id, utc_now
+from agents_ide.domain.workspace import scopes_overlap
+from agents_ide.errors import AppError
+from agents_ide.persistence.models import QueueJob, Run, WorkspaceReservation
+from agents_ide.services.transactions import begin_write
+
+MAX_ACTIVE_RUNS = 2
+
+
+@dataclass(frozen=True)
+class ClaimedJob:
+    job_id: str
+    run_id: str
+    generation: int
+    lease_expires_at: float
+
+
+def owned_job(
+    session: Session, run_id: str, worker_id: str, generation: int, *, now: float | None = None
+) -> QueueJob:
+    job = session.scalar(select(QueueJob).where(QueueJob.run_id == run_id))
+    if (
+        job is None
+        or job.claimed_by != worker_id
+        or job.generation != generation
+        or job.lease_expires_at is None
+        or job.lease_expires_at <= (utc_now() if now is None else now)
+    ):
+        raise AppError("queue_job_lost", "Владение заданием истекло или изменилось", 409)
+    return job
+
+
+def claim_next_job(
+    session_factory: sessionmaker[Session],
+    *,
+    worker_id: str,
+    lease_seconds: float,
+    now: float | None = None,
+) -> ClaimedJob | None:
+    now_value = utc_now() if now is None else now
+    with session_factory() as session:
+        begin_write(session)
+        expired = list(
+            session.scalars(
+                select(QueueJob).where(
+                    QueueJob.claimed_by.isnot(None), QueueJob.lease_expires_at <= now_value
+                )
+            )
+        )
+        orphaned = list(
+            session.scalars(
+                select(QueueJob)
+                .join(Run, Run.id == QueueJob.run_id)
+                .where(
+                    Run.state.in_(["running", "retry_wait"]),
+                    or_(QueueJob.claimed_by.is_(None), QueueJob.lease_expires_at.is_(None)),
+                )
+            )
+        )
+        expired.extend(job for job in orphaned if job not in expired)
+        for job in expired:
+            run = session.get(Run, job.run_id)
+            if run is not None and run.state not in {
+                "completed",
+                "failed",
+                "cancelled",
+                "recovering",
+            }:
+                from agents_ide.engine.events import append_event
+
+                previous = run.state
+                run.state = "recovering"
+                run.state_version += 1
+                run.updated_at = now_value
+                run.resume_target_json = json.dumps(
+                    {"action": "reconcile", "blockers": ["owner_expired"]}
+                )
+                append_event(
+                    session,
+                    run.id,
+                    "run.state_changed",
+                    {
+                        "from": previous,
+                        "to": run.state,
+                        "state_version": run.state_version,
+                        "reason": "owner_expired",
+                    },
+                )
+            # Keep both the owner and reservation as evidence. Recovery is stage 5.
+        active = (
+            session.scalar(
+                select(func.count())
+                .select_from(QueueJob)
+                .where(QueueJob.claimed_by.isnot(None), QueueJob.lease_expires_at > now_value)
+            )
+            or 0
+        )
+        if active >= MAX_ACTIVE_RUNS:
+            session.commit()
+            return None
+        reservations = list(
+            session.scalars(
+                select(WorkspaceReservation).where(WorkspaceReservation.released_at.is_(None))
+            )
+        )
+        jobs = session.scalars(
+            select(QueueJob)
+            .join(Run, Run.id == QueueJob.run_id)
+            .where(
+                Run.state == "queued",
+                QueueJob.claimed_by.is_(None),
+                QueueJob.available_at <= now_value,
+            )
+            .order_by(QueueJob.available_at, QueueJob.created_at, QueueJob.id)
+        )
+        for job in jobs:
+            run = session.get(Run, job.run_id)
+            assert run is not None
+            workspace = json.loads(run.snapshot_json)["workspace"]
+            scope = workspace.get("scope")
+            if scope is None or any(
+                r.workspace_json is None or scopes_overlap(scope, json.loads(r.workspace_json))
+                for r in reservations
+            ):
+                continue
+            generation = job.generation + 1
+            lease = now_value + lease_seconds
+            job.claimed_by, job.generation, job.lease_expires_at = worker_id, generation, lease
+            run.worker_id, run.worker_generation = worker_id, generation
+            session.add(
+                WorkspaceReservation(
+                    id=new_id(),
+                    workspace_identity_dev=workspace["identity_dev"],
+                    workspace_identity_ino=workspace["identity_ino"],
+                    workspace_json=json.dumps(scope),
+                    run_id=run.id,
+                    owner_generation=generation,
+                    lease_expires_at=lease,
+                    created_at=now_value,
+                    released_at=None,
+                )
+            )
+            result = ClaimedJob(job.id, run.id, generation, lease)
+            session.commit()  # Flush ORM updates before committing; SQL COMMIT alone loses them.
+            return result
+        session.commit()
+        return None
+
+
+def refresh_lease(
+    session_factory: sessionmaker[Session],
+    *,
+    job_id: str,
+    worker_id: str,
+    expected_generation: int,
+    lease_seconds: float,
+    now: float | None = None,
+) -> float:
+    now_value = utc_now() if now is None else now
+    with session_factory() as session:
+        begin_write(session)
+        row = session.get(QueueJob, job_id)
+        if row is None:
+            raise AppError("queue_job_missing", "Задание не найдено", 409)
+        job = owned_job(session, row.run_id, worker_id, expected_generation, now=now_value)
+        job.lease_expires_at = now_value + lease_seconds
+        for reservation in session.scalars(
+            select(WorkspaceReservation).where(
+                WorkspaceReservation.run_id == job.run_id,
+                WorkspaceReservation.released_at.is_(None),
+                WorkspaceReservation.owner_generation == expected_generation,
+            )
+        ):
+            reservation.lease_expires_at = job.lease_expires_at
+        session.commit()
+        return now_value + lease_seconds
+
+
+def release_job(
+    session_factory: sessionmaker[Session],
+    *,
+    job_id: str,
+    worker_id: str,
+    expected_generation: int | None = None,
+) -> None:
+    with session_factory() as session:
+        begin_write(session)
+        job = session.get(QueueJob, job_id)
+        if job is None:
+            return
+        owned_job(
+            session,
+            job.run_id,
+            worker_id,
+            expected_generation if expected_generation is not None else job.generation,
+        )
+        run = session.get(Run, job.run_id)
+        if run is not None and run.state in {"running", "retry_wait", "recovering"}:
+            raise AppError("queue_job_busy", "Незавершённое исполнение требует сверки", 409)
+        if run is not None and run.state == "queued":
+            job.claimed_by, job.lease_expires_at = None, None
+            job.available_at = utc_now() + 0.25
+        else:
+            session.delete(job)
+        # Only a confirmed terminal outcome releases the workspace.
+        if run is not None and run.state in {"completed", "failed", "cancelled", "queued"}:
+            for reservation in session.scalars(
+                select(WorkspaceReservation).where(
+                    WorkspaceReservation.run_id == run.id,
+                    WorkspaceReservation.released_at.is_(None),
+                    WorkspaceReservation.owner_generation == job.generation,
+                )
+            ):
+                reservation.released_at = utc_now()
+        session.commit()
+
+
+def enqueue_run(session: Session, run_id: str, *, available_at: float | None = None) -> QueueJob:
+    job = QueueJob(
+        id=new_id(),
+        run_id=run_id,
+        available_at=utc_now() if available_at is None else available_at,
+        generation=1,
+        created_at=utc_now(),
+    )
+    session.add(job)
+    session.flush()
+    return job
+
+
+def find_active_runs(session: Session) -> list[str]:
+    return list(session.scalars(select(QueueJob.run_id).where(QueueJob.claimed_by.isnot(None))))

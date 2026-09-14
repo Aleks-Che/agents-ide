@@ -197,6 +197,10 @@ def start_run(session: Session, payload: RunStart) -> Run:
         binding,
         inputs=payload.inputs,
         overrides=payload.overrides,
+        execution_mode=payload.execution_mode,
+        fake_scenario=payload.fake_scenario.model_dump(mode="json")
+        if payload.fake_scenario
+        else None,
         workspace_state=(project.workspace_entered_path, normalized, dev, ino, git),
     )
     if not report.ok:
@@ -228,6 +232,10 @@ def start_run(session: Session, payload: RunStart) -> Run:
             "execution_hash_changed", "Исполняемая конфигурация изменилась после preflight", 409
         )
     snapshot = _build_snapshot(project, version)
+    snapshot["execution_mode"] = payload.execution_mode
+    snapshot["fake_scenario"] = (
+        payload.fake_scenario.model_dump(mode="json") if payload.fake_scenario else None
+    )
     snapshot["origin"] = version.origin
     snapshot["trusted_execution_hash"] = payload.trusted_execution_hash
     snapshot["input"] = {
@@ -240,7 +248,12 @@ def start_run(session: Session, payload: RunStart) -> Run:
     snapshot["dependencies"] = capture_dependencies(session, snapshot["graph"], configuration)
     snapshot["pipeline_execution_hash"] = version.execution_hash
     snapshot["execution_hash"] = execution_hash(
-        version, configuration, snapshot["dependencies"], snapshot["input"]["values"]
+        version,
+        configuration,
+        snapshot["dependencies"],
+        snapshot["input"]["values"],
+        execution_mode=payload.execution_mode,
+        fake_scenario=snapshot["fake_scenario"],
     )
     if snapshot["dependencies"]["model_groups"]:
         snapshot["required_features"] = sorted(
@@ -321,7 +334,8 @@ def start_run(session: Session, payload: RunStart) -> Run:
                 {
                     "pipeline_version_id": version.id,
                     "snapshot_hash": snapshot_hash_value,
-                    "execution_hash": version.execution_hash,
+                    "execution_hash": model.execution_hash,
+                    "source": "simulated" if payload.execution_mode == "simulated" else "engine",
                     "policy_hash": model.policy_hash,
                 }
             ),
@@ -383,6 +397,15 @@ def submit_command(session: Session, run_id: str, payload: RunCommand) -> Comman
             f"Команда {payload.command_type} недоступна из состояния {run.state}",
             409,
             {"run_state": run.state},
+        )
+    if run.runtime_json != "{}" and (
+        payload.command_type in {"resume", "resolve"}
+        or run.state not in {"queued", "running", "retry_wait", "pause_requested", "stop_requested"}
+    ):
+        raise AppError(
+            "control_unimplemented",
+            "Восстановление и управление приостановленным Run требуют этапа 5",
+            409,
         )
     now = utc_now()
     sequence = _next_command_sequence(session, run_id)
@@ -496,6 +519,8 @@ def _command_allowed(command_type: str, state: str) -> bool:
 
 def _run_from_model(model: RunModel) -> Run:
     return Run(
+        simulated=json.loads(model.snapshot_json).get("execution_mode") == "simulated",
+        runtime=json.loads(model.runtime_json),
         id=model.id,
         idempotency_key=model.idempotency_key,
         project_id=model.project_id,

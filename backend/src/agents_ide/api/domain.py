@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from collections.abc import AsyncIterator
+from dataclasses import asdict
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from agents_ide.adapters.fake import FakeScenarioSpec
 from agents_ide.api.deps import get_secret_store, get_session, get_settings
 from agents_ide.config import Settings
 from agents_ide.domain.graph_schema import node_schemas as _node_schemas_payload
@@ -71,7 +77,18 @@ from agents_ide.domain.schemas import (
     RunStart,
     SettingsOverrides,
 )
+from agents_ide.engine.events import event_catalog
+from agents_ide.engine.events_stream import (
+    ArtifactView,
+    EventBatchResponse,
+    RunSnapshot,
+    fetch_events_after,
+    fetch_full_history,
+    format_sse,
+    is_terminal,
+)
 from agents_ide.errors import AppError
+from agents_ide.security.auth import COOKIE_NAME
 from agents_ide.security.secrets import SecretStore
 from agents_ide.services import (
     chats,
@@ -479,6 +496,171 @@ def list_command_journal_endpoint(session: SessionDep, run_id: str) -> list[Comm
     return runs.list_command_journal(session, run_id)
 
 
+@router.get("/runs/{run_id}/snapshot", response_model=RunSnapshot)
+def run_snapshot_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]:
+    from sqlalchemy import func, select
+
+    from agents_ide.persistence.models import RunEvent
+
+    session.connection().exec_driver_sql("BEGIN")
+    run = runs.get_run(session, run_id)
+    minimum, highest = session.execute(
+        select(func.min(RunEvent.sequence), func.max(RunEvent.sequence)).where(
+            RunEvent.run_id == run_id
+        )
+    ).one()
+    return {"run": run, "last_sequence": highest or 0, "min_retained_sequence": minimum or 0}
+
+
+@router.get("/runs/{run_id}/artifacts", response_model=list[ArtifactView])
+def run_artifacts_endpoint(session: SessionDep, run_id: str) -> list[dict[str, Any]]:
+    from sqlalchemy import select
+
+    from agents_ide.persistence.models import ArtifactManifest
+
+    runs.get_run(session, run_id)
+    return [
+        _artifact_view(row, include_body=False)
+        for row in session.scalars(
+            select(ArtifactManifest)
+            .where(ArtifactManifest.run_id == run_id)
+            .order_by(ArtifactManifest.created_at, ArtifactManifest.id)
+        )
+    ]
+
+
+@router.get("/runs/{run_id}/artifacts/{artifact_id}", response_model=ArtifactView)
+def run_artifact_endpoint(session: SessionDep, run_id: str, artifact_id: str) -> dict[str, Any]:
+    from agents_ide.persistence.models import ArtifactManifest
+
+    row = session.get(ArtifactManifest, artifact_id)
+    if row is None or row.run_id != run_id:
+        raise AppError("artifact_not_found", "Артефакт не найден", 404)
+    return _artifact_view(row, include_body=True)
+
+
+def _artifact_view(row: Any, *, include_body: bool) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "run_id": row.run_id,
+        "schema_type": row.schema_type,
+        "source_kind": row.source_kind,
+        "byte_length": row.byte_length,
+        "content_hash": row.content_hash,
+        "step_execution_id": row.step_execution_id,
+        "step_attempt_id": row.step_attempt_id,
+        "body": json.loads(row.body_json) if include_body and row.body_json else None,
+        "redaction": json.loads(row.redaction_json or "[]"),
+        "truncation": json.loads(row.truncation_json) if row.truncation_json else None,
+    }
+
+
+@router.get(
+    "/runs/{run_id}/events", response_model=EventBatchResponse, response_model_exclude_none=True
+)
+def list_run_events_endpoint(
+    session: SessionDep,
+    run_id: str,
+    after: int = Query(default=0, ge=0, le=2**63 - 1),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict[str, Any]:
+    batch = fetch_events_after(session, run_id, after_sequence=after, limit=limit)
+    return asdict(batch)
+
+
+@router.get(
+    "/runs/{run_id}/events/replay",
+    response_model=EventBatchResponse,
+    response_model_exclude_none=True,
+)
+def replay_run_events_endpoint(
+    session: SessionDep,
+    run_id: str,
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Read the first retained page; paginate using last_sequence."""
+
+    batch = fetch_full_history(session, run_id, limit=limit)
+    return asdict(batch)
+
+
+@router.get("/runs/{run_id}/stream")
+async def run_event_stream_endpoint(
+    request: Request,
+    session: SessionDep,
+    run_id: str,
+    after: int = Query(default=0, ge=0, le=2**63 - 1),
+) -> StreamingResponse:
+    """SSE stream of durable Run events with cookie-auth and reset_required."""
+
+    cursor = after
+    if (header := request.headers.get("last-event-id")) is not None:
+        if (
+            not header.isascii()
+            or not header.isdigit()
+            or len(header) > 19
+            or int(header) > 2**63 - 1
+        ):
+            raise AppError("cursor_invalid", "Некорректный Last-Event-ID", 400)
+        cursor = int(header)
+    fetch_events_after(session, run_id, after_sequence=cursor)  # 404 before opening SSE.
+    hub = request.app.state.run_streams
+    token = request.cookies.get(COOKIE_NAME)
+
+    async def event_gen() -> AsyncIterator[str]:
+        subscription = await hub.subscribe(run_id)
+        last_sequence = cursor
+        heartbeat = asyncio.get_running_loop().time()
+        try:
+            yield f"event: stream.opened\ndata: {json.dumps({'last_sequence': cursor})}\n\n"
+            replay = True
+            while not await request.is_disconnected():
+                try:
+                    await asyncio.to_thread(request.app.state.auth.authenticate, token)
+                except AppError:
+                    yield "event: auth.expired\ndata: {}\n\n"
+                    return
+                if replay:
+                    batch = await asyncio.to_thread(hub.read, run_id, last_sequence)
+                else:
+                    try:
+                        batch = await asyncio.wait_for(subscription.get(), timeout=1)
+                    except TimeoutError:
+                        if asyncio.get_running_loop().time() - heartbeat >= 15:
+                            heartbeat = asyncio.get_running_loop().time()
+                            yield ": heartbeat\n\n"
+                        continue
+                if batch.reset_required or subscription.overflow:
+                    reason = "slow_consumer" if subscription.overflow else "cursor_unavailable"
+                    payload = {"reason": reason, "snapshot_url": f"/api/runs/{run_id}/snapshot"}
+                    yield f"event: stream.reset_required\ndata: {json.dumps(payload)}\n\n"
+                    return
+                unseen = [event for event in batch.events if event["sequence"] > last_sequence]
+                for chunk in format_sse(unseen):
+                    yield chunk
+                if unseen:
+                    last_sequence = unseen[-1]["sequence"]
+                if is_terminal(batch.final_state or "") and not batch.has_more:
+                    closed_payload = {
+                        "final_state": batch.final_state,
+                        "last_sequence": last_sequence,
+                    }
+                    yield f"event: stream.closed\ndata: {json.dumps(closed_payload)}\n\n"
+                    return
+                replay = replay and batch.has_more
+        finally:
+            await hub.unsubscribe(run_id, subscription)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ----------------------------------------------------------------------------- Model groups
 
 
@@ -678,6 +860,8 @@ def validate_version_endpoint(session: SessionDep, version_id: str) -> dict[str,
 
 
 class PreflightRequest(ApiModel):
+    execution_mode: Literal["real", "simulated"] = "real"
+    fake_scenario: FakeScenarioSpec | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
     overrides: SettingsOverrides = Field(default_factory=SettingsOverrides)
 
@@ -697,49 +881,18 @@ def preflight_endpoint(
         binding_model,
         inputs=payload.inputs if payload else None,
         overrides=payload.overrides if payload else None,
+        execution_mode=payload.execution_mode if payload else "real",
+        fake_scenario=payload.fake_scenario.model_dump(mode="json")
+        if payload and payload.fake_scenario
+        else None,
     )
     return report.to_dict()
 
 
 @router.get("/schema/events")
 def event_schemas() -> dict[str, Any]:
-    return {
-        "schema_version": "1.0.0",
-        "events": [
-            "run.created",
-            "run.state_changed",
-            "run.waiting_input",
-            "control.accepted",
-            "control.applied",
-            "control.rejected",
-            "step.started",
-            "step.completed",
-            "step.failed",
-            "step.attempt_started",
-            "step.attempt_finished",
-            "agent.message",
-            "agent.tool_call",
-            "command.started",
-            "command.finished",
-            "artifact.created",
-            "context.collected",
-            "condition.evaluated",
-            "transition.selected",
-            "plan.item_changed",
-            "git.commit_intent_saved",
-            "git.commit_created",
-            "git.no_changes",
-            "error.technical",
-            "recovery.result",
-            "budget.updated",
-            "budget.exceeded",
-            "model_group.candidate_selected",
-            "model_group.candidate_skipped",
-            "model_group.candidate_switched",
-            "model_group.exhausted",
-            "stream.gap",
-        ],
-    }
+    catalog = event_catalog()
+    return {"schema_version": "1.0.0", "events": catalog["types"], **catalog}
 
 
 @router.get("/capabilities")
@@ -762,7 +915,8 @@ def capabilities(settings: SettingsDep) -> dict[str, Any]:
         "limits": {"max_projects": 1024, "max_chats_per_project": 256},
         "graph_limits": GRAPH_LIMITS,
         "supported_graph_features": sorted(SUPPORTED_FEATURES),
-        "runtime_execution": "unimplemented",
+        "runtime_execution": "simulated",
+        "real_execution": "unimplemented",
         "adapter_capabilities": "unverified",
         "frontend_origin": settings.allowed_origins,
     }

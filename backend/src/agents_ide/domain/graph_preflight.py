@@ -39,6 +39,8 @@ def preflight(
     *,
     inputs: dict[str, Any] | None = None,
     overrides: SettingsOverrides | None = None,
+    execution_mode: str = "real",
+    fake_scenario: dict[str, Any] | None = None,
     workspace_state: tuple[str, str, int, int, GitMetadata | None] | None = None,
 ) -> ValidationReport:
     version = session.get(PipelineVersion, binding.version_id)
@@ -123,7 +125,16 @@ def preflight(
     except AppError as exc:
         report.add_error(ValidationIssue(exc.code, exc.message, details=exc.details or {}))
         return report
-    report.execution_hash = execution_hash(version, configuration, dependencies, values)
+    report.execution_hash = execution_hash(
+        version,
+        configuration,
+        dependencies,
+        values,
+        execution_mode=execution_mode,
+        fake_scenario=fake_scenario,
+    )
+    report.preview["execution_mode"] = execution_mode
+    report.preview["simulated"] = execution_mode == "simulated"
     report.features = sorted(set(report.features) | set(json.loads(version.required_features_json)))
     if dependencies["model_groups"]:
         report.features = sorted({*report.features, "model_groups"})
@@ -248,6 +259,45 @@ def preflight(
     if set(configuration["command_filter"]) - all_command_ids:
         report.add_error(
             ValidationIssue("command_filter_invalid", "Фильтр содержит неизвестный ID команды")
+        )
+    if execution_mode == "simulated":
+        unsupported = [
+            n["id"]
+            for n in graph["nodes"]
+            if n["type"] not in {"Start", "End", "Condition", "AgentTask", "LLMRequest"}
+        ]
+        if unsupported:
+            report.add_error(
+                ValidationIssue(
+                    "node_executor_unimplemented",
+                    "Исполнитель узла ожидает следующих этапов",
+                    details={"node_ids": unsupported},
+                )
+            )
+        for response in (fake_scenario or {}).get("responses", []):
+            if response["node_id"] not in {
+                n["id"] for n in graph["nodes"] if n["type"] in {"AgentTask", "LLMRequest"}
+            }:
+                report.add_error(
+                    ValidationIssue(
+                        "fake_node_unknown", "Сценарий ссылается на неизвестного исполнителя"
+                    )
+                )
+        report.preview["dispatch_ready"] = report.ok
+        report.preview["permissions"] = {
+            "status": "simulated",
+            "network": False,
+            "writes": "private_test_workspace",
+        }
+        report.preview["data_destinations"] = [{"kind": "local_simulation", "network": False}]
+        report.warnings = [
+            w
+            for w in report.warnings
+            if w.code not in {"runtime_unimplemented", "capabilities_unverified"}
+        ]
+    elif fake_scenario is not None:
+        report.add_error(
+            ValidationIssue("simulation_mode_required", "Сценарий требует явного simulated-режима")
         )
     return report
 

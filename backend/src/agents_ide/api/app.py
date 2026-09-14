@@ -62,6 +62,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             bind=engine, expire_on_commit=False, autoflush=False
         )
         app.state.secrets = SecretStore(settings.data_dir / "secrets")
+        from agents_ide.engine.events_stream import StreamHub
+
+        app.state.run_streams = StreamHub(app.state.session_factory)
         await asyncio.to_thread(auth.issue_code)
 
         async def maintenance() -> None:
@@ -76,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            await app.state.run_streams.close()
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task

@@ -654,7 +654,12 @@ class ModelGroupImport(ApiModel):
 # ----------------------------------------------------------------------------- Runs
 
 
+from agents_ide.adapters.fake import FakeScenarioSpec  # noqa: E402
+
+
 class RunStart(ApiModel):
+    execution_mode: Literal["real", "simulated"] = "real"
+    fake_scenario: FakeScenarioSpec | None = None
     trusted_execution_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     project_id: str
     chat_id: str | None = None
@@ -667,6 +672,8 @@ class RunStart(ApiModel):
 
     @model_validator(mode="after")
     def _one_of(self) -> RunStart:
+        if self.fake_scenario is not None and self.execution_mode != "simulated":
+            raise ValueError("fake_scenario requires execution_mode=simulated")
         if self.chat_id is None and not self.message:
             raise ValueError("Either chat_id or message must be provided")
         return self
@@ -729,6 +736,8 @@ class ActiveInterval(ApiModel):
 
 
 class Run(ApiOutput):
+    simulated: bool = False
+    runtime: dict[str, Any] = Field(default_factory=dict)
     id: str
     idempotency_key: str
     project_id: str
