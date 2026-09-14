@@ -80,7 +80,12 @@ def test_project_archive_blocks_active_run(authenticated, tmp_path):
     ).json()
     version = client.post(
         f"/api/templates/{template['id']}/versions",
-        json={"graph": {"nodes": [{"id": "start", "type": "Start"}], "edges": []}},
+        json={
+            "graph": {
+                "nodes": [{"id": "start", "type": "Start"}, {"id": "end", "type": "End"}],
+                "edges": [{"id": "e1", "from": "start", "to": "end"}],
+            }
+        },
         headers=headers,
     ).json()
     binding = client.post(
@@ -176,7 +181,7 @@ def test_pipeline_versions_are_immutable(authenticated, tmp_path):
             {"id": "start", "type": "Start"},
             {"id": "finish", "type": "End"},
         ],
-        "edges": [],
+        "edges": [{"id": "e1", "from": "start", "to": "finish"}],
     }
     first = client.post(
         f"/api/templates/{template['id']}/versions",
@@ -234,7 +239,12 @@ def test_idempotency_returns_same_run(authenticated, tmp_path):
     ).json()
     version = client.post(
         f"/api/templates/{template['id']}/versions",
-        json={"graph": {"nodes": [{"id": "start", "type": "Start"}], "edges": []}},
+        json={
+            "graph": {
+                "nodes": [{"id": "start", "type": "Start"}, {"id": "end", "type": "End"}],
+                "edges": [{"id": "e1", "from": "start", "to": "end"}],
+            }
+        },
         headers=headers,
     ).json()
     binding = client.post(
@@ -273,7 +283,12 @@ def test_command_journal_accepts_duplicates_with_same_payload(authenticated, tmp
     ).json()
     version = client.post(
         f"/api/templates/{template['id']}/versions",
-        json={"graph": {"nodes": [{"id": "start", "type": "Start"}], "edges": []}},
+        json={
+            "graph": {
+                "nodes": [{"id": "start", "type": "Start"}, {"id": "end", "type": "End"}],
+                "edges": [{"id": "e1", "from": "start", "to": "end"}],
+            }
+        },
         headers=headers,
     ).json()
     binding = client.post(
@@ -379,7 +394,12 @@ def test_resolved_settings_include_overrides(authenticated, tmp_path):
     ).json()
     version = client.post(
         f"/api/templates/{template['id']}/versions",
-        json={"graph": {"nodes": [{"id": "start", "type": "Start"}], "edges": []}},
+        json={
+            "graph": {
+                "nodes": [{"id": "start", "type": "Start"}, {"id": "end", "type": "End"}],
+                "edges": [{"id": "e1", "from": "start", "to": "end"}],
+            }
+        },
         headers=headers,
     ).json()
     binding = client.post(

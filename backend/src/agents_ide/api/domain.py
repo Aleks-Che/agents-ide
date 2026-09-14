@@ -5,12 +5,26 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from agents_ide.api.deps import get_secret_store, get_session, get_settings
 from agents_ide.config import Settings
+from agents_ide.domain.graph_schema import node_schemas as _node_schemas_payload
+from agents_ide.domain.graph_validation import (
+    ValidationReport,
+    validate_version,
+)
+from agents_ide.domain.graph_validation import (
+    export_payload as export_graph_payload,
+)
+from agents_ide.domain.graph_validation import (
+    import_payload as import_graph_payload,
+)
+from agents_ide.domain.graph_validation import (
+    preflight as preflight_binding,
+)
 from agents_ide.domain.schemas import (
-    MODEL_SELECTION,
     Chat,
     ChatArchive,
     ChatCreate,
@@ -570,172 +584,121 @@ def copy_model_group_endpoint(
 # ----- Node schemas for stage 3+
 
 
-_NODE_SCHEMAS: dict[str, Any] = {
-    "Start": {
-        "type": "object",
-        "required": ["id", "type"],
-        "properties": {"id": {"type": "string"}, "type": {"const": "Start"}},
-        "additionalProperties": False,
-    },
-    "End": {
-        "type": "object",
-        "required": ["id", "type"],
-        "properties": {"id": {"type": "string"}, "type": {"const": "End"}},
-        "additionalProperties": False,
-    },
-    "AgentTask": {
-        "type": "object",
-        "required": ["id", "type", "config"],
-        "properties": {
-            "id": {"type": "string"},
-            "type": {"const": "AgentTask"},
-            "config": {
-                "type": "object",
-                "required": ["role", "prompt"],
-                "properties": {
-                    "role": {"type": "string"},
-                    "prompt": {"type": "string", "maxLength": 65536},
-                },
-            },
-        },
-    },
-    "LLMRequest": {
-        "type": "object",
-        "required": ["id", "type", "config"],
-        "properties": {
-            "id": {"type": "string"},
-            "type": {"const": "LLMRequest"},
-            "config": {
-                "type": "object",
-                "required": ["connection_id", "model", "prompt"],
-                "properties": {
-                    "connection_id": {"type": "string"},
-                    "model": {"type": "string"},
-                    "prompt": {"type": "string"},
-                },
-            },
-        },
-    },
-    "Command": {
-        "type": "object",
-        "required": ["id", "type", "config"],
-        "properties": {
-            "id": {"type": "string"},
-            "type": {"const": "Command"},
-            "config": {
-                "type": "object",
-                "required": ["commands"],
-                "properties": {
-                    "commands": {
-                        "type": "array",
-                        "maxItems": 50,
-                        "items": {
-                            "type": "object",
-                            "required": ["program", "args"],
-                            "properties": {
-                                "id": {"type": "string"},
-                                "program": {"type": "string"},
-                                "args": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "cwd": {"type": "string"},
-                                "env": {"type": "object"},
-                                "required": {"type": "boolean"},
-                                "success_exit_codes": {
-                                    "type": "array",
-                                    "items": {"type": "integer"},
-                                },
-                                "timeout_seconds": {"type": "integer"},
-                                "max_output_bytes": {"type": "integer"},
-                                "retry_safety": {
-                                    "enum": ["safe", "unsafe"],
-                                },
-                            },
-                        },
-                    },
-                    "failure_policy": {"enum": ["collect_all", "stop_on_failure"]},
-                },
-            },
-        },
-    },
-    "CollectContext": {
-        "type": "object",
-        "required": ["id", "type", "config"],
-        "properties": {
-            "id": {"type": "string"},
-            "type": {"const": "CollectContext"},
-            "config": {
-                "type": "object",
-                "properties": {
-                    "mode": {"enum": ["collect", "resolve_requests"]},
-                    "sources": {"type": "array"},
-                    "context_paths": {"type": "array"},
-                },
-            },
-        },
-    },
-    "GitCommit": {
-        "type": "object",
-        "required": ["id", "type"],
-        "properties": {
-            "id": {"type": "string"},
-            "type": {"const": "GitCommit"},
-        },
-    },
-    "Condition": {
-        "type": "object",
-        "required": ["id", "type", "expression"],
-        "properties": {
-            "id": {"type": "string"},
-            "type": {"const": "Condition"},
-            "expression": {"type": "object"},
-        },
-    },
-    "PlanControl": {
-        "type": "object",
-        "required": ["id", "type", "operation"],
-        "properties": {
-            "id": {"type": "string"},
-            "type": {"const": "PlanControl"},
-            "operation": {
-                "enum": ["select_next", "record_verified", "record_final_check", "attach_commit"],
-            },
-        },
-    },
-}
-
-
 @router.get("/schema/nodes")
 def node_schemas() -> dict[str, Any]:
-    from copy import deepcopy
+    return _node_schemas_payload()
 
-    nodes = deepcopy(_NODE_SCHEMAS)
-    choice = MODEL_SELECTION.json_schema(ref_template="#/components/schemas/{model}")
-    definitions = choice.pop("$defs")
-    for kind in ("AgentTask", "LLMRequest"):
-        config = nodes[kind]["properties"]["config"]
-        config["properties"].update(
-            {
-                "model_selection": choice,
-                "params": {"type": "object", "additionalProperties": True},
-                "role": {"type": "string"},
-            }
-        )
-        config["required"] = ["prompt"]  # Selection may be inherited from a role.
-    return {
-        "schema_version": "1.0.0",
-        "components": {"schemas": definitions},
-        "selection_precedence": ["node", "run", "binding", "template", "default"],
-        "parameter_precedence": ["node", "role", "candidate", "profile_or_connection"],
-        "nodes": nodes,
-        "limits": {
-            "max_nodes": 200,
-            "max_edges": 400,
-            "max_prompt_bytes": 65536,
-            "max_graph_bytes": 1048576,
-        },
-    }
+
+# ----- Graph validation / preflight
+
+from agents_ide.domain.schemas import ApiModel  # noqa: E402
+
+
+class GraphValidationRequest(ApiModel):
+    graph: dict[str, Any] = Field(default_factory=dict)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    schema_version: str = "1.0.0"
+    required_features: list[str] = Field(default_factory=list)
+    settings: SettingsOverrides = Field(default_factory=SettingsOverrides)
+
+
+class GraphImportRequest(ApiModel):
+    """Permissive import body; ``trusted`` and ``execution_hash`` are ignored."""
+
+    model_config = ConfigDict(extra="allow")
+    graph: dict[str, Any] = Field(default_factory=dict)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    required_features: list[str] = Field(default_factory=list)
+    schema_version: str = "1.0.0"
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class GraphImportResponse(ApiModel):
+    ok: bool
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
+    graph_hash: str | None = None
+    execution_hash: str | None = None
+    features: list[str] = Field(default_factory=list)
+    body: dict[str, Any] | None = None
+
+
+@router.post("/graphs/validate")
+def validate_graph_endpoint(
+    session: SessionDep,
+    payload: GraphValidationRequest,
+) -> dict[str, Any]:
+    """Validate a graph without persisting anything."""
+
+    from agents_ide.domain.graph_validation import validate_with_session
+
+    report: ValidationReport = validate_with_session(
+        session, payload.graph, inputs=payload.inputs, settings=payload.settings
+    )
+    from agents_ide.domain.graph_validation import check_version_features
+
+    check_version_features(payload.schema_version, payload.required_features, report)
+    return report.to_dict()
+
+
+@router.post("/graphs/export")
+def export_graph_endpoint(payload: GraphValidationRequest) -> dict[str, Any]:
+    """Return a portable export with a freshly computed execution_hash."""
+
+    return export_graph_payload(
+        payload.graph,
+        inputs=payload.inputs,
+        settings=payload.settings.model_dump(mode="json", exclude_none=True),
+        schema_version=payload.schema_version,
+        required_features=payload.required_features,
+    )
+
+
+@router.post("/graphs/import", response_model=GraphImportResponse)
+def import_graph_endpoint(payload: GraphImportRequest) -> GraphImportResponse:
+    """Validate an imported graph payload, ignoring client-supplied trust markers."""
+
+    body, report = import_graph_payload(payload.model_dump())
+    return GraphImportResponse(
+        ok=report.ok,
+        errors=[issue.to_dict() for issue in report.errors],
+        warnings=[issue.to_dict() for issue in report.warnings],
+        graph_hash=report.graph_hash,
+        execution_hash=report.execution_hash,
+        features=report.features,
+        body=body if report.ok else None,
+    )
+
+
+@router.get("/versions/{version_id}/validate")
+def validate_version_endpoint(session: SessionDep, version_id: str) -> dict[str, Any]:
+    """Re-validate an immutable :class:`PipelineVersion` graph."""
+
+    return validate_version(session, version_id).to_dict()
+
+
+class PreflightRequest(ApiModel):
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    overrides: SettingsOverrides = Field(default_factory=SettingsOverrides)
+
+
+@router.post("/bindings/{binding_id}/preflight")
+def preflight_endpoint(
+    session: SessionDep, binding_id: str, payload: PreflightRequest | None = None
+) -> dict[str, Any]:
+    """Return the validation report and resolved capabilities for ``binding_id``."""
+
+    from agents_ide.persistence.models import PipelineBinding as PipelineBindingModel
+    from agents_ide.services.mapping import get_or_404
+
+    binding_model = get_or_404(session, PipelineBindingModel, binding_id)
+    report = preflight_binding(
+        session,
+        binding_model,
+        inputs=payload.inputs if payload else None,
+        overrides=payload.overrides if payload else None,
+    )
+    return report.to_dict()
 
 
 @router.get("/schema/events")
@@ -782,6 +745,7 @@ def event_schemas() -> dict[str, Any]:
 @router.get("/capabilities")
 def capabilities(settings: SettingsDep) -> dict[str, Any]:
     from agents_ide import __version__
+    from agents_ide.domain.graph_schema import GRAPH_LIMITS, SUPPORTED_FEATURES
 
     return {
         "engine_version": __version__,
@@ -796,5 +760,9 @@ def capabilities(settings: SettingsDep) -> dict[str, Any]:
             "model_groups",
         ],
         "limits": {"max_projects": 1024, "max_chats_per_project": 256},
+        "graph_limits": GRAPH_LIMITS,
+        "supported_graph_features": sorted(SUPPORTED_FEATURES),
+        "runtime_execution": "unimplemented",
+        "adapter_capabilities": "unverified",
         "frontend_origin": settings.allowed_origins,
     }

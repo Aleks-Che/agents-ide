@@ -171,6 +171,8 @@ class SettingsOverrides(ApiModel):
 
 
 class PipelineDraft(ApiModel):
+    schema_version: str = "1.0.0"
+    origin: Literal["local", "imported"] = "local"
     graph: dict[str, Any] = Field(default_factory=dict)
     required_features: list[str] = Field(default_factory=list, max_length=64)
     inputs: dict[str, Any] = Field(default_factory=dict)
@@ -263,6 +265,7 @@ class PipelineVersionCreate(PipelineDraft):
 
 
 class PipelineVersion(ApiOutput):
+    origin: Literal["local", "imported"] = "local"
     id: str
     template_id: str
     version_number: int
@@ -652,6 +655,7 @@ class ModelGroupImport(ApiModel):
 
 
 class RunStart(ApiModel):
+    trusted_execution_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     project_id: str
     chat_id: str | None = None
     binding_id: str

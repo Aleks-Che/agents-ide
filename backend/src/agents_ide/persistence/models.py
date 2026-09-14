@@ -123,6 +123,7 @@ class PipelineVersion(Base):
     policy_hash: Mapped[str] = mapped_column(String(64))
     inputs_json: Mapped[str] = mapped_column(Text, default="{}")
     settings_json: Mapped[str] = mapped_column(Text, default="{}")
+    origin: Mapped[str] = mapped_column(String(16), default="local")
     created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
 
     template: Mapped[PipelineTemplate] = relationship(back_populates="versions")

@@ -41,7 +41,9 @@ def _provider(client, headers, name: str) -> dict[str, object]:
     return response.json()
 
 
-def _make_template(client, headers, name: str) -> tuple[dict[str, object], dict[str, object]]:
+def _make_template(
+    client, headers, name: str, *, node_type="AgentTask", role="dev"
+) -> tuple[dict[str, object], dict[str, object]]:
     template = client.post(
         "/api/templates", json={"name": name, "schema_version": "1.0.0"}, headers=headers
     ).json()
@@ -53,12 +55,15 @@ def _make_template(client, headers, name: str) -> tuple[dict[str, object], dict[
                     {"id": "start", "type": "Start"},
                     {
                         "id": "agent",
-                        "type": "AgentTask",
-                        "config": {"role": "dev", "prompt": "fix"},
+                        "type": node_type,
+                        "config": {"role": role, "prompt": "fix"},
                     },
                     {"id": "end", "type": "End"},
                 ],
-                "edges": [],
+                "edges": [
+                    {"id": "e_start", "from": "start", "to": "agent"},
+                    {"id": "e_end", "from": "agent", "to": "end"},
+                ],
             }
         },
         headers=headers,
@@ -531,7 +536,10 @@ def test_model_selection_payload_validation(authenticated, payload):
     response = client.post(
         f"/api/templates/{template['id']}/versions",
         json={
-            "graph": {"nodes": [{"id": "start", "type": "Start"}], "edges": []},
+            "graph": {
+                "nodes": [{"id": "start", "type": "Start"}, {"id": "end", "type": "End"}],
+                "edges": [{"id": "e1", "from": "start", "to": "end"}],
+            },
             "settings": {"model_selections": {"dev": payload}},
         },
         headers=headers,
@@ -545,7 +553,9 @@ def test_run_overrides_selection_isolated_per_role(authenticated, tmp_path):
     workspace.mkdir()
     project = _project(client, headers, workspace)
     provider = _provider(client, headers, "override-llm")
-    _template, version = _make_template(client, headers, "override-tpl")
+    _template, version = _make_template(
+        client, headers, "override-tpl", node_type="LLMRequest", role="verifier"
+    )
     binding = client.post(
         f"/api/versions/{version['id']}/bindings",
         json={
@@ -581,6 +591,12 @@ def test_run_overrides_selection_isolated_per_role(authenticated, tmp_path):
         headers=headers,
     )
     assert response.status_code == 201, response.text
+
+    with client.app.state.session_factory() as session:
+        run = session.get(RunModel, response.json()["id"])
+        config = json.loads(run.snapshot_json)["dependencies"]["nodes"]["agent"]
+    assert config["model"] == "run"
+    assert config["connection_id"] == provider["id"]
 
 
 def test_binding_rejects_overlap_between_selections_and_overrides(authenticated, tmp_path):

@@ -14,7 +14,6 @@ from agents_ide.domain.schemas import (
     GroupSelection,
     ModelSelection,
     SettingsOverrides,
-    validate_model_params,
 )
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
@@ -106,13 +105,17 @@ def policy_hash(configuration: dict[str, Any]) -> str:
 
 
 def execution_hash(
-    version: PipelineVersion, configuration: dict[str, Any], dependencies: dict[str, Any]
+    version: PipelineVersion,
+    configuration: dict[str, Any],
+    dependencies: dict[str, Any],
+    inputs: dict[str, Any] | None = None,
 ) -> str:
     return content_hash(
         {
             "pipeline_execution_hash": version.execution_hash,
             "configuration": configuration,
             "dependencies": dependencies,
+            "inputs": json.loads(version.inputs_json) if inputs is None else inputs,
         }
     )
 
@@ -131,6 +134,8 @@ def capture_dependencies(
 def _capture_dependencies(
     session: Session, graph: dict[str, Any], configuration: dict[str, Any]
 ) -> dict[str, Any]:
+    from agents_ide.domain.graph_validation import validate_parameters
+
     profiles: dict[str, Any] = {}
     providers: dict[str, Any] = {}
     groups: dict[str, Any] = {}
@@ -192,7 +197,7 @@ def _capture_dependencies(
                         )
                     data = resource(model.kind, ref, grouped=True)
                     params = json.loads(member.params_json)
-                    validate_model_params(params)
+                    validate_parameters(params)
                     candidates.append(
                         {
                             "id": member.id,
@@ -293,7 +298,7 @@ def _capture_dependencies(
                     if key in profile.get("settings", {}):
                         defaults[key] = profile["settings"][key]
                 params = {**defaults, **candidate["params"], **role_params, **node_params}
-                validate_model_params(params)
+                validate_parameters(params)
                 param_sources = {
                     key: "profile" if kind == "agent" else "connection" for key in defaults
                 }
@@ -343,6 +348,23 @@ def _capture_dependencies(
                 resource("llm", connection_id)
                 if role in configuration["model_overrides"]:
                     config["model"] = configuration["model_overrides"][role]
+            if expected_kind:
+                params = {
+                    key: config[key]
+                    for key in (
+                        "reasoning_effort",
+                        "temperature",
+                        "top_p",
+                        "max_tokens",
+                        "max_output_tokens",
+                        "seed",
+                    )
+                    if key in config
+                }
+                params.update(config.get("params", {}))
+                validate_parameters(params)
+                if params:
+                    config["params"] = params
         nodes[node["id"]] = config
     return {
         "model_selection_version": 1,

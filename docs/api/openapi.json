@@ -281,6 +281,144 @@
         "title": "DraftPublish",
         "type": "object"
       },
+      "GraphImportRequest": {
+        "additionalProperties": true,
+        "description": "Permissive import body; ``trusted`` and ``execution_hash`` are ignored.",
+        "properties": {
+          "graph": {
+            "additionalProperties": true,
+            "title": "Graph",
+            "type": "object"
+          },
+          "inputs": {
+            "additionalProperties": true,
+            "title": "Inputs",
+            "type": "object"
+          },
+          "required_features": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Features",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "1.0.0",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "title": "GraphImportRequest",
+        "type": "object"
+      },
+      "GraphImportResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "errors": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "execution_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Hash"
+          },
+          "features": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Features",
+            "type": "array"
+          },
+          "graph_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graph Hash"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "warnings": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "GraphImportResponse",
+        "type": "object"
+      },
+      "GraphValidationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "graph": {
+            "additionalProperties": true,
+            "title": "Graph",
+            "type": "object"
+          },
+          "inputs": {
+            "additionalProperties": true,
+            "title": "Inputs",
+            "type": "object"
+          },
+          "required_features": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Features",
+            "type": "array"
+          },
+          "schema_version": {
+            "default": "1.0.0",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SettingsOverrides"
+          }
+        },
+        "title": "GraphValidationRequest",
+        "type": "object"
+      },
       "GroupSelection": {
         "additionalProperties": false,
         "properties": {
@@ -1522,6 +1660,15 @@
             "title": "Inputs",
             "type": "object"
           },
+          "origin": {
+            "default": "local",
+            "enum": [
+              "local",
+              "imported"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
           "required_features": {
             "items": {
               "type": "string"
@@ -1529,6 +1676,11 @@
             "maxItems": 64,
             "title": "Required Features",
             "type": "array"
+          },
+          "schema_version": {
+            "default": "1.0.0",
+            "title": "Schema Version",
+            "type": "string"
           },
           "settings": {
             "$ref": "#/components/schemas/SettingsOverrides"
@@ -1555,6 +1707,15 @@
             "title": "Inputs",
             "type": "object"
           },
+          "origin": {
+            "default": "local",
+            "enum": [
+              "local",
+              "imported"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
           "required_features": {
             "items": {
               "type": "string"
@@ -1562,6 +1723,11 @@
             "maxItems": 64,
             "title": "Required Features",
             "type": "array"
+          },
+          "schema_version": {
+            "default": "1.0.0",
+            "title": "Schema Version",
+            "type": "string"
           },
           "settings": {
             "$ref": "#/components/schemas/SettingsOverrides"
@@ -1737,6 +1903,15 @@
             "title": "Inputs",
             "type": "object"
           },
+          "origin": {
+            "default": "local",
+            "enum": [
+              "local",
+              "imported"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
           "policy_hash": {
             "title": "Policy Hash",
             "type": "string"
@@ -1794,6 +1969,15 @@
             "title": "Inputs",
             "type": "object"
           },
+          "origin": {
+            "default": "local",
+            "enum": [
+              "local",
+              "imported"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
           "required_features": {
             "items": {
               "type": "string"
@@ -1801,6 +1985,11 @@
             "maxItems": 64,
             "title": "Required Features",
             "type": "array"
+          },
+          "schema_version": {
+            "default": "1.0.0",
+            "title": "Schema Version",
+            "type": "string"
           },
           "settings": {
             "$ref": "#/components/schemas/SettingsOverrides"
@@ -1856,6 +2045,21 @@
           "resource_ref"
         ],
         "title": "PortableGroupMember",
+        "type": "object"
+      },
+      "PreflightRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "inputs": {
+            "additionalProperties": true,
+            "title": "Inputs",
+            "type": "object"
+          },
+          "overrides": {
+            "$ref": "#/components/schemas/SettingsOverrides"
+          }
+        },
+        "title": "PreflightRequest",
         "type": "object"
       },
       "Project": {
@@ -2592,6 +2796,18 @@
           "project_id": {
             "title": "Project Id",
             "type": "string"
+          },
+          "trusted_execution_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trusted Execution Hash"
           }
         },
         "required": [
@@ -3228,6 +3444,68 @@
           }
         },
         "summary": "Archive Binding Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/bindings/{binding_id}/preflight": {
+      "post": {
+        "description": "Return the validation report and resolved capabilities for ``binding_id``.",
+        "operationId": "preflight_endpoint_api_bindings__binding_id__preflight_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PreflightRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Preflight Endpoint Api Bindings  Binding Id  Preflight Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preflight Endpoint",
         "tags": [
           "domain"
         ]
@@ -3912,6 +4190,136 @@
           }
         },
         "summary": "Test Connection Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/graphs/export": {
+      "post": {
+        "description": "Return a portable export with a freshly computed execution_hash.",
+        "operationId": "export_graph_endpoint_api_graphs_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphValidationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Export Graph Endpoint Api Graphs Export Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Graph Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/graphs/import": {
+      "post": {
+        "description": "Validate an imported graph payload, ignoring client-supplied trust markers.",
+        "operationId": "import_graph_endpoint_api_graphs_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphImportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Graph Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/graphs/validate": {
+      "post": {
+        "description": "Validate a graph without persisting anything.",
+        "operationId": "validate_graph_endpoint_api_graphs_validate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GraphValidationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Validate Graph Endpoint Api Graphs Validate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate Graph Endpoint",
         "tags": [
           "domain"
         ]
@@ -6163,6 +6571,51 @@
           }
         },
         "summary": "Create Binding Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/versions/{version_id}/validate": {
+      "get": {
+        "description": "Re-validate an immutable :class:`PipelineVersion` graph.",
+        "operationId": "validate_version_endpoint_api_versions__version_id__validate_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version_id",
+            "required": true,
+            "schema": {
+              "title": "Version Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Validate Version Endpoint Api Versions  Version Id  Validate Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate Version Endpoint",
         "tags": [
           "domain"
         ]

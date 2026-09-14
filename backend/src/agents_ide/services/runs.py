@@ -190,7 +190,46 @@ def start_run(session: Session, payload: RunStart) -> Run:
     configuration, sources = resolve_configuration(binding, version, payload.overrides)
     if configuration["dirty_policy"] == "allow_nonoverlap":
         raise AppError("policy_unsupported", "allow_nonoverlap ожидает проверок этапа 8", 409)
+    from agents_ide.domain.graph_validation import preflight as preflight_binding
+
+    report = preflight_binding(
+        session,
+        binding,
+        inputs=payload.inputs,
+        overrides=payload.overrides,
+        workspace_state=(project.workspace_entered_path, normalized, dev, ino, git),
+    )
+    if not report.ok:
+        if len(report.errors) == 1 and report.errors[0].code in {
+            "model_group_unavailable",
+            "harness_unavailable",
+            "connection_unavailable",
+        }:
+            issue = report.errors[0]
+            raise AppError(issue.code, issue.message, 409, issue.details)
+        raise AppError(
+            "graph_validation_failed",
+            "Граф не прошёл preflight",
+            422,
+            {"errors": [issue.to_dict() for issue in report.errors]},
+        )
+    if version.origin == "imported" and payload.trusted_execution_hash != report.execution_hash:
+        raise AppError(
+            "import_trust_required",
+            "Подтвердите итоговый execution_hash из preflight",
+            409,
+            {"execution_hash": report.execution_hash},
+        )
+    if (
+        payload.trusted_execution_hash is not None
+        and payload.trusted_execution_hash != report.execution_hash
+    ):
+        raise AppError(
+            "execution_hash_changed", "Исполняемая конфигурация изменилась после preflight", 409
+        )
     snapshot = _build_snapshot(project, version)
+    snapshot["origin"] = version.origin
+    snapshot["trusted_execution_hash"] = payload.trusted_execution_hash
     snapshot["input"] = {
         "message": payload.message,
         "messages": messages,
@@ -200,7 +239,9 @@ def start_run(session: Session, payload: RunStart) -> Run:
     snapshot["setting_sources"] = sources
     snapshot["dependencies"] = capture_dependencies(session, snapshot["graph"], configuration)
     snapshot["pipeline_execution_hash"] = version.execution_hash
-    snapshot["execution_hash"] = execution_hash(version, configuration, snapshot["dependencies"])
+    snapshot["execution_hash"] = execution_hash(
+        version, configuration, snapshot["dependencies"], snapshot["input"]["values"]
+    )
     if snapshot["dependencies"]["model_groups"]:
         snapshot["required_features"] = sorted(
             {*snapshot.get("required_features", []), "model_groups"}
@@ -397,7 +438,10 @@ def list_command_journal(session: Session, run_id: str) -> list[CommandAccepted]
 
 
 def _build_snapshot(project: ProjectModel, version: PipelineVersionModel) -> dict[str, Any]:
+    from agents_ide import __version__
+
     return {
+        "engine_version": __version__,
         "schema_version": version.schema_version,
         "execution_hash": version.execution_hash,
         "policy_hash": version.policy_hash,

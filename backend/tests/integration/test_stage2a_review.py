@@ -92,13 +92,18 @@ def version_binding(
         {
             "graph": {
                 "nodes": [
+                    {"id": "start", "type": "Start"},
                     {
                         "id": "work",
                         "type": "AgentTask" if kind == "agent" else "LLMRequest",
                         "config": {"role": "dev", "prompt": "task", **(config or {})},
-                    }
+                    },
+                    {"id": "end", "type": "End"},
                 ],
-                "edges": [],
+                "edges": [
+                    {"id": "e1", "from": "start", "to": "work"},
+                    {"id": "e2", "from": "work", "to": "end"},
+                ],
             },
             "settings": settings or {},
         },
@@ -210,8 +215,19 @@ def test_wrong_kind_binding_is_rejected(authenticated, tmp_path):
         f"/templates/{template['id']}/versions",
         {
             "graph": {
-                "nodes": [{"id": "work", "type": "AgentTask", "config": {"role": "dev"}}],
-                "edges": [],
+                "nodes": [
+                    {"id": "start", "type": "Start"},
+                    {
+                        "id": "work",
+                        "type": "AgentTask",
+                        "config": {"role": "dev", "prompt": "task"},
+                    },
+                    {"id": "end", "type": "End"},
+                ],
+                "edges": [
+                    {"id": "e1", "from": "start", "to": "work"},
+                    {"id": "e2", "from": "work", "to": "end"},
+                ],
             },
         },
     )
@@ -362,7 +378,7 @@ def test_candidate_parameters_resolve_separately_and_do_not_merge_lists(authenti
         "temperature": 0.2
     }
     assert data["setting_sources"]["role_parameters.dev.stop"] == "run"
-    assert data["required_features"] == ["model_groups"]
+    assert data["required_features"] == ["agenttask", "model_groups"]
 
 
 def test_selection_replaces_legacy_across_layers_in_both_directions(authenticated, tmp_path):
@@ -410,6 +426,7 @@ def test_node_group_choice_without_role_works_for_single_request(authenticated, 
         {
             "graph": {
                 "nodes": [
+                    {"id": "start", "type": "Start"},
                     {
                         "id": "single",
                         "type": "AgentTask" if kind == "agent" else "LLMRequest",
@@ -417,13 +434,20 @@ def test_node_group_choice_without_role_works_for_single_request(authenticated, 
                             "prompt": "single request",
                             "model_selection": {"kind": "group", "group_id": group["id"]},
                         },
-                    }
+                    },
+                    {"id": "end", "type": "End"},
                 ],
-                "edges": [],
+                "edges": [
+                    {"id": "e1", "from": "start", "to": "single"},
+                    {"id": "e2", "from": "single", "to": "end"},
+                ],
             },
         },
     )
-    assert version["required_features"] == ["model_groups"]
+    assert version["required_features"] == [
+        "agenttask" if kind == "agent" else "llmrequest",
+        "model_groups",
+    ]
     binding = post(
         client,
         headers,

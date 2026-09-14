@@ -7,6 +7,7 @@ execution hash and policy hash.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sqlalchemy import func, select
@@ -156,13 +157,31 @@ def create_version(
     template = get_or_404(session, PipelineTemplateModel, template_id)
     if template.archived_at is not None:
         raise AppError("template_archived", "Архивный шаблон недоступен", 409)
+    # Strict validation: a published version must run successfully.
+    from agents_ide.domain.graph_validation import (
+        check_version_features,
+        definition_hash,
+        validate_graph,
+    )
+
+    report = validate_graph(payload.graph, inputs=payload.inputs, allow_incomplete=False)
+    check_version_features(template.schema_version, payload.required_features, report)
+    check_version_features(payload.schema_version, payload.required_features, report)
+    if not report.ok:
+        raise AppError(
+            "graph_validation_failed",
+            "Граф не прошёл проверку",
+            422,
+            {"errors": [issue.to_dict() for issue in report.errors]},
+        )
     next_number = _next_version_number(session, template_id)
+    features = sorted(set(payload.required_features) | set(report.features))
     policy_payload = {**DEFAULTS, **payload.settings.model_dump(exclude_none=True)}
     capture_dependencies(session, payload.graph, policy_payload)
-    execution_hash = content_hash(
+    execution_hash = definition_hash(
         {
             "graph": payload.graph,
-            "features": sorted(payload.required_features),
+            "required_features": features,
             "inputs": payload.inputs,
             "settings": payload.settings.model_dump(exclude_none=True),
             "schema_version": template.schema_version,
@@ -175,12 +194,15 @@ def create_version(
         template_id=template_id,
         version_number=next_number,
         schema_version=template.schema_version,
-        required_features_json=to_json(payload.required_features),
+        required_features_json=to_json(features),
         graph_json=to_json(payload.graph),
         execution_hash=execution_hash,
         policy_hash=policy_hash,
         inputs_json=to_json(payload.inputs),
         settings_json=to_json(payload.settings.model_dump(exclude_none=True)),
+        origin="imported"
+        if json.loads(template.draft_json).get("origin") == "imported"
+        else payload.origin,
         created_at=now,
     )
 
@@ -405,7 +427,10 @@ def update_draft(
         raise AppError("version_conflict", "Черновик изменён в другом месте", 409)
     if model.archived_at is not None or model.kind == "system":
         raise AppError("template_immutable", "Шаблон недоступен для правки", 409)
-    model.draft_json = to_json(payload.model_dump(exclude={"expected_version"}))
+    draft = payload.model_dump(exclude={"expected_version"})
+    if json.loads(model.draft_json).get("origin") == "imported":
+        draft["origin"] = "imported"
+    model.draft_json = to_json(draft)
     model.version += 1
     model.updated_at = utc_now()
     session.flush()

@@ -32,6 +32,7 @@ def get_session(request: Request) -> Generator[Session, None, None]:
     factory = get_session_factory(request)
     session = factory()
     session.info["data_dir"] = get_settings(request).data_dir
+    session.info["secret_store"] = get_secret_store(request)
     try:
         yield session
         session.commit()

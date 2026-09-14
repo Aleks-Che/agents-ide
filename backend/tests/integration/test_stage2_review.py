@@ -34,7 +34,10 @@ def setup_run(client, headers, workspace, *, suffix="", chat_id=None):
         f"/api/templates/{template['id']}/versions",
         headers=headers,
         json={
-            "graph": {"nodes": [{"id": "start", "type": "Start"}], "edges": []},
+            "graph": {
+                "nodes": [{"id": "start", "type": "Start"}, {"id": "end", "type": "End"}],
+                "edges": [{"id": "e1", "from": "start", "to": "end"}],
+            },
         },
     ).json()
     binding = client.post(
@@ -203,7 +206,13 @@ def test_draft_edit_conflict_and_immutable_publication(authenticated, tmp_path):
         == 422
     )
     draft["expected_version"] = 2
-    draft["graph"] = {"nodes": [], "edges": []}
+    draft["graph"] = {
+        "nodes": [
+            {"id": "start", "type": "Start"},
+            {"id": "finish", "type": "End"},
+        ],
+        "edges": [{"id": "e1", "from": "start", "to": "finish"}],
+    }
     client.put(f"/api/templates/{template['id']}/draft", headers=headers, json=draft)
     published = client.post(
         f"/api/templates/{template['id']}/publish", headers=headers, json={"expected_version": 3}
@@ -332,6 +341,7 @@ def test_snapshot_pins_settings_and_secret_revision(authenticated, tmp_path):
     ).json()
     graph = {
         "nodes": [
+            {"id": "start", "type": "Start"},
             {"id": "agent", "type": "AgentTask", "config": {"role": "dev", "prompt": "fix"}},
             {
                 "id": "llm",
@@ -342,8 +352,13 @@ def test_snapshot_pins_settings_and_secret_revision(authenticated, tmp_path):
                     "prompt": "verify",
                 },
             },
+            {"id": "end", "type": "End"},
         ],
-        "edges": [],
+        "edges": [
+            {"id": "e1", "from": "start", "to": "agent"},
+            {"id": "e2", "from": "agent", "to": "llm"},
+            {"id": "e3", "from": "llm", "to": "end"},
+        ],
     }
     version = client.post(
         f"/api/templates/{template['id']}/versions",

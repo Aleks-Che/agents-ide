@@ -135,6 +135,7 @@ def template_from_model(model: PipelineTemplateModel) -> PipelineTemplate:
 
 def version_from_model(model: PipelineVersionModel) -> PipelineVersion:
     return PipelineVersion(
+        origin=model.origin,  # type: ignore[arg-type]
         id=model.id,
         template_id=model.template_id,
         version_number=model.version_number,
