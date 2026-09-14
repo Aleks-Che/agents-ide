@@ -14,7 +14,7 @@
 
 ## Открытые вопросы и ограничения
 
-Состояние на 2026-09-14 после ревью этапа 2. Перечисленные ограничения не блокируют работу над следующим этапом 2A и контрактами этапа 3.
+Состояние на 2026-09-14 после ревью этапов 2 и 2A. Перечисленные ограничения не блокируют работу над контрактами этапа 3; допуски к исполнению проверяются отдельно.
 
 | ID | Статус | На что влияет | Что проверить или сделать |
 | --- | --- | --- | --- |
@@ -26,10 +26,67 @@
 | V-004 | Политика пока не допускается | Git, этап 8 | Не включать `dirty_policy=allow_nonoverlap` до проверок baseline, allowlist, временного index, hooks/signing и внешних изменений. |
 | V-005 | Замеры не выполнены | Нагрузочная приёмка, этап 12 | Измерить зафиксированный профиль 100 000 событий на Windows/NTFS/SSD после появления журнала Run и артефактов. Цели p95 пока являются критериями, а не результатами. |
 | V-006 | Условие обновления старых данных | Базы с записями из первоначального этапа 2 | В 0002 не сохранялись исходный запрос Run, payload команд и полный scope резервации. Миграция 0003 сохраняет историю, но не выдумывает утраченные поля. Для legacy-старта возвращается `idempotency_unverifiable`; команды с NULL payload и неизвестные резервации требуют сверки на этапе 5. Новые записи содержат все эти поля. |
+| V-007 | Совместимость ранних снимков групп | Run из первоначальной 0004, этапы 4–5 | Снимок мог хранить ID кандидатов без всех settings, endpoint и версий секретов. 0005 не переписывает историю и не достраивает её из текущих ресурсов. Будущий worker должен отказать исполнению такого неполного снимка; новый формат маркирован `dependencies.model_selection_version=1`. Старые params с credentials/управлением не выдаются и не экспортируются: требуется исправление состава через PUT. |
 
 Основания и точные границы: [матрица интеграций](integrations/CAPABILITIES.md), [решения каркаса](architecture/FOUNDATION_DECISIONS.md), [runtime-контракты](architecture/RUNTIME_CONTRACTS.md).
 
 ## Записи
+
+### 2026-09-14 · Этап 2A · Ревью, исправление выбора и снимков
+
+**Статус:** замечания реализации исправлены, проверки прошли; этап 2A закрыт в пределах данных и конфигурационных API. Исходный отчёт сохранён следующей записью как история до ревью.
+
+| Найденное несоответствие | Исправление |
+| --- | --- |
+| Два сбоя launcher/worker объявлены предсуществующими, но readiness сравнивал БД 0004 с ожидаемой 0003 | Ожидаемая ревизия обновлена до 0005. Оба исходных сбоя воспроизведены до исправления и прошли после него. |
+| PATCH model_selections вызывал model_dump у уже сериализованного dict и возвращал 500 | Единая JSON-сериализация; смена direct/group и возврат к legacy direct атомарны. |
+| Direct игнорировал собственный профиль/подключение; legacy role_assignments мог подавить выбранную группу | Выбор разрешается целиком и использует именно своего исполнителя; direct работает без дублирования legacy-настроек. |
+| Не проверялись тип потребителя и архивность группы при создании binding; узловой выбор отсутствовал | Строгие варианты direct agent/direct llm/group, node.config.model_selection, проверки AgentTask/LLMRequest и новых привязок; одиночный узел использует тот же контракт. |
+| Группа сохраняла ID кандидатов, но теряла настройки резервных профилей, endpoints, secret refs и итоговые параметры | Snapshot фиксирует всех кандидатов, даже отключённых, копии всех ресурсов и отдельные параметры каждого узла/кандидата. Архивный первый ресурс отмечается unavailable и не скрывает следующий. |
+| Новые выборы и legacy overrides разных уровней могли действовать одновременно | Приоритет run → binding → version → defaults с полной заменой выбора; параметры роли разрешаются отдельно, списки заменяются. |
+| Execution hash не менялся при изменении группы или её подключения | Run/resolve хешируют итоговую конфигурацию и зависимости; исходный hash версии хранится отдельно. Старые Run не переписываются. |
+| Перестановка создавала новые ID, copy игнорировал expected_revision, неверный member-route мог дать 500 | Стабильные ID и ревизии кандидатов, проверка copy/archive, проверка типа до изменений, временное освобождение позиций внутри транзакции. |
+| Триггер 0004 проверял только INSERT и только XOR ссылки | 0005 защищает INSERT/UPDATE: тип группы/ресурса, XOR, дубликаты пары, позицию и неизменность kind. История сохраняется. |
+| Params могли сохранять plaintext credentials и переопределять разрешения/endpoint | Такие поля отклоняются без отражения значения в ответе; небезопасные старые params не выдаются и не экспортируются. Проверка поддержанных параметров конкретного адаптера остаётся этапом 3. |
+| Перенос групп и автоматическое required_features отсутствовали при закрытом чекбоксе | Добавлены export/import определений, явная привязка каждого resource_ref, отказ конфликта имён; required_features пополняется при публикации и старте. Полный импорт графа остаётся этапом 3. |
+
+**Контракты:** [MODEL_GROUPS](architecture/MODEL_GROUPS.md), [DOMAIN_DATA](architecture/DOMAIN_DATA.md), [runtime](architecture/RUNTIME_CONTRACTS.md), [состояния](architecture/STATE_MACHINES.md), [исполнение](architecture/EXECUTION_CONTRACTS.md), [безопасность](architecture/SECURITY_AND_OPERATIONS.md). Устранены противоречия про fallback, отдельную StepAttempt каждого retry, ограниченный новый проход после восстановления доступа, неизменность snapshot и сброс бюджетов. Генерируемые OpenAPI, node schemas и TypeScript обновлены.
+
+**Проверки:** до исправлений исходный набор давал 92 passed / 2 failed. Итоговый Windows/Python 3.12.7 прогон: **127 passed**, 2 предупреждения Starlette/httpx и anyio, 64.66 секунды. Добавлены **33 регрессионных случая** в `test_stage2a_review.py`; исходный тест архивации уточнён (binding создаётся до архивации), проверка hash теперь сопоставляет resolve с фактическим Run. Новые сценарии охватывают наследование, снимки и секреты всех кандидатов, конкурентную перестановку, SQL-инварианты, миграцию 0004 → 0005, импорт/экспорт, перезапуск, legacy null и защиту старых params.
+
+- Ruff check/format: 58 файлов без замечаний; mypy Windows и `--platform linux`: 43 исходных файла без ошибок. `generate_contracts.py --check` прошёл.
+- Frontend ESLint, Prettier, TypeScript/Vite build, 2 Vitest и 1 Playwright прошли. Проверялся существующий интерфейс состояния служб/pairing; UI групп ещё не реализован.
+- Wheel собран offline, установлен в отдельное окружение; его CLI успешно применил миграции к отдельной БД в `.local/review-2a-wheel-data`. Исходники проекта и рабочие каталоги пользователей для этого не использовались как data-dir.
+
+**Границы и следующий шаг:** этап 3 — полная схема графа, capability/parameter validation, preflight, доверие и импорт pipeline. Исполнение кандидатов, retry/fallback, история переключений и session recovery — этапы 4–7. На этом проходе не выполнялись платные запросы или probe реальных моделей. Удалённый CI и запуск тестов на Linux не выполнялись.
+
+### 2026-09-14 · Этап 2A · Группы моделей и типизированный выбор
+
+**Статус исходного отчёта до ревью:** заявлено закрытие в пределах 2A. Утверждения о полноте snapshot, fully disabled, copy/revision и независимости двух сбоев уточнены и исправлены в записи ревью выше. Worker выбор и переключение кандидатов относятся к этапам 4–7.
+
+**Реализовано.**
+
+- Миграция `0004_model_groups` добавляет таблицы `model_groups` и `model_group_members` с триггером «ровно одно из profile/connection» и уникальным `(kind, name)`. Существующие `pipeline_bindings` получают столбец `model_selections_json` со значением `{}` по умолчанию; обратной миграции нет.
+- ORM `ModelGroup`/`ModelGroupMember`, Pydantic-схемы `ModelSelection`, `ModelGroup`, `ModelGroupMember`, `ModelGroupAgentCreate/Update`, `ModelGroupLLMCreate/Update`, `ModelGroupCopy`, `ModelGroupMemberDelete`. `ModelSelection` нормализует выбор в `direct` или `group`: для `direct` требуются `model_id` и ровно один профиль/подключение, для `group` — только `group_id`. `SettingsOverrides` принимает обе формы (`model_selections` или legacy `model_overrides`); одновременное пересечение по одной роли отвергается.
+- Сервис `agents_ide.services.groups` с create/list/get/update/archive/copy/replace_members/delete_member. Ревизия увеличивается на изменении метаданных и замене состава; archive без ревизии возвращает 409; пустой и полностью отключённый список отклоняется. `load_group_snapshot` отдаёт активную группу и упорядоченных кандидатов или `None`, если группа архивирована.
+- REST: `GET/POST /api/model_groups[/agent|/llm]`, `GET/PATCH /api/model_groups/{id}[/agent|/llm]`, `PUT /api/model_groups/{id}[/agent|/llm]/members`, `DELETE /api/model_groups/{id}/members/{member_id}` с `expected_revision` в query, `POST .../archive`, `POST .../copy`. CSRF и pairing действуют.
+- `services.settings.resolve_configuration` поднимает `model_selections` из колонки `model_selections_json` в конфигурацию с приоритетом run → binding → version; legacy `model_overrides` остаётся для прямого выбора. `capture_dependencies` записывает в snapshot полный список кандидатов группы (id, ревизия, member_index, enabled, profile/connection, model_id, params). Старт Run отклоняется с `model_group_unavailable`, если в snapshot нужна группа, но она архивирована.
+- `WaitingReason` дополнен кодом `model_group_exhausted` (зарезервирован, выбор worker появится в этапе 4). В `schema_version` capabilities/features добавлен `model_groups`; в `schema/events` — `model_group.candidate_selected`, `model_group.candidate_skipped`, `model_group.candidate_switched`, `model_group.exhausted`. Сгенерированные OpenAPI/TypeScript-контракты синхронизированы.
+
+**Нюансы и решения:**
+
+- `model_overrides` сохранён как legacy-канал прямого выбора; новые записи должны использовать `model_selections` с `kind=direct`. На одно и то же имя роли оба поля одновременно недопустимы, иначе пересечение отвергается с 422. `binding_from_model` возвращает обе формы в ответе API, чтобы старые клиенты не ломались.
+- Миграция `0004` в `upgrade()` создаёт только новые таблицы и столбец `model_selections_json`; триггерная проверка «один профиль или одно подключение» срабатывает раньше FK-проверок и преобразуется в `AppError("conflict", ...)` через `ensure_unique` (тест `test_group_member_mixed_kinds_rejected_by_schema` ожидает 422, потому что Pydantic отбивает лишнее поле раньше БД).
+- Snapshot Run фиксирует полный упорядоченный список кандидатов группы в `dependencies["model_groups"][id]`. Редактирование состава или архивация группы после старта не меняют snapshot: тест `test_run_snapshot_pins_group_members_and_survives_edits` сравнивает snapshot до и после `PUT /agent/members`.
+- Прямой выбор в `ModelSelection.kind="direct"` перекрывает `model_overrides[role]`, чтобы переход к новому контракту был постепенным, а существующие Run со старым `model_overrides` остались корректными.
+
+**Проверки:**
+
+- Backend на Windows/Python 3.12.7: 92 теста прошли (70 предыдущих + 22 новых из `tests/integration/test_stage2a_model_groups.py`). Два прежних сбоя `test_launcher::test_detached_launcher_sse_revoke_and_stop` и `test_storage_worker::test_health_separates_worker_readiness` относятся к независимой инфраструктуре worker/launcher и не связаны с этим этапом.
+- Ruff check/format, mypy `Success: no issues found in 42 source files`. `scripts/generate_contracts.py --check` подтверждает синхронность OpenAPI/TS.
+- Frontend: ESLint, Prettier, TypeScript/Vite build, Vitest и Playwright прошли без изменений (контракты генерируются, типов UI этап 2A не касается).
+
+**Продолжение.** Этап 3 использует новые `model_selections` в валидации графа и preflight: agent-группа допустима только для `AgentTask`, llm-группа — для `LLMRequest`; несовместимые и отключённые позиции пропускаются с причиной. Этап 4 добавит серверный выбор кандидата по snapshot и события `model_group.candidate_*`/`model_group.exhausted`; `waiting_input(model_group_exhausted)` сохраняет прежние счётчики Run. UI выбора групп и диагностика переключения относятся к этапу 9.
 
 ### 2026-09-14 · Этап 9A · Планирование Council и подборка исходников
 

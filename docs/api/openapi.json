@@ -208,6 +208,64 @@
         "title": "CommandAccepted",
         "type": "object"
       },
+      "DirectAgentSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "harness_profile_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Harness Profile Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "direct",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "model_id",
+          "harness_profile_id"
+        ],
+        "title": "DirectAgentSelection",
+        "type": "object"
+      },
+      "DirectLLMSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "direct",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "provider_connection_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Provider Connection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "model_id",
+          "provider_connection_id"
+        ],
+        "title": "DirectLLMSelection",
+        "type": "object"
+      },
       "DraftPublish": {
         "additionalProperties": false,
         "properties": {
@@ -221,6 +279,28 @@
           "expected_version"
         ],
         "title": "DraftPublish",
+        "type": "object"
+      },
+      "GroupSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "group_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Group Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "group",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "group_id"
+        ],
+        "title": "GroupSelection",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -492,6 +572,550 @@
         "title": "MessageUpdate",
         "type": "object"
       },
+      "ModelGroup": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "agent",
+              "llm"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ModelGroupMember"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "kind",
+          "revision",
+          "archived",
+          "members",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ModelGroup",
+        "type": "object"
+      },
+      "ModelGroupAgentCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Description",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ModelGroupAgentMemberCreate"
+            },
+            "maxItems": 200,
+            "title": "Members",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ModelGroupAgentCreate",
+        "type": "object"
+      },
+      "ModelGroupAgentMemberCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "harness_profile_id": {
+            "title": "Harness Profile Id",
+            "type": "string"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "model_id",
+          "harness_profile_id"
+        ],
+        "title": "ModelGroupAgentMemberCreate",
+        "type": "object"
+      },
+      "ModelGroupAgentMembersReplace": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ModelGroupAgentMemberCreate"
+            },
+            "maxItems": 200,
+            "title": "Members",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "members"
+        ],
+        "title": "ModelGroupAgentMembersReplace",
+        "type": "object"
+      },
+      "ModelGroupAgentUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "ModelGroupAgentUpdate",
+        "type": "object"
+      },
+      "ModelGroupCopy": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "expected_revision"
+        ],
+        "title": "ModelGroupCopy",
+        "type": "object"
+      },
+      "ModelGroupExport": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Description",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "agent",
+              "llm"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/PortableGroupMember"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Members",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "required_features": {
+            "default": [
+              "model_groups"
+            ],
+            "items": {
+              "const": "model_groups",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "title": "Required Features",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": "1.0.0",
+            "default": "1.0.0",
+            "title": "Schema Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "members"
+        ],
+        "title": "ModelGroupExport",
+        "type": "object"
+      },
+      "ModelGroupImport": {
+        "additionalProperties": false,
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/ModelGroupExport"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "resource_bindings": {
+            "additionalProperties": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Resource Bindings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "definition",
+          "resource_bindings"
+        ],
+        "title": "ModelGroupImport",
+        "type": "object"
+      },
+      "ModelGroupLLMCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "Description",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ModelGroupLLMMemberCreate"
+            },
+            "maxItems": 200,
+            "title": "Members",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ModelGroupLLMCreate",
+        "type": "object"
+      },
+      "ModelGroupLLMMemberCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "provider_connection_id": {
+            "title": "Provider Connection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "provider_connection_id"
+        ],
+        "title": "ModelGroupLLMMemberCreate",
+        "type": "object"
+      },
+      "ModelGroupLLMMembersReplace": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ModelGroupLLMMemberCreate"
+            },
+            "maxItems": 200,
+            "title": "Members",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "members"
+        ],
+        "title": "ModelGroupLLMMembersReplace",
+        "type": "object"
+      },
+      "ModelGroupLLMUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "ModelGroupLLMUpdate",
+        "type": "object"
+      },
+      "ModelGroupMember": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "harness_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Profile Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "member_index": {
+            "title": "Member Index",
+            "type": "integer"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "provider_connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Connection Id"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "member_index",
+          "enabled",
+          "harness_profile_id",
+          "provider_connection_id",
+          "model_id",
+          "params",
+          "revision",
+          "updated_at"
+        ],
+        "title": "ModelGroupMember",
+        "type": "object"
+      },
       "PairRequest": {
         "properties": {
           "code": {
@@ -558,6 +1182,23 @@
             "title": "Model Overrides",
             "type": "object"
           },
+          "model_selections": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DirectAgentSelection"
+                },
+                {
+                  "$ref": "#/components/schemas/DirectLLMSelection"
+                },
+                {
+                  "$ref": "#/components/schemas/GroupSelection"
+                }
+              ]
+            },
+            "title": "Model Selections",
+            "type": "object"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -571,6 +1212,14 @@
               "type": "string"
             },
             "title": "Role Assignments",
+            "type": "object"
+          },
+          "role_parameters": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Role Parameters",
             "type": "object"
           },
           "updated_at": {
@@ -593,6 +1242,8 @@
           "project_id",
           "name",
           "role_assignments",
+          "model_selections",
+          "role_parameters",
           "model_overrides",
           "limit_overrides",
           "command_filter",
@@ -648,6 +1299,23 @@
             "title": "Model Overrides",
             "type": "object"
           },
+          "model_selections": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DirectAgentSelection"
+                },
+                {
+                  "$ref": "#/components/schemas/DirectLLMSelection"
+                },
+                {
+                  "$ref": "#/components/schemas/GroupSelection"
+                }
+              ]
+            },
+            "title": "Model Selections",
+            "type": "object"
+          },
           "name": {
             "maxLength": 120,
             "minLength": 1,
@@ -664,6 +1332,21 @@
             },
             "title": "Role Assignments",
             "type": "object"
+          },
+          "role_parameters": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Parameters"
           }
         },
         "required": [
@@ -753,6 +1436,30 @@
             ],
             "title": "Model Overrides"
           },
+          "model_selections": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DirectAgentSelection"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DirectLLMSelection"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GroupSelection"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Selections"
+          },
           "name": {
             "anyOf": [
               {
@@ -779,6 +1486,21 @@
               }
             ],
             "title": "Role Assignments"
+          },
+          "role_parameters": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Parameters"
           }
         },
         "required": [
@@ -1088,6 +1810,52 @@
           "graph"
         ],
         "title": "PipelineVersionCreate",
+        "type": "object"
+      },
+      "PortableGroupMember": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "resource_ref": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Resource Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "resource_ref"
+        ],
+        "title": "PortableGroupMember",
         "type": "object"
       },
       "Project": {
@@ -1927,6 +2695,30 @@
             ],
             "title": "Model Overrides"
           },
+          "model_selections": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/DirectAgentSelection"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DirectLLMSelection"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GroupSelection"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Selections"
+          },
           "role_assignments": {
             "anyOf": [
               {
@@ -1940,6 +2732,21 @@
               }
             ],
             "title": "Role Assignments"
+          },
+          "role_parameters": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Parameters"
           }
         },
         "title": "SettingsOverrides",
@@ -2021,6 +2828,7 @@
               "auth_required",
               "secret_unavailable",
               "model_unavailable",
+              "model_group_exhausted",
               "external_change_detected",
               "unknown_external_result",
               "invalid_response_format",
@@ -3500,6 +4308,653 @@
           }
         },
         "summary": "Archive Message Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups": {
+      "get": {
+        "operationId": "list_model_groups_endpoint_api_model_groups_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "agent",
+                    "llm"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ModelGroup"
+                  },
+                  "title": "Response List Model Groups Endpoint Api Model Groups Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Model Groups Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/agent": {
+      "post": {
+        "operationId": "create_agent_group_endpoint_api_model_groups_agent_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelGroupAgentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Agent Group Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/import": {
+      "post": {
+        "operationId": "import_model_group_endpoint_api_model_groups_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelGroupImport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Model Group Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/llm": {
+      "post": {
+        "operationId": "create_llm_group_endpoint_api_model_groups_llm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelGroupLLMCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Llm Group Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/{group_id}": {
+      "get": {
+        "operationId": "get_model_group_endpoint_api_model_groups__group_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Model Group Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/{group_id}/agent": {
+      "patch": {
+        "operationId": "update_agent_group_endpoint_api_model_groups__group_id__agent_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelGroupAgentUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Agent Group Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/{group_id}/agent/members": {
+      "put": {
+        "operationId": "replace_agent_members_endpoint_api_model_groups__group_id__agent_members_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelGroupAgentMembersReplace"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Agent Members Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/{group_id}/archive": {
+      "post": {
+        "operationId": "archive_model_group_endpoint_api_model_groups__group_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_revision",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Model Group Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/{group_id}/copy": {
+      "post": {
+        "operationId": "copy_model_group_endpoint_api_model_groups__group_id__copy_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelGroupCopy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Copy Model Group Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/{group_id}/export": {
+      "get": {
+        "operationId": "export_model_group_endpoint_api_model_groups__group_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroupExport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Model Group Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/{group_id}/llm": {
+      "patch": {
+        "operationId": "update_llm_group_endpoint_api_model_groups__group_id__llm_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelGroupLLMUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Llm Group Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/{group_id}/llm/members": {
+      "put": {
+        "operationId": "replace_llm_members_endpoint_api_model_groups__group_id__llm_members_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelGroupLLMMembersReplace"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Llm Members Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/model_groups/{group_id}/members/{member_id}": {
+      "delete": {
+        "operationId": "delete_member_endpoint_api_model_groups__group_id__members__member_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "title": "Member Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_revision",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelGroup"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Member Endpoint",
         "tags": [
           "domain"
         ]

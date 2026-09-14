@@ -63,7 +63,12 @@ from agents_ide.persistence.models import (
     WorkspaceReservation as WorkspaceReservationModel,
 )
 from agents_ide.services.mapping import get_or_404
-from agents_ide.services.settings import capture_dependencies, policy_hash, resolve_configuration
+from agents_ide.services.settings import (
+    capture_dependencies,
+    execution_hash,
+    policy_hash,
+    resolve_configuration,
+)
 from agents_ide.services.transactions import begin_write
 
 _RUN_STATE_TERMINAL = {"completed", "failed", "cancelled"}
@@ -194,6 +199,12 @@ def start_run(session: Session, payload: RunStart) -> Run:
     snapshot["resolved_settings"] = configuration
     snapshot["setting_sources"] = sources
     snapshot["dependencies"] = capture_dependencies(session, snapshot["graph"], configuration)
+    snapshot["pipeline_execution_hash"] = version.execution_hash
+    snapshot["execution_hash"] = execution_hash(version, configuration, snapshot["dependencies"])
+    if snapshot["dependencies"]["model_groups"]:
+        snapshot["required_features"] = sorted(
+            {*snapshot.get("required_features", []), "model_groups"}
+        )
     snapshot["policy_hash"] = policy_hash({**configuration, **snapshot["dependencies"]})
     snapshot["workspace"].update(
         {
@@ -218,7 +229,7 @@ def start_run(session: Session, payload: RunStart) -> Run:
         state="queued",
         state_version=0,
         schema_version=version.schema_version,
-        execution_hash=version.execution_hash,
+        execution_hash=snapshot["execution_hash"],
         policy_hash=snapshot["policy_hash"],
         snapshot_json=snapshot_payload,
         resolved_settings_json=json.dumps(snapshot["resolved_settings"], sort_keys=True),

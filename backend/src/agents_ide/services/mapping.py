@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from agents_ide.domain.common import from_json
 from agents_ide.domain.schemas import (
+    MODEL_SELECTION,
     Chat,
     HarnessProfile,
     Message,
@@ -149,12 +150,19 @@ def version_from_model(model: PipelineVersionModel) -> PipelineVersion:
 
 
 def binding_from_model(model: PipelineBindingModel) -> PipelineBinding:
+    raw_selections = from_json(getattr(model, "model_selections_json", "{}") or "{}", {})
+    selections = {
+        role: MODEL_SELECTION.validate_python({k: v for k, v in value.items() if v is not None})
+        for role, value in raw_selections.items()
+    }
     return PipelineBinding(
         id=model.id,
         version_id=model.version_id,
         project_id=model.project_id,
         name=model.name,
         role_assignments=from_json(model.role_assignments_json, {}),
+        model_selections=selections,
+        role_parameters=from_json(model.settings_json, {}).get("role_parameters", {}),
         model_overrides=from_json(model.model_overrides_json, {}),
         limit_overrides=from_json(model.limit_overrides_json, {}),
         command_filter=from_json(model.command_filter_json, []),

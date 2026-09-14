@@ -13,6 +13,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
@@ -22,6 +23,7 @@ from agents_ide.domain.contracts import RunState
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1, max_length=120)]
 ShortStr = Annotated[str, StringConstraints(min_length=1, max_length=64)]
 LongStr = Annotated[str, StringConstraints(min_length=1, max_length=256)]
+ModelID = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=256)]
 
 
 def _utc_now() -> datetime:
@@ -130,6 +132,10 @@ class MessageUpdate(ApiModel):
 
 class SettingsOverrides(ApiModel):
     role_assignments: dict[str, str] | None = None
+    model_selections: dict[str, ModelSelection] | None = None
+    role_parameters: dict[str, dict[str, Any]] | None = None
+    # Legacy direct models remain supported. The higher settings layer wins;
+    # overlap within one submitted layer is rejected.
     model_overrides: dict[str, str] | None = None
     limit_overrides: dict[str, float] | None = None
     command_filter: list[str] | None = None
@@ -145,6 +151,24 @@ class SettingsOverrides(ApiModel):
             raise ValueError("Limits must be positive finite numbers")
         return value
 
+    @field_validator("role_parameters")
+    @classmethod
+    def _safe_role_parameters(
+        cls, value: dict[str, dict[str, Any]] | None
+    ) -> dict[str, dict[str, Any]] | None:
+        for params in (value or {}).values():
+            validate_model_params(params)
+        return value
+
+    @model_validator(mode="after")
+    def _selections_xor_overrides(self) -> SettingsOverrides:
+        if self.model_selections and self.model_overrides:
+            overlap = set(self.model_selections).intersection(self.model_overrides)
+            if overlap:
+                joined = ", ".join(sorted(overlap))
+                raise ValueError(f"model_selections and model_overrides overlap for: {joined}")
+        return self
+
 
 class PipelineDraft(ApiModel):
     graph: dict[str, Any] = Field(default_factory=dict)
@@ -157,6 +181,20 @@ class PipelineDraft(ApiModel):
         if len(json.dumps(self.model_dump(), ensure_ascii=False).encode("utf-8")) > 1048576:
             raise ValueError("Pipeline exceeds 1 MiB")
         return self
+
+    @field_validator("graph")
+    @classmethod
+    def _model_choices(cls, graph: dict[str, Any]) -> dict[str, Any]:
+        for node in graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []:
+            config = node.get("config") if isinstance(node, dict) else None
+            if isinstance(config, dict):
+                if "model_selection" in config:
+                    MODEL_SELECTION.validate_python(config["model_selection"])
+                if "params" in config:
+                    if not isinstance(config["params"], dict):
+                        raise ValueError("Model params must be an object")
+                    validate_model_params(config["params"])
+        return graph
 
 
 class PipelineDraftUpdate(PipelineDraft):
@@ -200,6 +238,18 @@ class PipelineVersionCreate(PipelineDraft):
     required_features: list[str] = Field(default_factory=list, max_length=64)
     inputs: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _selection_features(self) -> PipelineVersionCreate:
+        choices = [s.model_dump() for s in (self.settings.model_selections or {}).values()]
+        choices += [
+            node.get("config", {}).get("model_selection", {})
+            for node in self.graph["nodes"]
+            if isinstance(node, dict) and isinstance(node.get("config", {}), dict)
+        ]
+        if any(choice.get("kind") == "group" for choice in choices):
+            self.required_features = sorted({*self.required_features, "model_groups"})
+        return self
+
     @field_validator("graph")
     @classmethod
     def _graph_size(cls, value: dict[str, Any]) -> dict[str, Any]:
@@ -231,6 +281,7 @@ class PipelineBindingCreate(SettingsOverrides):
     project_id: str
     name: NonEmptyStr
     role_assignments: dict[str, str] = Field(default_factory=dict)
+    model_selections: dict[str, ModelSelection] = Field(default_factory=dict)
     model_overrides: dict[str, str] = Field(default_factory=dict)
     limit_overrides: dict[str, float] = Field(default_factory=dict)
     command_filter: list[str] = Field(default_factory=list)
@@ -241,6 +292,7 @@ class PipelineBindingCreate(SettingsOverrides):
 class PipelineBindingUpdate(SettingsOverrides):
     name: NonEmptyStr | None = None
     role_assignments: dict[str, str] | None = None
+    model_selections: dict[str, ModelSelection] | None = None
     model_overrides: dict[str, str] | None = None
     limit_overrides: dict[str, float] | None = None
     command_filter: list[str] | None = None
@@ -255,6 +307,11 @@ class PipelineBinding(ApiOutput):
     project_id: str
     name: str
     role_assignments: dict[str, str]
+    model_selections: dict[str, ModelSelection]
+    role_parameters: dict[str, dict[str, Any]]
+    # Legacy direct overrides retained for the response so pre-2A clients still
+    # see the role→model mapping they wrote. New writes should use
+    # ``model_selections`` with ``kind=direct``.
     model_overrides: dict[str, str]
     limit_overrides: dict[str, Any]
     command_filter: list[str]
@@ -385,6 +442,212 @@ class HarnessProfile(ApiOutput):
     updated_at: datetime
 
 
+# ----------------------------------------------------------------------------- Model groups
+
+
+class ModelGroupMemberBase(ApiModel):
+    id: ShortStr | None = None  # Preserve identity on member replacement.
+    enabled: bool = True
+    model_id: ModelID
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("params")
+    @classmethod
+    def _safe_params(cls, value: dict[str, Any]) -> dict[str, Any]:
+        validate_model_params(value)
+        return value
+
+
+class ModelGroupAgentMemberCreate(ModelGroupMemberBase):
+    harness_profile_id: str
+
+
+class ModelGroupLLMMemberCreate(ModelGroupMemberBase):
+    provider_connection_id: str
+
+
+class ModelGroupMember(ApiOutput):
+    id: str
+    member_index: int
+    enabled: bool
+    harness_profile_id: str | None
+    provider_connection_id: str | None
+    model_id: str
+    params: dict[str, Any]
+    revision: int
+    updated_at: datetime
+
+
+class ModelGroupAgentCreate(ApiModel):
+    name: NonEmptyStr
+    description: str = Field(default="", max_length=4096)
+    members: list[ModelGroupAgentMemberCreate] = Field(default_factory=list, max_length=200)
+
+
+class ModelGroupLLMCreate(ApiModel):
+    name: NonEmptyStr
+    description: str = Field(default="", max_length=4096)
+    members: list[ModelGroupLLMMemberCreate] = Field(default_factory=list, max_length=200)
+
+
+class ModelGroupAgentUpdate(ApiModel):
+    name: NonEmptyStr | None = None
+    description: str | None = Field(default=None, max_length=4096)
+    expected_revision: int = Field(ge=1)
+
+
+class ModelGroupLLMUpdate(ApiModel):
+    name: NonEmptyStr | None = None
+    description: str | None = Field(default=None, max_length=4096)
+    expected_revision: int = Field(ge=1)
+
+
+class ModelGroupAgentMembersReplace(ApiModel):
+    expected_revision: int = Field(ge=1)
+    members: list[ModelGroupAgentMemberCreate] = Field(max_length=200)
+
+
+class ModelGroupLLMMembersReplace(ApiModel):
+    expected_revision: int = Field(ge=1)
+    members: list[ModelGroupLLMMemberCreate] = Field(max_length=200)
+
+
+class ModelGroupMemberDelete(ApiModel):
+    expected_revision: int = Field(ge=1)
+
+
+class ModelGroup(ApiOutput):
+    id: str
+    name: str
+    description: str
+    kind: Literal["agent", "llm"]
+    revision: int
+    archived: bool
+    members: list[ModelGroupMember]
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class ModelGroupCopy(ApiModel):
+    name: NonEmptyStr
+    description: str | None = Field(default=None, max_length=4096)
+    expected_revision: int = Field(ge=1)
+
+
+class SelectionInput(ApiModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_null_fields(cls, raw: Any) -> Any:
+        if isinstance(raw, dict):
+            return {
+                k: v
+                for k, v in raw.items()
+                if not (
+                    v is None
+                    and k
+                    in {"group_id", "model_id", "harness_profile_id", "provider_connection_id"}
+                )
+            }
+        return raw
+
+
+class DirectAgentSelection(SelectionInput):
+    kind: Literal["direct"]
+    model_id: ModelID
+    harness_profile_id: ShortStr
+
+
+class DirectLLMSelection(SelectionInput):
+    kind: Literal["direct"]
+    model_id: ModelID
+    provider_connection_id: ShortStr
+
+
+class GroupSelection(SelectionInput):
+    kind: Literal["group"]
+    group_id: ShortStr
+
+
+ModelSelection = DirectAgentSelection | DirectLLMSelection | GroupSelection
+MODEL_SELECTION: TypeAdapter[ModelSelection] = TypeAdapter(ModelSelection)
+
+
+def validate_model_params(value: dict[str, Any]) -> None:
+    """Parameters never select endpoints, credentials, tools or permissions.
+
+    Adapter-specific parameter support is validated by stage 3/6/7 preflight.
+    """
+    _reject_credentials(value)
+    forbidden = {
+        "model",
+        "model_id",
+        "harness_profile_id",
+        "provider_connection_id",
+        "connection_id",
+        "group_id",
+        "kind",
+        "base_url",
+        "endpoint",
+        "url",
+        "env",
+        "args",
+        "command",
+        "executable_path",
+        "permissions",
+        "permission",
+        "sandbox",
+        "sandbox_mode",
+        "approval_policy",
+        "tools",
+        "allowed_tools",
+        "cwd",
+        "workspace",
+        "write_paths",
+        "read_paths",
+        "role",
+        "prompt",
+        "system_prompt",
+        "instructions",
+    }
+
+    def check(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if key.lower().replace("-", "_") in forbidden:
+                    raise ValueError("Model parameters cannot change execution policy or routing")
+                check(child)
+        elif isinstance(item, list):
+            for child in item:
+                check(child)
+
+    check(value)
+    if len(json.dumps(value).encode("utf-8")) > 65536:
+        raise ValueError("Model params exceed 64 KiB")
+
+
+class PortableGroupMember(ModelGroupMemberBase):
+    resource_ref: ShortStr
+
+
+class ModelGroupExport(ApiModel):
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    required_features: list[Literal["model_groups"]] = Field(
+        default=["model_groups"], min_length=1, max_length=1
+    )
+    kind: Literal["agent", "llm"]
+    name: NonEmptyStr
+    description: str = Field(default="", max_length=4096)
+    members: list[PortableGroupMember] = Field(min_length=1, max_length=200)
+
+
+class ModelGroupImport(ApiModel):
+    definition: ModelGroupExport
+    # All foreign references must be resolved explicitly, even on the same host.
+    resource_bindings: dict[str, ShortStr]
+    name: NonEmptyStr | None = None
+
+
 # ----------------------------------------------------------------------------- Runs
 
 
@@ -427,6 +690,7 @@ class WaitingReason(ApiModel):
         "auth_required",
         "secret_unavailable",
         "model_unavailable",
+        "model_group_exhausted",
         "external_change_detected",
         "unknown_external_result",
         "invalid_response_format",

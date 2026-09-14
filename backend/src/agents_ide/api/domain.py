@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from agents_ide.api.deps import get_secret_store, get_session, get_settings
 from agents_ide.config import Settings
 from agents_ide.domain.schemas import (
+    MODEL_SELECTION,
     Chat,
     ChatArchive,
     ChatCreate,
@@ -22,6 +23,17 @@ from agents_ide.domain.schemas import (
     Message,
     MessageCreate,
     MessageUpdate,
+    ModelGroup,
+    ModelGroupAgentCreate,
+    ModelGroupAgentMembersReplace,
+    ModelGroupAgentUpdate,
+    ModelGroupCopy,
+    ModelGroupExport,
+    ModelGroupImport,
+    ModelGroupLLMCreate,
+    ModelGroupLLMMembersReplace,
+    ModelGroupLLMUpdate,
+    ModelGroupMemberDelete,
     PipelineBinding,
     PipelineBindingCreate,
     PipelineBindingUpdate,
@@ -50,6 +62,7 @@ from agents_ide.security.secrets import SecretStore
 from agents_ide.services import (
     chats,
     connections,
+    groups,
     harness,
     projects,
     runs,
@@ -452,6 +465,108 @@ def list_command_journal_endpoint(session: SessionDep, run_id: str) -> list[Comm
     return runs.list_command_journal(session, run_id)
 
 
+# ----------------------------------------------------------------------------- Model groups
+
+
+@router.get("/model_groups", response_model=list[ModelGroup])
+def list_model_groups_endpoint(
+    session: SessionDep,
+    kind: Literal["agent", "llm"] | None = Query(default=None),
+    include_archived: bool = Query(default=False),
+) -> list[ModelGroup]:
+    return groups.list_groups(session, kind=kind, include_archived=include_archived)
+
+
+@router.post("/model_groups/agent", response_model=ModelGroup, status_code=201)
+def create_agent_group_endpoint(session: SessionDep, payload: ModelGroupAgentCreate) -> ModelGroup:
+    return groups.create_group(session, payload)
+
+
+@router.post("/model_groups/llm", response_model=ModelGroup, status_code=201)
+def create_llm_group_endpoint(session: SessionDep, payload: ModelGroupLLMCreate) -> ModelGroup:
+    return groups.create_group(session, payload)
+
+
+@router.post("/model_groups/import", response_model=ModelGroup, status_code=201)
+def import_model_group_endpoint(session: SessionDep, payload: ModelGroupImport) -> ModelGroup:
+    return groups.import_group(session, payload)
+
+
+@router.get("/model_groups/{group_id}/export", response_model=ModelGroupExport)
+def export_model_group_endpoint(session: SessionDep, group_id: str) -> ModelGroupExport:
+    return groups.export_group(session, group_id)
+
+
+@router.get("/model_groups/{group_id}", response_model=ModelGroup)
+def get_model_group_endpoint(session: SessionDep, group_id: str) -> ModelGroup:
+    return groups.get_group(session, group_id)
+
+
+@router.patch("/model_groups/{group_id}/agent", response_model=ModelGroup)
+def update_agent_group_endpoint(
+    session: SessionDep,
+    group_id: str,
+    payload: ModelGroupAgentUpdate,
+) -> ModelGroup:
+    return groups.update_group(session, group_id, payload)
+
+
+@router.patch("/model_groups/{group_id}/llm", response_model=ModelGroup)
+def update_llm_group_endpoint(
+    session: SessionDep,
+    group_id: str,
+    payload: ModelGroupLLMUpdate,
+) -> ModelGroup:
+    return groups.update_group(session, group_id, payload)
+
+
+@router.put("/model_groups/{group_id}/agent/members", response_model=ModelGroup)
+def replace_agent_members_endpoint(
+    session: SessionDep,
+    group_id: str,
+    payload: ModelGroupAgentMembersReplace,
+) -> ModelGroup:
+    return groups.replace_members(session, group_id, payload)
+
+
+@router.put("/model_groups/{group_id}/llm/members", response_model=ModelGroup)
+def replace_llm_members_endpoint(
+    session: SessionDep,
+    group_id: str,
+    payload: ModelGroupLLMMembersReplace,
+) -> ModelGroup:
+    return groups.replace_members(session, group_id, payload)
+
+
+@router.delete("/model_groups/{group_id}/members/{member_id}", response_model=ModelGroup)
+def delete_member_endpoint(
+    session: SessionDep,
+    group_id: str,
+    member_id: str,
+    expected_revision: int = Query(ge=1),
+) -> ModelGroup:
+    payload = ModelGroupMemberDelete(expected_revision=expected_revision)
+    return groups.delete_member(session, group_id, member_id, payload)
+
+
+@router.post("/model_groups/{group_id}/archive", response_model=ModelGroup)
+def archive_model_group_endpoint(
+    session: SessionDep,
+    group_id: str,
+    expected_revision: int = Query(ge=1),
+) -> ModelGroup:
+    return groups.archive_group(session, group_id, expected_revision)
+
+
+@router.post("/model_groups/{group_id}/copy", response_model=ModelGroup, status_code=201)
+def copy_model_group_endpoint(
+    session: SessionDep,
+    group_id: str,
+    payload: ModelGroupCopy,
+) -> ModelGroup:
+    return groups.copy_group(session, group_id, payload)
+
+
 # ----- Node schemas for stage 3+
 
 
@@ -593,9 +708,27 @@ _NODE_SCHEMAS: dict[str, Any] = {
 
 @router.get("/schema/nodes")
 def node_schemas() -> dict[str, Any]:
+    from copy import deepcopy
+
+    nodes = deepcopy(_NODE_SCHEMAS)
+    choice = MODEL_SELECTION.json_schema(ref_template="#/components/schemas/{model}")
+    definitions = choice.pop("$defs")
+    for kind in ("AgentTask", "LLMRequest"):
+        config = nodes[kind]["properties"]["config"]
+        config["properties"].update(
+            {
+                "model_selection": choice,
+                "params": {"type": "object", "additionalProperties": True},
+                "role": {"type": "string"},
+            }
+        )
+        config["required"] = ["prompt"]  # Selection may be inherited from a role.
     return {
         "schema_version": "1.0.0",
-        "nodes": _NODE_SCHEMAS,
+        "components": {"schemas": definitions},
+        "selection_precedence": ["node", "run", "binding", "template", "default"],
+        "parameter_precedence": ["node", "role", "candidate", "profile_or_connection"],
+        "nodes": nodes,
         "limits": {
             "max_nodes": 200,
             "max_edges": 400,
@@ -637,6 +770,10 @@ def event_schemas() -> dict[str, Any]:
             "recovery.result",
             "budget.updated",
             "budget.exceeded",
+            "model_group.candidate_selected",
+            "model_group.candidate_skipped",
+            "model_group.candidate_switched",
+            "model_group.exhausted",
             "stream.gap",
         ],
     }
@@ -656,6 +793,7 @@ def capabilities(settings: SettingsDep) -> dict[str, Any]:
             "templates",
             "bindings",
             "provider_connections",
+            "model_groups",
         ],
         "limits": {"max_projects": 1024, "max_chats_per_project": 256},
         "frontend_origin": settings.allowed_origins,

@@ -54,7 +54,14 @@ from agents_ide.services.mapping import (
     template_from_model,
     version_from_model,
 )
-from agents_ide.services.settings import DEFAULTS, capture_dependencies, resolve_configuration
+from agents_ide.services.settings import (
+    DEFAULTS,
+    capture_dependencies,
+    resolve_configuration,
+)
+from agents_ide.services.settings import (
+    execution_hash as effective_execution_hash,
+)
 from agents_ide.services.settings import policy_hash as effective_policy_hash
 from agents_ide.services.transactions import begin_write
 
@@ -151,6 +158,7 @@ def create_version(
         raise AppError("template_archived", "Архивный шаблон недоступен", 409)
     next_number = _next_version_number(session, template_id)
     policy_payload = {**DEFAULTS, **payload.settings.model_dump(exclude_none=True)}
+    capture_dependencies(session, payload.graph, policy_payload)
     execution_hash = content_hash(
         {
             "graph": payload.graph,
@@ -228,6 +236,12 @@ def create_binding(
         name=payload.name,
         role_assignments_json=to_json(payload.role_assignments),
         model_overrides_json=to_json(payload.model_overrides),
+        model_selections_json=to_json(
+            {
+                role: selection.model_dump(mode="json")
+                for role, selection in payload.model_selections.items()
+            }
+        ),
         limit_overrides_json=to_json(payload.limit_overrides),
         command_filter_json=to_json(payload.command_filter),
         settings_json=to_json(
@@ -244,6 +258,8 @@ def create_binding(
     def _add() -> PipelineBinding:
         session.add(model)
         session.flush()
+        values, _ = resolve_configuration(model, version)
+        capture_dependencies(session, version_from_model(version).graph, values)
         return binding_from_model(model)
 
     return ensure_unique(session, _add)
@@ -283,16 +299,38 @@ def update_binding(
     import json
 
     explicit = json.loads(model.settings_json)
+    for key, opposite in [
+        ("model_selections", "model_overrides"),
+        ("model_overrides", "model_selections"),
+    ]:
+        if key in fields:
+            current = json.loads(getattr(model, opposite + "_json"))
+            for role in fields[key]:
+                current.pop(role, None)
+                explicit.get(opposite, {}).pop(role, None)
+            setattr(model, opposite + "_json", to_json(current))
     explicit.update({key: value for key, value in fields.items() if key in DEFAULTS})
     model.settings_json = to_json(explicit)
     for name, value in fields.items():
-        if name in {"role_assignments", "model_overrides", "limit_overrides", "command_filter"}:
+        if name in {
+            "role_assignments",
+            "model_overrides",
+            "model_selections",
+            "limit_overrides",
+            "command_filter",
+        }:
             setattr(model, f"{name}_json", to_json(value))
+        elif name == "role_parameters":
+            pass  # Stored in settings_json with the other explicit overrides.
         else:
             setattr(model, name, value)
     model.revision += 1
     model.updated_at = utc_now()
     session.flush()
+    if set(fields) & {"model_selections", "model_overrides", "role_parameters", "role_assignments"}:
+        version = get_or_404(session, PipelineVersionModel, model.version_id)
+        values, _ = resolve_configuration(model, version)
+        capture_dependencies(session, version_from_model(version).graph, values)
     return binding_from_model(model)
 
 
@@ -328,6 +366,7 @@ def resolve_settings(
     binding = get_or_404(session, PipelineBindingModel, binding_id)
     version = get_or_404(session, PipelineVersionModel, binding.version_id)
     values, sources = resolve_configuration(binding, version, overrides)
+    dependencies = capture_dependencies(session, version_from_model(version).graph, values)
     settings = []
     for name, value in values.items():
         settings.append(
@@ -351,13 +390,8 @@ def resolve_settings(
                 )
     return ResolvedSettings(
         settings=settings,
-        execution_hash=version.execution_hash,
-        policy_hash=effective_policy_hash(
-            {
-                **values,
-                **capture_dependencies(session, version_from_model(version).graph, values),
-            }
-        ),
+        execution_hash=effective_execution_hash(version, values, dependencies),
+        policy_hash=effective_policy_hash({**values, **dependencies}),
         schema_version=version.schema_version,
     )
 

@@ -1,4 +1,88 @@
 {
+  "components": {
+    "schemas": {
+      "DirectAgentSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "harness_profile_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Harness Profile Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "direct",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "model_id",
+          "harness_profile_id"
+        ],
+        "title": "DirectAgentSelection",
+        "type": "object"
+      },
+      "DirectLLMSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "direct",
+            "title": "Kind",
+            "type": "string"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "provider_connection_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Provider Connection Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "model_id",
+          "provider_connection_id"
+        ],
+        "title": "DirectLLMSelection",
+        "type": "object"
+      },
+      "GroupSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "group_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Group Id",
+            "type": "string"
+          },
+          "kind": {
+            "const": "group",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "group_id"
+        ],
+        "title": "GroupSelection",
+        "type": "object"
+      }
+    }
+  },
   "limits": {
     "max_edges": 400,
     "max_graph_bytes": 1048576,
@@ -10,6 +94,23 @@
       "properties": {
         "config": {
           "properties": {
+            "model_selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DirectAgentSelection"
+                },
+                {
+                  "$ref": "#/components/schemas/DirectLLMSelection"
+                },
+                {
+                  "$ref": "#/components/schemas/GroupSelection"
+                }
+              ]
+            },
+            "params": {
+              "additionalProperties": true,
+              "type": "object"
+            },
             "prompt": {
               "maxLength": 65536,
               "type": "string"
@@ -19,7 +120,6 @@
             }
           },
           "required": [
-            "role",
             "prompt"
           ],
           "type": "object"
@@ -213,13 +313,31 @@
             "model": {
               "type": "string"
             },
+            "model_selection": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DirectAgentSelection"
+                },
+                {
+                  "$ref": "#/components/schemas/DirectLLMSelection"
+                },
+                {
+                  "$ref": "#/components/schemas/GroupSelection"
+                }
+              ]
+            },
+            "params": {
+              "additionalProperties": true,
+              "type": "object"
+            },
             "prompt": {
+              "type": "string"
+            },
+            "role": {
               "type": "string"
             }
           },
           "required": [
-            "connection_id",
-            "model",
             "prompt"
           ],
           "type": "object"
@@ -279,5 +397,18 @@
       "type": "object"
     }
   },
-  "schema_version": "1.0.0"
+  "parameter_precedence": [
+    "node",
+    "role",
+    "candidate",
+    "profile_or_connection"
+  ],
+  "schema_version": "1.0.0",
+  "selection_precedence": [
+    "node",
+    "run",
+    "binding",
+    "template",
+    "default"
+  ]
 }

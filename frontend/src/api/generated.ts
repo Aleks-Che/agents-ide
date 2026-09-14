@@ -6,7 +6,10 @@ export interface ApiSchemas {
   "ChatCreate": { "title": string }
   "ChatUpdate": { "expected_version": number; "title": string }
   "CommandAccepted": { "applied_at"?: (string | null); "command_id": string; "response"?: (Record<string, unknown> | null); "sequence": number; "status": "accepted" | "applied" | "rejected" | "superseded" }
+  "DirectAgentSelection": { "harness_profile_id": string; "kind": "direct"; "model_id": string }
+  "DirectLLMSelection": { "kind": "direct"; "model_id": string; "provider_connection_id": string }
   "DraftPublish": { "expected_version": number }
+  "GroupSelection": { "group_id": string; "kind": "group" }
   "HTTPValidationError": { "detail"?: Array<ApiSchemas["ValidationError"]>; [key: string]: unknown }
   "HarnessProfile": { "archived": boolean; "created_at": string; "executable_path": (string | null); "harness_kind": "codex" | "opencode"; "id": string; "name": string; "settings": Record<string, unknown>; "updated_at": string; "version": number }
   "HarnessProfileCreate": { "executable_path"?: (string | null); "harness_kind": "codex" | "opencode"; "name": string; "settings"?: Record<string, unknown> }
@@ -14,10 +17,23 @@ export interface ApiSchemas {
   "Message": { "archived": boolean; "chat_id": string; "content": string; "created_at": string; "id": string; "role": string; "version": number }
   "MessageCreate": { "content": string; "role": "user" | "assistant" | "system" | "note" }
   "MessageUpdate": { "content": string; "expected_version": number }
+  "ModelGroup": { "archived": boolean; "created_at": string; "description": string; "id": string; "kind": "agent" | "llm"; "members": Array<ApiSchemas["ModelGroupMember"]>; "name": string; "revision": number; "updated_at": string; "version": number }
+  "ModelGroupAgentCreate": { "description"?: string; "members"?: Array<ApiSchemas["ModelGroupAgentMemberCreate"]>; "name": string }
+  "ModelGroupAgentMemberCreate": { "enabled"?: boolean; "harness_profile_id": string; "id"?: (string | null); "model_id": string; "params"?: Record<string, unknown> }
+  "ModelGroupAgentMembersReplace": { "expected_revision": number; "members": Array<ApiSchemas["ModelGroupAgentMemberCreate"]> }
+  "ModelGroupAgentUpdate": { "description"?: (string | null); "expected_revision": number; "name"?: (string | null) }
+  "ModelGroupCopy": { "description"?: (string | null); "expected_revision": number; "name": string }
+  "ModelGroupExport": { "description"?: string; "kind": "agent" | "llm"; "members": Array<ApiSchemas["PortableGroupMember"]>; "name": string; "required_features"?: Array<"model_groups">; "schema_version"?: "1.0.0" }
+  "ModelGroupImport": { "definition": ApiSchemas["ModelGroupExport"]; "name"?: (string | null); "resource_bindings": Record<string, string> }
+  "ModelGroupLLMCreate": { "description"?: string; "members"?: Array<ApiSchemas["ModelGroupLLMMemberCreate"]>; "name": string }
+  "ModelGroupLLMMemberCreate": { "enabled"?: boolean; "id"?: (string | null); "model_id": string; "params"?: Record<string, unknown>; "provider_connection_id": string }
+  "ModelGroupLLMMembersReplace": { "expected_revision": number; "members": Array<ApiSchemas["ModelGroupLLMMemberCreate"]> }
+  "ModelGroupLLMUpdate": { "description"?: (string | null); "expected_revision": number; "name"?: (string | null) }
+  "ModelGroupMember": { "enabled": boolean; "harness_profile_id": (string | null); "id": string; "member_index": number; "model_id": string; "params": Record<string, unknown>; "provider_connection_id": (string | null); "revision": number; "updated_at": string }
   "PairRequest": { "code": string; [key: string]: unknown }
-  "PipelineBinding": { "archived": boolean; "branch_policy": "run_branch" | "current"; "command_filter": Array<string>; "created_at": string; "dirty_policy": "strict" | "allow_nonoverlap"; "id": string; "limit_overrides": Record<string, unknown>; "model_overrides": Record<string, string>; "name": string; "project_id": string; "role_assignments": Record<string, string>; "updated_at": string; "version": number; "version_id": string }
-  "PipelineBindingCreate": { "branch_policy"?: "run_branch" | "current"; "command_filter"?: Array<string>; "dirty_policy"?: "strict" | "allow_nonoverlap"; "limit_overrides"?: Record<string, number>; "model_overrides"?: Record<string, string>; "name": string; "project_id": string; "role_assignments"?: Record<string, string> }
-  "PipelineBindingUpdate": { "branch_policy"?: ("run_branch" | "current" | null); "command_filter"?: (Array<string> | null); "dirty_policy"?: ("strict" | "allow_nonoverlap" | null); "expected_version": number; "limit_overrides"?: (Record<string, number> | null); "model_overrides"?: (Record<string, string> | null); "name"?: (string | null); "role_assignments"?: (Record<string, string> | null) }
+  "PipelineBinding": { "archived": boolean; "branch_policy": "run_branch" | "current"; "command_filter": Array<string>; "created_at": string; "dirty_policy": "strict" | "allow_nonoverlap"; "id": string; "limit_overrides": Record<string, unknown>; "model_overrides": Record<string, string>; "model_selections": Record<string, (ApiSchemas["DirectAgentSelection"] | ApiSchemas["DirectLLMSelection"] | ApiSchemas["GroupSelection"])>; "name": string; "project_id": string; "role_assignments": Record<string, string>; "role_parameters": Record<string, Record<string, unknown>>; "updated_at": string; "version": number; "version_id": string }
+  "PipelineBindingCreate": { "branch_policy"?: "run_branch" | "current"; "command_filter"?: Array<string>; "dirty_policy"?: "strict" | "allow_nonoverlap"; "limit_overrides"?: Record<string, number>; "model_overrides"?: Record<string, string>; "model_selections"?: Record<string, (ApiSchemas["DirectAgentSelection"] | ApiSchemas["DirectLLMSelection"] | ApiSchemas["GroupSelection"])>; "name": string; "project_id": string; "role_assignments"?: Record<string, string>; "role_parameters"?: (Record<string, Record<string, unknown>> | null) }
+  "PipelineBindingUpdate": { "branch_policy"?: ("run_branch" | "current" | null); "command_filter"?: (Array<string> | null); "dirty_policy"?: ("strict" | "allow_nonoverlap" | null); "expected_version": number; "limit_overrides"?: (Record<string, number> | null); "model_overrides"?: (Record<string, string> | null); "model_selections"?: (Record<string, (ApiSchemas["DirectAgentSelection"] | ApiSchemas["DirectLLMSelection"] | ApiSchemas["GroupSelection"])> | null); "name"?: (string | null); "role_assignments"?: (Record<string, string> | null); "role_parameters"?: (Record<string, Record<string, unknown>> | null) }
   "PipelineDraft": { "graph"?: Record<string, unknown>; "inputs"?: Record<string, unknown>; "required_features"?: Array<string>; "settings"?: ApiSchemas["SettingsOverrides"] }
   "PipelineDraftUpdate": { "expected_version": number; "graph"?: Record<string, unknown>; "inputs"?: Record<string, unknown>; "required_features"?: Array<string>; "settings"?: ApiSchemas["SettingsOverrides"] }
   "PipelineTemplate": { "archived": boolean; "created_at": string; "description": string; "draft": ApiSchemas["PipelineDraft"]; "id": string; "kind": "user" | "system"; "name": string; "schema_version": string; "updated_at": string; "version": number }
@@ -25,6 +41,7 @@ export interface ApiSchemas {
   "PipelineTemplateUpdate": { "description"?: (string | null); "expected_version": number; "name"?: (string | null) }
   "PipelineVersion": { "created_at": string; "execution_hash": string; "graph": Record<string, unknown>; "id": string; "immutable"?: true; "inputs": Record<string, unknown>; "policy_hash": string; "required_features": Array<string>; "schema_version": string; "settings": ApiSchemas["SettingsOverrides"]; "template_id": string; "version_number": number }
   "PipelineVersionCreate": { "graph": Record<string, unknown>; "inputs"?: Record<string, unknown>; "required_features"?: Array<string>; "settings"?: ApiSchemas["SettingsOverrides"] }
+  "PortableGroupMember": { "enabled"?: boolean; "id"?: (string | null); "model_id": string; "params"?: Record<string, unknown>; "resource_ref": string }
   "Project": { "archived": boolean; "created_at": string; "id": string; "name": string; "updated_at": string; "version": number; "workspace": ApiSchemas["WorkspaceInfo"] }
   "ProjectArchive": { "archive"?: boolean; "expected_version": number }
   "ProjectCreate": { "name": string; "workspace_path": string }
@@ -39,9 +56,9 @@ export interface ApiSchemas {
   "RunCommand": { "command_id": string; "command_type": "pause" | "stop" | "cancel" | "resume" | "resolve"; "expected_state_version": number; "payload"?: Record<string, unknown> }
   "RunStart": { "binding_id": string; "chat_id"?: (string | null); "idempotency_key": string; "initiator"?: string; "inputs"?: Record<string, unknown>; "message"?: (string | null); "overrides"?: ApiSchemas["SettingsOverrides"]; "project_id": string }
   "RunState": "queued" | "running" | "pause_requested" | "paused" | "stop_requested" | "stopped" | "retry_wait" | "waiting_input" | "recovering" | "completed" | "failed" | "cancelled"
-  "SettingsOverrides": { "branch_policy"?: ("run_branch" | "current" | null); "command_filter"?: (Array<string> | null); "dirty_policy"?: ("strict" | "allow_nonoverlap" | null); "limit_overrides"?: (Record<string, number> | null); "model_overrides"?: (Record<string, string> | null); "role_assignments"?: (Record<string, string> | null) }
+  "SettingsOverrides": { "branch_policy"?: ("run_branch" | "current" | null); "command_filter"?: (Array<string> | null); "dirty_policy"?: ("strict" | "allow_nonoverlap" | null); "limit_overrides"?: (Record<string, number> | null); "model_overrides"?: (Record<string, string> | null); "model_selections"?: (Record<string, (ApiSchemas["DirectAgentSelection"] | ApiSchemas["DirectLLMSelection"] | ApiSchemas["GroupSelection"])> | null); "role_assignments"?: (Record<string, string> | null); "role_parameters"?: (Record<string, Record<string, unknown>> | null) }
   "ValidationError": { "ctx"?: Record<string, unknown>; "input"?: unknown; "loc": Array<(string | number)>; "msg": string; "type": string; [key: string]: unknown }
-  "WaitingReason": { "allowed_actions": Array<"resolve" | "resume" | "pause" | "stop" | "cancel">; "blocked_operation_id"?: (string | null); "code": "missing_data" | "permission_required" | "limit_exceeded" | "auth_required" | "secret_unavailable" | "model_unavailable" | "external_change_detected" | "unknown_external_result" | "invalid_response_format" | "workspace_conflict" | "process_not_responding" | "port_unavailable" | "path_violation" | "import_trust_required" | "schema_unsupported" | "configuration_invalid" | "storage_unavailable" | "signing_required" | "no_progress"; "details"?: Record<string, unknown>; "resolution_schema"?: Record<string, unknown> }
+  "WaitingReason": { "allowed_actions": Array<"resolve" | "resume" | "pause" | "stop" | "cancel">; "blocked_operation_id"?: (string | null); "code": "missing_data" | "permission_required" | "limit_exceeded" | "auth_required" | "secret_unavailable" | "model_unavailable" | "model_group_exhausted" | "external_change_detected" | "unknown_external_result" | "invalid_response_format" | "workspace_conflict" | "process_not_responding" | "port_unavailable" | "path_violation" | "import_trust_required" | "schema_unsupported" | "configuration_invalid" | "storage_unavailable" | "signing_required" | "no_progress"; "details"?: Record<string, unknown>; "resolution_schema"?: Record<string, unknown> }
   "WorkspaceInfo": { "entered_path": string; "git_default_branch": (string | null); "git_dirty": boolean; "git_head_sha": (string | null); "git_remote_url": (string | null); "git_root_path": (string | null); "identity_dev": number; "identity_ino": number; "normalized_path": string }
 }
 
@@ -77,6 +94,19 @@ export interface ApiOperations {
   "GET /api/messages/{message_id}": { body: never; parameters: { "path.message_id": string }; responses: { "200": ApiSchemas["Message"]; "422": ApiSchemas["HTTPValidationError"] } }
   "PATCH /api/messages/{message_id}": { body: ApiSchemas["MessageUpdate"]; parameters: { "path.message_id": string }; responses: { "200": ApiSchemas["Message"]; "422": ApiSchemas["HTTPValidationError"] } }
   "POST /api/messages/{message_id}/archive": { body: ApiSchemas["ChatArchive"]; parameters: { "path.message_id": string }; responses: { "200": ApiSchemas["Message"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "GET /api/model_groups": { body: never; parameters: { "query.kind"?: ("agent" | "llm" | null); "query.include_archived"?: boolean }; responses: { "200": Array<ApiSchemas["ModelGroup"]>; "422": ApiSchemas["HTTPValidationError"] } }
+  "POST /api/model_groups/agent": { body: ApiSchemas["ModelGroupAgentCreate"]; parameters: Record<string, never>; responses: { "201": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "POST /api/model_groups/import": { body: ApiSchemas["ModelGroupImport"]; parameters: Record<string, never>; responses: { "201": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "POST /api/model_groups/llm": { body: ApiSchemas["ModelGroupLLMCreate"]; parameters: Record<string, never>; responses: { "201": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "GET /api/model_groups/{group_id}": { body: never; parameters: { "path.group_id": string }; responses: { "200": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "PATCH /api/model_groups/{group_id}/agent": { body: ApiSchemas["ModelGroupAgentUpdate"]; parameters: { "path.group_id": string }; responses: { "200": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "PUT /api/model_groups/{group_id}/agent/members": { body: ApiSchemas["ModelGroupAgentMembersReplace"]; parameters: { "path.group_id": string }; responses: { "200": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "POST /api/model_groups/{group_id}/archive": { body: never; parameters: { "path.group_id": string; "query.expected_revision": number }; responses: { "200": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "POST /api/model_groups/{group_id}/copy": { body: ApiSchemas["ModelGroupCopy"]; parameters: { "path.group_id": string }; responses: { "201": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "GET /api/model_groups/{group_id}/export": { body: never; parameters: { "path.group_id": string }; responses: { "200": ApiSchemas["ModelGroupExport"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "PATCH /api/model_groups/{group_id}/llm": { body: ApiSchemas["ModelGroupLLMUpdate"]; parameters: { "path.group_id": string }; responses: { "200": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "PUT /api/model_groups/{group_id}/llm/members": { body: ApiSchemas["ModelGroupLLMMembersReplace"]; parameters: { "path.group_id": string }; responses: { "200": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
+  "DELETE /api/model_groups/{group_id}/members/{member_id}": { body: never; parameters: { "path.group_id": string; "path.member_id": string; "query.expected_revision": number }; responses: { "200": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/openapi.json": { body: never; parameters: Record<string, never>; responses: { "200": Record<string, unknown> } }
   "GET /api/projects": { body: never; parameters: { "query.include_archived"?: boolean }; responses: { "200": Array<ApiSchemas["Project"]>; "422": ApiSchemas["HTTPValidationError"] } }
   "POST /api/projects": { body: ApiSchemas["ProjectCreate"]; parameters: Record<string, never>; responses: { "201": ApiSchemas["Project"]; "422": ApiSchemas["HTTPValidationError"] } }
@@ -111,13 +141,13 @@ export interface ApiOperations {
 }
 
 export interface NodeSchemas {
-  "AgentTask": { "config": { "prompt": string; "role": string; [key: string]: unknown }; "id": string; "type": "AgentTask"; [key: string]: unknown }
+  "AgentTask": { "config": { "model_selection"?: (ApiSchemas["DirectAgentSelection"] | ApiSchemas["DirectLLMSelection"] | ApiSchemas["GroupSelection"]); "params"?: Record<string, unknown>; "prompt": string; "role"?: string; [key: string]: unknown }; "id": string; "type": "AgentTask"; [key: string]: unknown }
   "CollectContext": { "config": { "context_paths"?: Array<unknown>; "mode"?: "collect" | "resolve_requests"; "sources"?: Array<unknown>; [key: string]: unknown }; "id": string; "type": "CollectContext"; [key: string]: unknown }
   "Command": { "config": { "commands": Array<{ "args": Array<string>; "cwd"?: string; "env"?: Record<string, unknown>; "id"?: string; "max_output_bytes"?: number; "program": string; "required"?: boolean; "retry_safety"?: "safe" | "unsafe"; "success_exit_codes"?: Array<number>; "timeout_seconds"?: number; [key: string]: unknown }>; "failure_policy"?: "collect_all" | "stop_on_failure"; [key: string]: unknown }; "id": string; "type": "Command"; [key: string]: unknown }
   "Condition": { "expression": Record<string, unknown>; "id": string; "type": "Condition"; [key: string]: unknown }
   "End": { "id": string; "type": "End" }
   "GitCommit": { "id": string; "type": "GitCommit"; [key: string]: unknown }
-  "LLMRequest": { "config": { "connection_id": string; "model": string; "prompt": string; [key: string]: unknown }; "id": string; "type": "LLMRequest"; [key: string]: unknown }
+  "LLMRequest": { "config": { "connection_id"?: string; "model"?: string; "model_selection"?: (ApiSchemas["DirectAgentSelection"] | ApiSchemas["DirectLLMSelection"] | ApiSchemas["GroupSelection"]); "params"?: Record<string, unknown>; "prompt": string; "role"?: string; [key: string]: unknown }; "id": string; "type": "LLMRequest"; [key: string]: unknown }
   "PlanControl": { "id": string; "operation": "select_next" | "record_verified" | "record_final_check" | "attach_commit"; "type": "PlanControl"; [key: string]: unknown }
   "Start": { "id": string; "type": "Start" }
 }

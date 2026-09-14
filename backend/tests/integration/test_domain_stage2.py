@@ -395,7 +395,19 @@ def test_resolved_settings_include_overrides(authenticated, tmp_path):
     ).json()
 
     resolved = client.get(f"/api/bindings/{binding['id']}/resolved", headers=headers).json()
-    assert resolved["execution_hash"] == version["execution_hash"]
+    # Resolved trust includes binding settings and pinned resources, unlike the template hash.
+    run = client.post(
+        "/api/runs",
+        headers=headers,
+        json={
+            "project_id": project["id"],
+            "binding_id": binding["id"],
+            "message": "task",
+            "idempotency_key": "resolved-hash",
+        },
+    ).json()
+    assert resolved["execution_hash"] == run["execution_hash"]
+    assert resolved["execution_hash"] != version["execution_hash"]
     by_name = {item["name"]: item for item in resolved["settings"]}
     assert by_name["role_assignments"]["value"]["implementer"] == "codex"
     assert by_name["model_overrides"]["value"]["implementer"] == "gpt-4o"

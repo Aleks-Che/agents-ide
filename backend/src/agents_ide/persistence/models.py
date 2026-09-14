@@ -145,6 +145,7 @@ class PipelineBinding(Base):
     name: Mapped[str] = mapped_column(String(120))
     role_assignments_json: Mapped[str] = mapped_column(Text, default="{}")
     model_overrides_json: Mapped[str] = mapped_column(Text, default="{}")
+    model_selections_json: Mapped[str] = mapped_column(Text, default="{}")
     limit_overrides_json: Mapped[str] = mapped_column(Text, default="{}")
     command_filter_json: Mapped[str] = mapped_column(Text, default="[]")
     settings_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -451,6 +452,47 @@ class RunPolicyRevision(Base):
     created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
 
 
+class ModelGroup(Base):
+    __tablename__ = "model_groups"
+    __table_args__ = (
+        CheckConstraint("kind IN ('agent','llm')", name="ck_model_groups_kind"),
+        UniqueConstraint("kind", "name", name="uq_model_groups_kind_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(16))
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    archived_at: Mapped[float | None] = mapped_column(Float)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    updated_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+
+    members: Mapped[list[ModelGroupMember]] = relationship(back_populates="group", cascade="all")
+
+
+class ModelGroupMember(Base):
+    __tablename__ = "model_group_members"
+    __table_args__ = (UniqueConstraint("group_id", "member_index", name="uq_members_group_index"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    group_id: Mapped[str] = mapped_column(ForeignKey("model_groups.id"))
+    member_index: Mapped[int] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    harness_profile_id: Mapped[str | None] = mapped_column(ForeignKey("harness_profiles.id"))
+    provider_connection_id: Mapped[str | None] = mapped_column(
+        ForeignKey("provider_connections.id")
+    )
+    model_id: Mapped[str] = mapped_column(String(256))
+    params_json: Mapped[str] = mapped_column(Text, default="{}")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    updated_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+
+    group: Mapped[ModelGroup] = relationship(back_populates="members")
+
+
 __all__ = [
     "Base",
     "Project",
@@ -472,4 +514,6 @@ __all__ = [
     "WorkspaceReservation",
     "PlanItem",
     "RunPolicyRevision",
+    "ModelGroup",
+    "ModelGroupMember",
 ]
