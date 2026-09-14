@@ -28,6 +28,8 @@ jobs:
         working-directory: backend
       - run: uv run --locked mypy src
         working-directory: backend
+      - run: uv run --locked python ../scripts/generate_contracts.py --check
+        working-directory: backend
       - run: uv run --locked pytest -q -ra
         working-directory: backend
 

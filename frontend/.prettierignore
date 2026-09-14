@@ -2,3 +2,4 @@ package-lock.json
 dist
 node_modules
 test-results
+src/api/generated.ts

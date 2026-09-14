@@ -15,14 +15,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 from starlette.exceptions import HTTPException
 
 from agents_ide import __version__
+from agents_ide.api.domain import router as domain_router
 from agents_ide.config import Settings
 from agents_ide.errors import AppError
 from agents_ide.persistence.database import check_database, create_database, migrate
 from agents_ide.security.auth import COOKIE_NAME, AuthService, Session
 from agents_ide.security.filesystem import prepare_data_dir
+from agents_ide.security.secrets import SecretStore
 from agents_ide.worker.main import worker_status
 
 
@@ -54,6 +57,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         auth = AuthService(settings, engine)
         app.state.engine = engine
         app.state.auth = auth
+        app.state.settings = settings
+        app.state.session_factory = sessionmaker(
+            bind=engine, expire_on_commit=False, autoflush=False
+        )
+        app.state.secrets = SecretStore(settings.data_dir / "secrets")
         await asyncio.to_thread(auth.issue_code)
 
         async def maintenance() -> None:
@@ -104,7 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except AppError as error:
             response = error_response(error, request_id)
         except Exception:
-            logging.error("request.failed", extra={"request_id": request_id})
+            logging.exception("request.failed", extra={"request_id": request_id})
             response = error_response(
                 AppError("internal_error", "Внутренняя ошибка", 500), request_id
             )
@@ -156,6 +164,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if not secrets.compare_digest(csrf, session.csrf_token):
                 raise AppError("csrf_invalid", "Недопустимый CSRF-токен", 403)
         return session
+
+    app.include_router(domain_router, dependencies=[Depends(current_session)])
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

@@ -1,0 +1,283 @@
+{
+  "limits": {
+    "max_edges": 400,
+    "max_graph_bytes": 1048576,
+    "max_nodes": 200,
+    "max_prompt_bytes": 65536
+  },
+  "nodes": {
+    "AgentTask": {
+      "properties": {
+        "config": {
+          "properties": {
+            "prompt": {
+              "maxLength": 65536,
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "role",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "AgentTask"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "config"
+      ],
+      "type": "object"
+    },
+    "CollectContext": {
+      "properties": {
+        "config": {
+          "properties": {
+            "context_paths": {
+              "type": "array"
+            },
+            "mode": {
+              "enum": [
+                "collect",
+                "resolve_requests"
+              ]
+            },
+            "sources": {
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "CollectContext"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "config"
+      ],
+      "type": "object"
+    },
+    "Command": {
+      "properties": {
+        "config": {
+          "properties": {
+            "commands": {
+              "items": {
+                "properties": {
+                  "args": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "cwd": {
+                    "type": "string"
+                  },
+                  "env": {
+                    "type": "object"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "max_output_bytes": {
+                    "type": "integer"
+                  },
+                  "program": {
+                    "type": "string"
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "retry_safety": {
+                    "enum": [
+                      "safe",
+                      "unsafe"
+                    ]
+                  },
+                  "success_exit_codes": {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  "timeout_seconds": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "program",
+                  "args"
+                ],
+                "type": "object"
+              },
+              "maxItems": 50,
+              "type": "array"
+            },
+            "failure_policy": {
+              "enum": [
+                "collect_all",
+                "stop_on_failure"
+              ]
+            }
+          },
+          "required": [
+            "commands"
+          ],
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "Command"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "config"
+      ],
+      "type": "object"
+    },
+    "Condition": {
+      "properties": {
+        "expression": {
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "Condition"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "expression"
+      ],
+      "type": "object"
+    },
+    "End": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "End"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "type": "object"
+    },
+    "GitCommit": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "GitCommit"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "type": "object"
+    },
+    "LLMRequest": {
+      "properties": {
+        "config": {
+          "properties": {
+            "connection_id": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "connection_id",
+            "model",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "LLMRequest"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "config"
+      ],
+      "type": "object"
+    },
+    "PlanControl": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "select_next",
+            "record_verified",
+            "record_final_check",
+            "attach_commit"
+          ]
+        },
+        "type": {
+          "const": "PlanControl"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "operation"
+      ],
+      "type": "object"
+    },
+    "Start": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "Start"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "type": "object"
+    }
+  },
+  "schema_version": "1.0.0"
+}
