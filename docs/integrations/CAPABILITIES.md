@@ -1,0 +1,56 @@
+# Проверка интеграций — этап 0
+
+Дата: 2026-09-14. Среда: Windows 10 22H2 x64, build 19045, Python 3.12.7, Node 22.20.0, npm 11.10.0, uv 0.9.15, Git 2.39.1.windows.1. Рабочая область — одноразовый локальный Git-репозиторий. Пользовательские проекты и настройки harness не изменялись.
+
+Машиночитаемые наблюдения: [smoke](fixtures/2026-09-14-windows.json) и [permission/auth/recovery](fixtures/2026-09-14-controls.json). `supported` означает конкретное наблюдение указанной версии; `unverified` не означает отсутствия возможности. Synthetic fixtures не объявляются реальной интеграцией. Этап 0 завершён как проверка контрактов и решение go/no-go; неизвестные возможности не получают разрешение на исполнение.
+
+| Возможность | Codex 0.153.4 | OpenCode 1.18.30 |
+| --- | --- | --- |
+| Транспорт | supported: stdio initialize/initialized | supported: HTTP, выделенный server с Basic auth |
+| Каталог моделей | supported: model/list, 6 моделей | supported: /provider, выбранный ID присутствует |
+| Выбранная модель | gpt-5.6-sol | minimax-coding-plan/MiniMax-M3 |
+| Отдельная сессия | supported: thread/start | supported: POST /session |
+| Реальный ответ модели | supported: turn/completed, без ошибки | supported: message, текст без ошибки |
+| События | supported: lifecycle/item/delta | supported: SSE server.connected; полный поток model delta ещё не проверен |
+| Продолжение по явному ID | supported: thread/resume, тот же ID и следующий turn | supported: после перезапуска server та же сессия и успешный второй ответ |
+| Прерывание активной работы | supported в control probe: после первой delta interrupt → interrupted | supported: abort=true, затем idle |
+| Ошибка авторизации | supported: отдельный пустой CODEX_HOME → auth_required | supported только для локального server: без credentials → 401; provider auth failure unverified |
+| Permission/waiting_input | supported: commandExecution/requestApproval → decline, файл не создан | supported: bash permission → reject, ответ принят |
+| Восстановление после закрытия транспорта и процесса | supported для завершённой сессии: ID и 1 turn восстановлены | supported для завершённой сессии: ID, 2 сообщения и новый ответ |
+| Восстановление незавершённого внешнего действия | unverified | unverified |
+| Изоляция агентной записи | unverified | unverified |
+
+## Решение go/no-go
+
+- **Этап 1: go.** Контракты зафиксированы, Windows-прототипы и приложение проходят локальные проверки.
+- **Транспорт обоих адаптеров: go** для разработки интеграции. Положительный ответ модели проверен отдельно от CLI версии и наличия конфигурации.
+- **Первый harness для 6A — OpenCode**, поскольку на этой машине подтверждены модель, HTTP/SSE, abort, permission/reject и продолжение после перезапуска, а server работает внутри проверенного Job. Codex выбран для 6B; его базовый протокол также прошёл проверки.
+- **Автономные роли с записью: no-go для обоих**, пока не подтверждены границы разрешённых записей и восстановление незавершённого внешнего действия. Проверка отказа permission не доказывает изоляцию разрешённой записи. Эти capability gates должны быть закрыты до соответствующих ролей 6A/6B.
+
+## Сверка протоколов
+
+Для Codex извлечена JSON Schema именно установленной версии командой `codex app-server generate-json-schema --out <temp-dir>`. Проверены методы initialize, model/list, thread/start, thread/resume, turn/start и поля sandbox/approvalPolicy по [официальному App Server](https://learn.chatgpt.com/docs/app-server). Схема генерируется локально; большой полный bundle в репозиторий не включён.
+
+Для OpenCode прочитана фактическая `/doc` OpenAPI запущенного server и сверены health, provider, session, message, event, abort с [OpenCode Server](https://opencode.ai/docs/server/). У установленной версии CLI default port=0, в документации приведён 4096: probe задаёт явный свободный порт, приложение не полагается на этот default. `--pure` отключает внешние плагины только в тестовом процессе.
+
+## Отображение ошибок
+
+Permission-запрос → `waiting_input(permission_required)` с external request ID и допустимыми действиями. Отсутствующая авторизация → `waiting_input(auth_required)`, потеря DPAPI → `secret_unavailable`. Разрыв после отправки без доказанного финала → `recovering`, затем при недостатке evidence `waiting_input(unknown_external_result)`. Повтор запроса автоматически не разрешается. Permission roundtrip подтверждён, но доменная машина ожидания реализуется в этапах 5/6. Восстановление завершённой истории не разрешает повтор незавершённой операции.
+
+## Повторение probe
+
+Команда делает реальные запросы к выбранным моделям и может расходовать их лимиты. Из корня репозитория после установки backend:
+
+```powershell
+backend/.venv/Scripts/python.exe scripts/probe_integrations.py `
+  --opencode 'C:/path/to/opencode.exe' `
+  --codex-model gpt-5.6-sol `
+  --opencode-model minimax-coding-plan/MiniMax-M3 `
+  --output docs/integrations/fixtures/new-observation.json
+```
+
+Нужен настоящий `opencode.exe`, а не PowerShell-обёртка. Существующий файл результата не перезаписывается. Output содержит только разрешённые метаданные; session IDs, пути пользователя, prompts, тексты ответов и credentials не сохраняются. Codex и OpenCode закрываются после probe. Ошибка/тайм-аут сохраняется как наблюдение, без автоматического повторного платного запроса.
+
+Control probe повторяется командой `backend/.venv/Scripts/python.exe scripts/probe_controls.py --opencode 'C:/path/to/opencode.exe' --output <new-file.json>`. Он запрашивает разрешение только на синтетическое действие и всегда отказывает, проверяет завершённую историю после перезапуска, отдельно запускает Codex без сохранённой авторизации. Первый smoke получил тайм-аут Codex interrupt; после ожидания фактической delta и сохранения раннего terminal notification control probe подтвердил `interrupted`. Исходное наблюдение оставлено для воспроизводимости.
+
+Оставшиеся gates 6A/6B: provider auth failure OpenCode, восстановление незавершённой операции, отрицательные проверки записи за пределами workspace. До их проверки соответствующие возможности остаются `unverified`; no-go автономной записи зафиксирован, а не заменён fake-проверкой.

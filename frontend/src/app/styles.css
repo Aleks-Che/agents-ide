@@ -1,0 +1,364 @@
+:root {
+  font-family: Inter, 'Segoe UI', sans-serif;
+  color: #e8edeb;
+  background: #111719;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input {
+  font: inherit;
+}
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+button {
+  border: 0;
+  border-radius: 7px;
+  background: #bedac9;
+  color: #19291f;
+  padding: 12px 19px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button:hover:not(:disabled) {
+  background: #d5eadb;
+}
+:focus-visible {
+  outline: 2px solid #c7e6ad;
+  outline-offset: 4px;
+}
+.shell {
+  display: flex;
+  min-height: 100vh;
+}
+.sidebar {
+  width: 238px;
+  flex-shrink: 0;
+  background: #151d20;
+  border-right: 1px solid #293236;
+  padding: 30px 20px 20px;
+  display: flex;
+  flex-direction: column;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 19px;
+  font-weight: 650;
+  margin-bottom: 57px;
+}
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 34px;
+  border: 1px solid #a8cbb4;
+  border-radius: 9px;
+  color: #c5ddba;
+  font-family: monospace;
+}
+.section-label {
+  font-size: 10px;
+  letter-spacing: 1.7px;
+  color: #8b9a9f;
+  font-weight: 600;
+}
+.nav-current {
+  display: flex;
+  justify-content: space-between;
+  padding: 13px 12px;
+  margin: 17px -4px;
+  border-radius: 7px;
+  background: #26312f;
+  font-size: 13px;
+  color: #d0e2d4;
+}
+.nav-current span {
+  color: #8fa394;
+  font-family: monospace;
+}
+.sidebar-empty {
+  color: #7c8c92;
+  line-height: 1.8;
+  font-size: 12px;
+  margin: 12px 8px;
+}
+.sidebar-footer {
+  margin-top: auto;
+  font-size: 11px;
+  color: #9aaaaf;
+  border-top: 1px solid #2a3437;
+  padding-top: 20px;
+  display: flex;
+  gap: 9px;
+  align-items: center;
+}
+.workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  padding: 25px 42px;
+  border-bottom: 1px solid #293236;
+  font-size: 12px;
+  color: #afbcc0;
+}
+.slash {
+  margin: 0 14px;
+  color: #54646a;
+}
+.version {
+  color: #829199;
+  font-family: monospace;
+}
+main {
+  width: min(850px, 100%);
+  margin: 0 auto;
+  padding: 65px 40px 45px;
+}
+.eyebrow {
+  font-family: monospace;
+  letter-spacing: 3px;
+  color: #a8c9b1;
+  font-size: 11px;
+  margin: 0 0 19px;
+}
+h1 {
+  font-size: clamp(32px, 3.5vw, 46px);
+  font-weight: 450;
+  line-height: 1.17;
+  letter-spacing: -1.6px;
+  margin: 0 0 19px;
+}
+.intro {
+  color: #9faeb3;
+  line-height: 1.8;
+  font-size: 14px;
+  max-width: 530px;
+  margin-bottom: 38px;
+}
+.card {
+  background: #192225;
+  border: 1px solid #354342;
+  padding: 27px;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px #00000015;
+}
+.card-heading {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 19px;
+}
+h2 {
+  font-weight: 550;
+  font-size: 17px;
+  margin: 0;
+}
+.step-number {
+  color: #bdd4c4;
+  background: #2a3932;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: 12px monospace;
+}
+.card p,
+.next-section p {
+  font-size: 13px;
+  color: #a3b0b5;
+  line-height: 1.8;
+}
+.command {
+  display: block;
+  padding: 15px;
+  margin: 20px 0;
+  background: #121b1e;
+  border: 1px solid #2c3a3e;
+  border-radius: 6px;
+  color: #b8cdbd;
+  font:
+    12px ui-monospace,
+    monospace;
+  overflow-x: auto;
+}
+label {
+  display: block;
+  font-size: 11px;
+  color: #a6b4b9;
+  margin-bottom: 9px;
+}
+.input-row {
+  display: flex;
+  gap: 10px;
+}
+input {
+  min-width: 0;
+  flex: 1;
+  background: #10191c;
+  border: 1px solid #405054;
+  color: #e8edeb;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+input::placeholder {
+  color: #7c8b91;
+}
+.card .error {
+  color: #ffb6a8;
+}
+.quiet {
+  margin-left: auto;
+  background: transparent;
+  color: #bedac9;
+  font-size: 12px;
+  padding: 8px;
+}
+.quiet:hover:not(:disabled) {
+  background: #2a3932;
+}
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.service {
+  border: 1px solid #344245;
+  border-radius: 6px;
+  padding: 17px 12px;
+}
+.service > span {
+  font-size: 11px;
+  color: #91a3aa;
+}
+.service strong {
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 15px;
+}
+.dot {
+  display: inline-block;
+  height: 6px;
+  width: 6px;
+  flex-shrink: 0;
+  border-radius: 100%;
+  background: #a9cbaf;
+}
+.dot.offline {
+  background: #d8b584;
+}
+.next-section {
+  padding-top: 35px;
+}
+.next-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+.badge {
+  color: #96a59d;
+  border: 1px solid #36453d;
+  border-radius: 20px;
+  padding: 4px 9px;
+  font-size: 10px;
+}
+.future-items {
+  display: flex;
+  gap: 35px;
+  padding-top: 17px;
+  margin-top: 20px;
+  border-top: 1px solid #2c3739;
+  color: #839397;
+  font-size: 11px;
+}
+footer {
+  margin-top: auto;
+  padding: 21px 42px;
+  color: #71838a;
+  font-size: 10px;
+  display: flex;
+  justify-content: space-between;
+}
+footer span {
+  font-family: monospace;
+}
+@media (max-width: 850px) {
+  .sidebar {
+    width: 190px;
+  }
+  main {
+    padding: 40px 25px;
+  }
+  .input-row {
+    flex-direction: column;
+  }
+  header,
+  footer {
+    padding-left: 25px;
+    padding-right: 25px;
+  }
+  .status-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .shell {
+    display: block;
+  }
+  .sidebar {
+    width: auto;
+    padding: 18px 22px;
+    border-right: 0;
+    border-bottom: 1px solid #293236;
+  }
+  .brand {
+    margin-bottom: 0;
+    font-size: 16px;
+  }
+  .sidebar > :not(.brand) {
+    display: none;
+  }
+  header {
+    padding: 19px 22px;
+  }
+  main {
+    padding: 34px 22px;
+  }
+  .card {
+    padding: 20px;
+  }
+  .version,
+  footer span {
+    display: none;
+  }
+  .future-items {
+    gap: 19px;
+  }
+  .next-row {
+    flex-wrap: wrap;
+  }
+}

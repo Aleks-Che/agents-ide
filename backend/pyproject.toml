@@ -1,0 +1,55 @@
+[project]
+name = "agents-ide"
+version = "0.1.0"
+description = "Local Agents IDE API and independent worker"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "alembic==1.20.0",
+    "fastapi==0.141.1",
+    "httpx==0.28.1",
+    "portalocker==4.3.2",
+    "psutil==7.2.2",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "pywin32==312; sys_platform == 'win32'",
+    "sqlalchemy==2.0.52",
+    "uvicorn==0.52.4",
+]
+
+[project.scripts]
+agents-ide = "agents_ide.cli:main"
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agents_ide"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agents_ide", "probe_integrations"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["windows: real Windows platform checks"]
+
+[dependency-groups]
+dev = [
+    "mypy==2.3.1",
+    "pytest==9.1.1",
+    "ruff==0.16.7",
+    "types-psutil==7.2.2.20260906",
+    "types-pywin32==312.0.0.20260827",
+]
