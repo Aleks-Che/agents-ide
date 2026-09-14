@@ -53,12 +53,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Agents IDE local services")
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--port", type=int)
-    commands = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("api", "worker", "migrate", "start", "status", "stop", "_launcher"):
-        commands.add_parser(command)
-    auth = commands.add_parser("auth")
+        subparsers.add_parser(command)
+    auth = subparsers.add_parser("auth")
     auth.add_argument("action", choices=["pair-code"])
     auth.add_argument("--rotate", action="store_true")
+    from agents_ide.diagnostic_cli import add_arguments
+
+    add_arguments(subparsers)
     args = parser.parse_args()
     try:
         overrides = {}
@@ -92,6 +95,10 @@ def main() -> None:
                 print(json.dumps(launcher.stop(settings)))
             case "_launcher":
                 launcher.run_launcher(settings)
+            case "runs" | "projects" | "chats":
+                from agents_ide.diagnostic_cli import execute
+
+                execute(settings, args)
     except AppError as error:
         logging.error(error.code)
         print(f"{error.code}: {error.message}", file=sys.stderr)

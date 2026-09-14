@@ -608,10 +608,23 @@ def test_stale_lease_fences_result_and_new_calls(authenticated, tmp_path, settin
     monkeypatch.setattr("agents_ide.engine.runner.call_adapter", steal)
     with pytest.raises(AppError, match="Владение"):
         dispatch_once(settings, "review")
-    assert queue.claim_next_job(factory, worker_id="new", lease_seconds=30) is None
+    recovery = queue.claim_next_job(factory, worker_id="new", lease_seconds=30)
+    assert recovery is not None
     with factory() as session:
         assert session.get(Run, run["id"]).state == "recovering"
         assert session.scalar(select(StepAttempt)).status == "running"
+    # Stage 5 may acquire a recovery lease, but it cannot dispatch while the
+    # previous owner/outcome remains unconfirmed.
+    runner = Runner(
+        session_factory=factory,
+        worker_id="new",
+        generation=recovery.generation,
+        data_dir=settings.data_dir,
+        secret_store=None,
+    )
+    assert runner.execute(run["id"]).final_state == "waiting_input"
+    with factory() as session:
+        assert session.scalar(select(StepAttempt)).status == "unknown"
     assert called == [True]
 
 

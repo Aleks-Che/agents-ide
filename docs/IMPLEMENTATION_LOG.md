@@ -1,4 +1,97 @@
-# Журнал реализации плана
+# Журнал реализации
+
+### 2026-09-14 · Этап 5 · Ревью управления, восстановления и CLI
+
+**Статус:** исправлены существенные ошибки исходной реализации. [План](IMPLEMENTATION_PLAN.md)
+и [контракт реализации](architecture/CONTROL_AND_RECOVERY.md) описывают проверенную серверную
+логику и границы реальных интеграций. V-011 закрыт; исторические неполные данные V-006/V-012
+не становятся безопасными для повторного исполнения после одной миграции.
+
+**Замечания и исправления:**
+
+1. Исходный resume создавал новый StepExecution, сбрасывал кандидата/retry и пропускал
+   часть проверок snapshot. Теперь восстанавливаются прежнее посещение, позиция,
+   retry_at, лимиты и история; запуск из paused/stopped без команды запрещён.
+2. Истёкшее задание оставалось claimed и не подбиралось; resume/claim снимали резервацию
+   до подтверждения остановки. Теперь lease доступен для reconciliation, резервация
+   переносится атомарно, новый dispatch запрещён при живом/неизвестном старом владельце.
+3. Reconciliation объявлял осиротевшие процессы/попытки завершёнными без проверки ОС.
+   Теперь проверяются PID/create_time и дерево; неизвестный исход сохраняется. Успешный
+   результат и подтверждённые ошибки восстанавливаются по журналу без повторного вызова.
+4. Stop, пересёкшийся с успехом, терял cursor и повторял работу; quiescent-команды оставались
+   принятыми без исполнителя. Исправлены применение/приоритет команд, сохранение результата,
+   pause/stop/cancel, сохранение blockers и explicit resolve перед неизвестным повтором.
+5. RunPolicyRevision сохранялся, но не применялся. Включена эффективная политика, проверка
+   увеличения известных целых лимитов, аудит прежнего эффективного значения и сохранение
+   расхода. Resolve не запускает работу. Данные решения проходят общий sanitizer артефактов.
+6. «Проверка потомков» проверяла только корневой PID; AccessDenied считался выходом.
+   Добавлен ProcessSupervisor с durable-регистрацией до исполнения, Job Objects, проверкой
+   дерева, generation/create_time, bounded interrupt/kill и безопасным stale cleanup.
+7. Heartbeat попытки не обновлялся, ProcessRegistry не участвовал в остановке worker.
+   Добавлены мониторинг активного вызова, раздельные heartbeat/health/external-event,
+   запрет dispatch при первой DB-ошибке и выход после трёх неудач. Shutdown сигнализирует
+   остановку до ожидания потоков. Поздний результат сохраняется отдельно, без перехода графа.
+8. CLI расходовал pairing-код при каждом запуске, повторял фиксированный command_id,
+   возвращал exit=0 при отказах и разрешал отправить код на произвольный origin.
+   Теперь есть DPAPI-сессия, точный повтор запроса по ID, HTTP-ошибки, pagination/follow,
+   projects/chats/start, diagnostics и проверяемая команда cleanup. Используется имеющийся
+   httpx; добавленные requests/types-requests удалены из зависимостей.
+
+**Совместимость:** сохранена миграция `0008_stage5_controls`; новая `0009_stage5_review`
+добавляет identity владельца и сведения о дереве/health/transport/workspace процесса.
+Snapshot/hash и утраченные результаты не переписываются. Старые process-записи без
+доказательства владения деревом могут требовать отдельной сверки; обход живого процесса
+или принудительное «освободить всё» не предусмотрены.
+
+**Проверки:** **300 passed**, 2 предупреждения библиотек, 248.75 секунды в итоговом полном прогоне Windows/Python 3.12.7. Добавлены 45 регрессионных случаев. Ruff check/format (84 файла), mypy Windows и Linux target (66 модулей), генерация контрактов, frontend ESLint/Prettier/Vitest (2)/Playwright (1)/build прошли. Wheel установлен в чистое окружение Python 3.12.7; миграция установленного пакета работает. Проверены 139 локальных ссылок, git diff --check. Дополнительно проверены поздние файловые эффекты, отзыв/повторное сопряжение CLI и остановка принадлежащего процесса при ошибке сохранения результата. Локальный полный вывод: `.local/review-5-accepted.txt` (не включается в Git).
+Новые проверки находятся в [test_stage5_review.py](../backend/tests/integration/test_stage5_review.py).
+Исходный тест DB-safety копировал цикл вместо вызова worker: он заменён проверкой настоящего
+run_worker с активной fake-попыткой и fault injection. Проверки CLI используют отдельный
+API-процесс, crash — настоящее завершение worker, процессы — реальные деревья Windows.
+Первые новые fixtures потребовали исправить имя поля snapshot и точный код not_found;
+эти ошибки тестов не считаются доказательством дефектов приложения. Для process-fixture исправлена гонка записи marker-файла; проверка регистрации учитывает Windows venv launcher: до исполнения зарегистрирован владелец дерева, интерпретатор наследует его Job Object. Удалённый CI, реальное Linux-исполнение и платные/реальные модели не запускались.
+
+V-013 — совместимость первоначального этапа 5: process-записи без дерева/Job ownership не считаются подтверждённо остановленными по одному исчезнувшему PID. Миграция 0009 не выдумывает доказательства; такие резервации остаются на сверке. Новые записи и Windows Job проверены отдельно.
+
+**На что обратить внимание дальше:** реальный harness обязан подключить native interrupt,
+permissions, transport health и внешние IDs к имеющемуся supervisor/журналу. Fake и PID
+сами по себе не доказывают внешний исход HTTP. Политика прав, Git intent и актуальность
+реального evidence остаются gates этапов 6–8. Локальный loop.max_iterations неизменяем:
+его увеличение требует новой версии графа/Run. CLI хранит защищённую сессию текущего
+пользователя Windows; отзыв сессии должен оставаться отказом авторизации.
+
+<details>
+<summary>Первичный отчёт этапа 5 до ревью — историческая запись, утверждения ниже уточнены выше</summary>
+
+### 2026-09-14 · Этап 5 · Управление, восстановление и ProcessSupervisor
+
+**Статус:** resume/reconcile/recover реализованы на уровне fake-сценария; resolve пишет RunPolicyRevision без правки snapshot; ProcessSupervisor различает поколения и PID-recycle; CLI дополнен `runs {status|events|artifacts|pause|resume|stop|cancel|resolve}`; worker завершается при недоступной БД.
+
+**Реализовано.**
+
+- Миграция `0008_stage5_controls`: добавлены `step_attempts.heartbeat_at`, таблица `process_supervision` (`pid`, `started_at`, `create_time`, `parent_pid`, `state`, `interrupt_requested_at`, `killed_at`, `last_external_event_at`, `finished_at`) с индексом по `(owner_generation, pid)`. Связи FK на runs/step_attempts без `ON DELETE CASCADE`, чтобы история наблюдения сохранялась даже после удаления записи.
+- `engine/runner.py`: разделены `_replay_checkpoint`, `_reconcile` и `_continue_loop`. `_replay_checkpoint` больше не возвращает waiting_input при `state == "waiting_input"` без живой сессии — это позволяет повторному execute быть идемпотентным. Для `paused`/`stopped` с валидным `resume_target` runner переводит Run в `running` и продолжает цикл. Для `recovering` сначала закрывается осиротевший StepAttempt, и помечаются старые `process_supervision` записи. Новые события `run.resumed`, `run.reconciling`, `process.supervised`, `process.interrupted`.
+- `engine/queue.py`: `claim_next_job` теперь берёт Runs в `queued` или `recovering`, освобождает прежнюю резервацию этой Run и создаёт новую с новым поколением. Это позволяет возобновить работу после потери владельца без конфликта с прежней резервацией.
+- `services/runs.py`: команды `resume`/`resolve` теперь действительно переводят Run в `queued` (с обновлением/созданием `queue_jobs`) и применяют payload resolve к RunPolicyRevision + новому артефакту `resolution_data`. Резолв не трогает `resolved_settings_json` (он под `run_snapshot_immutable` триггером), лимиты отдаются через `runtime_json["limit_overrides"]` для этапа 7.
+- `worker/main.py`: воркер ведёт счётчик `db_failures` (3 подряд) и сам останавливается при `OperationalError`/`SQLAlchemyError` от `check_database`/`write_heartbeat`. Сердцебиение разделено на worker-level и attempt-level (`StepAttempt.heartbeat_at`), регистр PID передаётся через `ProcessRegistry`.
+- `worker/processes.py`: добавлены `ProcessRegistry`, `interrupt`, `health`, `stop_owned`, `is_alive_pid` (с проверкой create_time против рециклинга PID), `discover_descendants`. Реестр различает генерации и никогда не трогает чужие PID.
+- `cli.py`: добавлены sub-commands `runs {status, events, artifacts, pause, resume, stop, cancel, resolve}` через pair/cookie/CSRF. Неудачный pair возвращает понятный код; HTTP отказ интерпретируется как пара-ошибка.
+
+**Нюансы и решения:**
+
+- `resume_target_json` теперь поднимается в `runtime` через `execute()`, а не дублируется. Это устраняет рассинхронизацию между `Run.resume_target_json` и `runtime["resume_target"]`, проявившуюся в первом проходе тестов на reconcile.
+- Старые записи `WorkspaceReservation` без owner_generation (V-006) пропускаются — `claim_next_job` их игнорирует. Это явная граница, отмеченная в V-006.
+- ProcessSupervisor никогда не вызывает `Process.kill()` для чужого поколения; `is_alive_pid` дополнительно сверяется с create_time, чтобы PID-рециклинг не приводил к завершению чужого процесса.
+- Resolve не редактирует `resolved_settings_json`: он под `run_snapshot_immutable` триггером. Лимиты попадают в `runtime_json["limit_overrides"]`, что читается на следующем диспетче. Поддержка лимитов из RunPolicyRevision на этапе движка остаётся открытой задачей этапа 7.
+
+**Проверки и приёмка:** добавлены **13 регрессионных тестов** в [test_stage5_controls.py](../backend/tests/integration/test_stage5_controls.py). Покрыты resume из paused/queued, resolve через RunPolicyRevision, reconciliation осиротевших StepAttempt/ProcessSupervision, запрет повторного execute без checkpoint (legacy visit), pause journal, ownership/генерация реестра процессов, PID-recycle, отказ чужих PID, DB-failure safety. Полный прогон (тесты этапов 1–5): **201 passed** на Windows/Python 3.12.7. Ruff check/format, mypy (61 файл) — без замечаний. OpenAPI/node schemas/TypeScript обновлены; `generate_contracts.py --check` зелёный.
+
+**Границы и продолжение:** реальные адаптеры (6A/6B) подключаются через существующий `AgentAdapter.interrupt(session_id)`, который пока no-op — теперь это правильная точка входа. Полные interrupt/kill deadlines через ProcessSupervisor используются, когда адаптер зарегистрирует свой процесс. Применение `runtime["limit_overrides"]` к реальному счётчику вызовов относится к этапу 7 (LLM); checkpoint и `unknown_external_result` уже маркируют ожидание, явный повторный проход группы (после восстановления доступа) закрывается в этапе 6.
+
+
+</details>
+
+### 2026-09-14 · Этап 4 · Ревью движка, очереди и SSE
 
 Связан с [планом реализации](IMPLEMENTATION_PLAN.md). Здесь фиксируются выполненные изменения, нюансы разработки, принятые решения, блокеры и проверки, которые важно учитывать при продолжении работы.
 
@@ -36,7 +129,7 @@ V-009 — совместимость ранних графов этапа 3: р�
 
 V-010 — закрыт ревью этапа 4: полный impl → verifier failed → Condition(false) → impl repair → verifier passed → Condition(true) → End проверен через API и worker. Проверены смена промпта/feedback, два visit/cycle, decision=false/true и лимиты. Никаких when на не-Condition узле или переноса этой проверки в этап 8 не требуется.
 
-V-011 — открытая интеграция этапов 4–5: runtime checkpoint, позиция кандидата, retry_at, счётчики и история сохранены; resume/resolve/reconciliation и явный повторный проход группы пока не реализованы. Повтор execute не начинает Start заново, потеря владельца ведёт в recovering, неизвестный исход не разрешает fallback. Для начатого/приостановленного Run неподдержанные команды отвечают control_unimplemented; waiting_input не рекламирует доступное продолжение. Полные interrupt/kill/ProcessSupervisor и гонки управления закрываются на этапе 5.
+V-011 — закрыт ревью этапа 5: resume сохраняет StepExecution/visit/cycle, позицию кандидата, per-candidate retry/backoff и расход. Явный новый проход exhausted-группы сохраняет историю и счётчики. Проверены crash до вызова/после результата/после перехода и отсутствие повторного внешнего вызова. Native reconciliation harness остаётся этапам 6–7.
 
 V-012 — старые данные первоначального этапа 4: lease-изменения могли не сохраниться, StepAttempt/StepExecution остаться running, а body артефакта потеряться. Миграция 0007 сохраняет историю, добавляет checkpoint/selection/body и не выдумывает утраченные результаты. Старое посещение без checkpoint не повторяется; задания без владельца требуют recovering. Body старого manifest может быть null. Для сверки этих Run нужен этап 5, удалять историю или переотправлять вызовы автоматически нельзя.
 

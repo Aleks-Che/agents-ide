@@ -93,7 +93,10 @@ def generated_files() -> dict[Path, str]:
         lines.append(f"  {json.dumps(name)}: {ts_type(schema)}")
     lines.append("}\n")
     return {
-        ROOT / "docs/api/events.json": json.dumps(event_schemas(), indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+        ROOT / "docs/api/events.json": json.dumps(
+            event_schemas(), indent=2, ensure_ascii=False, sort_keys=True
+        )
+        + "\n",
         ROOT / "frontend/src/api/generated.ts": "\n".join(lines),
         ROOT / "docs/api/openapi.json": json.dumps(
             api, indent=2, ensure_ascii=False, sort_keys=True

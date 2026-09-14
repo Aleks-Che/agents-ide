@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 
+import psutil
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -62,7 +64,9 @@ def claim_next_job(
                 select(QueueJob)
                 .join(Run, Run.id == QueueJob.run_id)
                 .where(
-                    Run.state.in_(["running", "retry_wait"]),
+                    Run.state.in_(
+                        ["running", "retry_wait", "pause_requested", "stop_requested", "recovering"]
+                    ),
                     or_(QueueJob.claimed_by.is_(None), QueueJob.lease_expires_at.is_(None)),
                 )
             )
@@ -82,9 +86,23 @@ def claim_next_job(
                 run.state = "recovering"
                 run.state_version += 1
                 run.updated_at = now_value
-                run.resume_target_json = json.dumps(
-                    {"action": "reconcile", "blockers": ["owner_expired"]}
+                target = json.loads(run.resume_target_json or "{}")
+                target.update(
+                    {
+                        "action": "reconcile",
+                        "previous_action": target.get("action"),
+                        "execution_id": run.current_execution_id,
+                        "node_id": run.current_node_id,
+                        "previous_owner": {
+                            "pid": job.owner_pid,
+                            "create_time": job.owner_create_time,
+                        },
+                        "blockers": list(
+                            dict.fromkeys([*target.get("blockers", []), "owner_expired"])
+                        ),
+                    }
                 )
+                run.resume_target_json = json.dumps(target)
                 append_event(
                     session,
                     run.id,
@@ -96,7 +114,10 @@ def claim_next_job(
                         "reason": "owner_expired",
                     },
                 )
-            # Keep both the owner and reservation as evidence. Recovery is stage 5.
+            # Transfer only the lease. The reservation remains continuously active;
+            # recovery must prove the old operation stopped before any dispatch.
+            job.claimed_by, job.lease_expires_at = None, None
+        session.flush()
         active = (
             session.scalar(
                 select(func.count())
@@ -117,7 +138,7 @@ def claim_next_job(
             select(QueueJob)
             .join(Run, Run.id == QueueJob.run_id)
             .where(
-                Run.state == "queued",
+                Run.state.in_(["queued", "recovering"]),
                 QueueJob.claimed_by.is_(None),
                 QueueJob.available_at <= now_value,
             )
@@ -128,28 +149,39 @@ def claim_next_job(
             assert run is not None
             workspace = json.loads(run.snapshot_json)["workspace"]
             scope = workspace.get("scope")
-            if scope is None or any(
-                r.workspace_json is None or scopes_overlap(scope, json.loads(r.workspace_json))
+            blocking = [
+                r
                 for r in reservations
-            ):
+                if r.run_id != run.id
+                and (
+                    r.workspace_json is None or scopes_overlap(scope, json.loads(r.workspace_json))
+                )
+            ]
+            if scope is None or blocking:
                 continue
-            generation = job.generation + 1
+            generation = max(job.generation, run.worker_generation or 0) + 1
             lease = now_value + lease_seconds
             job.claimed_by, job.generation, job.lease_expires_at = worker_id, generation, lease
+            job.owner_pid, job.owner_create_time = os.getpid(), psutil.Process().create_time()
             run.worker_id, run.worker_generation = worker_id, generation
-            session.add(
-                WorkspaceReservation(
-                    id=new_id(),
-                    workspace_identity_dev=workspace["identity_dev"],
-                    workspace_identity_ino=workspace["identity_ino"],
-                    workspace_json=json.dumps(scope),
-                    run_id=run.id,
-                    owner_generation=generation,
-                    lease_expires_at=lease,
-                    created_at=now_value,
-                    released_at=None,
+            prior = [r for r in reservations if r.run_id == run.id]
+            for reservation in prior:
+                reservation.owner_generation = generation
+                reservation.lease_expires_at = lease
+            if not prior:
+                session.add(
+                    WorkspaceReservation(
+                        id=new_id(),
+                        workspace_identity_dev=workspace["identity_dev"],
+                        workspace_identity_ino=workspace["identity_ino"],
+                        workspace_json=json.dumps(scope),
+                        run_id=run.id,
+                        owner_generation=generation,
+                        lease_expires_at=lease,
+                        created_at=now_value,
+                        released_at=None,
+                    )
                 )
-            )
             result = ClaimedJob(job.id, run.id, generation, lease)
             session.commit()  # Flush ORM updates before committing; SQL COMMIT alone loses them.
             return result

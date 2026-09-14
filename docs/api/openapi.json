@@ -502,6 +502,7 @@
               "artifact.recorded",
               "assignment.applied",
               "attempt.finished",
+              "attempt.late_result",
               "attempt.prepared",
               "attempt.progress",
               "attempt.retry_scheduled",
@@ -512,6 +513,7 @@
               "command.finished",
               "condition.evaluated",
               "control.applied",
+              "control.requested",
               "error.reported",
               "error.technical",
               "evidence.collected",
@@ -522,17 +524,22 @@
               "model_group.exhausted",
               "node.entered",
               "node.left",
+              "process.interrupted",
+              "process.supervised",
               "run.cancelled",
               "run.completed",
               "run.created",
               "run.failed",
               "run.paused",
+              "run.reconciling",
+              "run.resumed",
               "run.started",
               "run.state_changed",
               "run.stopped",
               "run.waiting",
               "run.waiting_input",
-              "transition.selected"
+              "transition.selected",
+              "workspace.reservation_released"
             ],
             "title": "Type",
             "type": "string"
@@ -2980,6 +2987,28 @@
           "tested_at"
         ],
         "title": "ProviderTest",
+        "type": "object"
+      },
+      "ReservationCleanupRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Command Id",
+            "type": "string"
+          },
+          "expected_state_version": {
+            "minimum": 0.0,
+            "title": "Expected State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command_id",
+          "expected_state_version"
+        ],
+        "title": "ReservationCleanupRequest",
         "type": "object"
       },
       "ResolvedSettingSource": {
@@ -6611,6 +6640,50 @@
         ]
       }
     },
+    "/api/runs/{run_id}/diagnostics": {
+      "get": {
+        "operationId": "run_diagnostics_endpoint_api_runs__run_id__diagnostics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Diagnostics Endpoint Api Runs  Run Id  Diagnostics Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Diagnostics Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
     "/api/runs/{run_id}/events": {
       "get": {
         "operationId": "list_run_events_endpoint_api_runs__run_id__events_get",
@@ -6727,6 +6800,60 @@
           }
         },
         "summary": "Replay Run Events Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/reservations/cleanup": {
+      "post": {
+        "operationId": "cleanup_reservation_endpoint_api_runs__run_id__reservations_cleanup_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReservationCleanupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cleanup Reservation Endpoint Api Runs  Run Id  Reservations Cleanup Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cleanup Reservation Endpoint",
         "tags": [
           "domain"
         ]

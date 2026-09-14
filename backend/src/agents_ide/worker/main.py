@@ -1,4 +1,15 @@
-"""Independent worker: heartbeat and at most two concurrent leased Runs."""
+"""Independent worker: heartbeat and at most two concurrent leased Runs.
+
+Stage 5 adds:
+
+* a database-unavailable safety check that aborts dispatch when the
+  engine cannot be reached; the worker stops accepting new work instead
+  of silently losing progress.
+* separate heartbeats for worker (process liveness), attempt (last
+  dispatch activity) and registered child processes.
+* recovery leases for ``recovering`` Runs. Waiting/paused/stopped Runs
+  require an explicit command and retain their reservations and blockers.
+"""
 
 import logging
 import os
@@ -11,13 +22,15 @@ from typing import Any
 
 import portalocker
 from sqlalchemy import Engine, text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from agents_ide.config import Settings
 from agents_ide.engine.queue import claim_next_job, refresh_lease, release_job
 from agents_ide.engine.runner import build_runner
-from agents_ide.persistence.database import create_database, migrate
+from agents_ide.persistence.database import check_database, create_database, migrate
 from agents_ide.security.secrets import SecretStore
+from agents_ide.worker.processes import ProcessRegistry, ProcessSupervisor
 
 logger = logging.getLogger("agents_ide.worker")
 
@@ -62,36 +75,73 @@ def run_worker(settings: Settings) -> None:
         engine = create_database(settings)
         factory = sessionmaker(bind=engine, expire_on_commit=False)
         worker_id, started_at = uuid.uuid4().hex, time.time()
+        registry = ProcessRegistry()
         logger.info("worker.started", extra={"worker_id": worker_id})
+        pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="run")
         try:
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="run") as pool:
-                pending: list[Future[bool]] = []
-                last_heartbeat = 0.0
-                while not stopping.is_set():
-                    from agents_ide.launcher import stop_requested
+            pending: list[Future[bool]] = []
+            last_heartbeat = 0.0
+            db_failures = 0
+            while not stopping.is_set():
+                from agents_ide.launcher import stop_requested
 
-                    if stop_requested(settings, os.environ.get("AGENTS_IDE_LAUNCH_ID")):
+                if stop_requested(settings, os.environ.get("AGENTS_IDE_LAUNCH_ID")):
+                    stopping.set()
+                    break
+                if time.monotonic() - last_heartbeat >= settings.heartbeat_seconds:
+                    try:
+                        if check_database(engine):
+                            write_heartbeat(engine, worker_id, started_at, "running")
+                            db_failures = 0
+                        else:
+                            db_failures += 1
+                            write_heartbeat(engine, worker_id, started_at, "stale")
+                    except (OperationalError, SQLAlchemyError):
+                        db_failures += 1
+                        try:
+                            write_heartbeat(engine, worker_id, started_at, "unavailable")
+                        except Exception:
+                            logger.warning("worker.heartbeat_unavailable")
+                    last_heartbeat = time.monotonic()
+                    if db_failures:
+                        registry.abort_all()
+                    if db_failures >= 3:
+                        logger.error(
+                            "worker.database_unavailable",
+                            extra={"worker_id": worker_id, "failures": db_failures},
+                        )
                         stopping.set()
                         break
-                    if time.monotonic() - last_heartbeat >= settings.heartbeat_seconds:
-                        write_heartbeat(engine, worker_id, started_at, "running")
-                        last_heartbeat = time.monotonic()
-                    for future in pending[:]:
-                        if future.done():
-                            pending.remove(future)
-                            try:
-                                future.result()
-                            except Exception:
-                                logger.exception("worker.dispatch_error")
-                    while len(pending) < 2:
-                        pending.append(
-                            pool.submit(dispatch_once, settings, worker_id, factory, stopping)
+                for future in pending[:]:
+                    if future.done():
+                        pending.remove(future)
+                        try:
+                            future.result()
+                        except Exception:
+                            logger.exception("worker.dispatch_error")
+                while len(pending) < 2 and db_failures == 0 and not stopping.is_set():
+                    pending.append(
+                        pool.submit(
+                            dispatch_once,
+                            settings,
+                            worker_id,
+                            factory,
+                            stopping,
+                            registry,
                         )
-                    stopping.wait(min(0.25, settings.heartbeat_seconds))
+                    )
+                stopping.wait(min(0.25, settings.heartbeat_seconds))
         finally:
             stopping.set()
+            registry.abort_all()
+            pool.shutdown(wait=True, cancel_futures=True)
+            for entry in registry.entries():
+                if entry.group:
+                    entry.group.close()
             try:
                 write_heartbeat(engine, worker_id, started_at, "stopped")
+            except Exception:
+                logger.warning("worker.shutdown_heartbeat_failed")
             finally:
                 engine.dispose()
             logger.info("worker.stopped", extra={"worker_id": worker_id})
@@ -102,6 +152,7 @@ def dispatch_once(
     worker_id: str,
     session_factory: sessionmaker[Session] | None = None,
     stopping: threading.Event | None = None,
+    registry: ProcessRegistry | None = None,
 ) -> bool:
     owned_engine = create_database(settings) if session_factory is None else None
     factory = session_factory or sessionmaker(bind=owned_engine, expire_on_commit=False)
@@ -110,6 +161,9 @@ def dispatch_once(
         if job is None:
             return False
         abort = threading.Event()
+        if registry is not None:
+            with registry.lock:
+                registry.aborts[job.run_id] = abort
         stop_renewal = threading.Event()
         runner = build_runner(
             session_factory=factory,
@@ -118,12 +172,17 @@ def dispatch_once(
             data_dir=settings.data_dir,
             secret_store=SecretStore(settings.data_dir / "secrets"),
             abort=abort,
+            registry=registry or ProcessRegistry(),
         )
 
         def renew() -> None:
             while not stop_renewal.wait(min(settings.heartbeat_seconds, 1)):
                 if stopping is not None and stopping.is_set():
                     abort.set()
+                    if runner.registry:
+                        ProcessSupervisor(
+                            factory, runner.registry, job.run_id, worker_id, job.generation
+                        ).stop(cooperative_seconds=0)
                     return
                 try:
                     refresh_lease(
@@ -135,6 +194,10 @@ def dispatch_once(
                     )
                 except Exception:
                     abort.set()
+                    if runner.registry:
+                        ProcessSupervisor(
+                            factory, runner.registry, job.run_id, worker_id, job.generation
+                        ).stop(cooperative_seconds=0)
                     logger.warning("worker.lease_renew_failed", extra={"run_id": job.run_id})
                     return
 
@@ -150,9 +213,21 @@ def dispatch_once(
                 )
                 return False
             runner.execute(job.run_id)
+        except BaseException:
+            # A failure after the adapter returned (for example while saving its
+            # result) must stop owned processes too, even if lease refresh succeeds.
+            abort.set()
+            if runner.registry:
+                ProcessSupervisor(
+                    factory, runner.registry, job.run_id, worker_id, job.generation
+                ).stop(cooperative_seconds=0)
+            raise
         finally:
             stop_renewal.set()
             thread.join(timeout=2)
+            if registry is not None:
+                with registry.lock:
+                    registry.aborts.pop(job.run_id, None)
         # Completed and waiting Runs are consumed atomically by Runner. An exception
         # leaves the intent and reservation for recovery; it never requeues the call.
         return True

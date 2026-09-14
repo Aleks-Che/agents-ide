@@ -2,7 +2,7 @@
 
 Статус: контракт для реализации v1; полная проверка движком ещё не выполнена. Связанные документы: [описание](../PROJECT_DESCRIPTION.md), [runtime](RUNTIME_CONTRACTS.md), [исполнение](EXECUTION_CONTRACTS.md).
 
-После ревью этапа 4 проверены simulated-посещения/попытки, переходы, ограничения и управление на безопасных границах. [Текущая реализация](ENGINE_RUNTIME.md) блокирует resume/recovery до этапа 5; приведённая ниже полная таблица остаётся целевым контрактом, а не заявлением о готовности всех команд.
+После ревью этапов 4–5 проверены simulated-посещения/попытки, управление, resume/reconciliation, бюджет и Windows ProcessSupervisor. [Границы реализации и CLI](CONTROL_AND_RECOVERY.md): native permission/interrupt и внешний статус конкретных harness подключаются в этапах 6–7. Таблица ниже задаёт полный контракт v1.
 
 Группы моделей (§7.5 описания проекта) сохраняют приоритетный список кандидатов в snapshot Run. Новый StepExecution, включая repair, начинает с первого приоритета. Resume прерванного посещения сохраняет выбранного кандидата, пока он доступен; при подтверждённой недоступности поиск продолжается ниже его позиции. Прямой выбор модели остаётся за пределами группы и не получает автоматической замены.
 
@@ -109,9 +109,9 @@ API: `POST /runs/{id}/commands`. Тело содержит `command_id`, `type`,
 | --- | --- |
 | queued, running, retry_wait | pause, stop, cancel |
 | pause_requested | pause (no-op), stop, cancel |
-| paused | pause (no-op), stop → stopped, resume, cancel |
+| paused | pause (no-op), stop → stopped, resume, cancel; resolve для сохранённого blocker |
 | stop_requested | stop (no-op), cancel повышает stop_goal до cancelled |
-| stopped | stop (no-op), resume, cancel |
+| stopped | stop (no-op), resume, cancel; resolve для сохранённого blocker |
 | waiting_input | resolve, resume при устранённых blockers, pause, stop, cancel |
 | recovering | stop, cancel; resolve только для запрошенного доказательства сверки |
 | completed, failed | Просмотр; команды управления отклоняются |
@@ -123,7 +123,7 @@ API: `POST /runs/{id}/commands`. Тело содержит `command_id`, `type`,
 
 ## 5. Ожидание, лимиты и неизменяемые входы
 
-`waiting_reason = {code, details, allowed_actions, blocked_operation_id, resolution_schema}`. Resolve сохраняет решение, но само по себе не запускает работу. Resume повторно проверяет конкретную причину: новый ключ доступен, evidence собрано, процесс остановлен, запрошенный лимит действительно увеличен и т. п.
+`waiting_reason = {code, details, allowed_actions, blocked_operation_id, resolution_schema}`. Resolve сохраняет решение, но само по себе не запускает работу. В paused/stopped оно также разрешено при сохранённом blocker и не меняет состояние: например, для увеличения лимита после паузы. Resume повторно проверяет конкретную причину: новый ключ доступен, evidence собрано, процесс остановлен, запрошенный лимит действительно увеличен и т. п.
 
 Исходные input, план, direct-модель или полный список группы, промпты, граф и разрешения Run неизменяемы. Новые сообщения чата не меняют их. Недостающие данные передаются как отдельные resolution-артефакты в рамках существующих критериев и разрешённых источников. Изменение задачи, критериев, direct-модели, состава/порядка группы или разрешений требует нового Run. Переход к следующему кандидату внутри snapshot — изменение позиции исполнения, а не изменение конфигурации.
 

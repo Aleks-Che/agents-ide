@@ -398,15 +398,12 @@ def submit_command(session: Session, run_id: str, payload: RunCommand) -> Comman
             409,
             {"run_state": run.state},
         )
-    if run.runtime_json != "{}" and (
-        payload.command_type in {"resume", "resolve"}
-        or run.state not in {"queued", "running", "retry_wait", "pause_requested", "stop_requested"}
-    ):
-        raise AppError(
-            "control_unimplemented",
-            "Восстановление и управление приостановленным Run требуют этапа 5",
-            409,
-        )
+    from agents_ide.engine.artifacts import sanitize
+    from agents_ide.services.run_controls import command_event, prepare_command
+
+    previous = run.state
+    status, response = prepare_command(session, run, payload)
+    applied_at = utc_now() if status == "applied" else None
     now = utc_now()
     sequence = _next_command_sequence(session, run_id)
     journal = CommandJournalModel(
@@ -416,24 +413,25 @@ def submit_command(session: Session, run_id: str, payload: RunCommand) -> Comman
         command_type=payload.command_type,
         expected_state_version=payload.expected_state_version,
         payload_hash=payload_hash_value,
-        payload_json=to_json(payload.payload),
+        payload_json=to_json(sanitize(payload.payload)),
         sequence=sequence,
         initiator="api",
-        status="accepted",
-        response_json=None,
+        status=status,
+        response_json=to_json(response) if response else None,
         created_at=now,
-        applied_at=None,
+        applied_at=applied_at,
     )
     session.add(journal)
     run.state_version += 1
     run.updated_at = now
+    command_event(session, run, payload, previous, status)
     session.flush()
     return CommandAccepted(
         command_id=payload.command_id,
         sequence=sequence,
-        status="accepted",
-        response=None,
-        applied_at=None,
+        status=status,  # type: ignore[arg-type]
+        response=response,
+        applied_at=_dt(applied_at),
     )
 
 
@@ -505,11 +503,11 @@ def _command_allowed(command_type: str, state: str) -> bool:
     if state == "pause_requested":
         return command_type in {"pause", "stop", "cancel"}
     if state == "paused":
-        return command_type in {"pause", "stop", "resume", "cancel"}
+        return command_type in {"pause", "stop", "resume", "cancel", "resolve"}
     if state == "stop_requested":
         return command_type in {"stop", "cancel"}
     if state == "stopped":
-        return command_type in {"stop", "resume", "cancel"}
+        return command_type in {"stop", "resume", "cancel", "resolve"}
     if state == "waiting_input":
         return command_type in {"resolve", "resume", "pause", "stop", "cancel"}
     if state == "recovering":

@@ -149,7 +149,19 @@ def _response(
             if request.deadline_at
             else response.delay_seconds
         )
-        time.sleep(min(response.delay_seconds, remaining))
+        if request.stop_event:
+            request.stop_event.wait(min(response.delay_seconds, remaining))
+        else:
+            time.sleep(min(response.delay_seconds, remaining))
+    if request.stop_event is not None and request.stop_event.is_set():
+        return FakeResponse(
+            response.node_id,
+            response.attempt_index,
+            outcome=ExternalOutcome.RETRYABLE_FAILURE,
+            error_code="interrupted",
+            retry_safety="safe",
+            no_effect=True,
+        )
     if request.deadline_at is not None and time.time() >= request.deadline_at:
         return FakeResponse(
             response.node_id,
@@ -164,6 +176,15 @@ def _response(
         if workspace is None:
             raise ValueError("Scripted edits require a private simulation workspace")
         for name, content in response.files.items():
+            if request.check_owned:
+                request.check_owned()
+            if request.stop_event is not None and request.stop_event.is_set():
+                return FakeResponse(
+                    response.node_id,
+                    response.attempt_index,
+                    outcome=ExternalOutcome.UNKNOWN,
+                    error_code="interrupted_partial",
+                )
             # Validate again for programmatically constructed fixtures.
             FakeResponseSpec(node_id=response.node_id, files={name: content})
             target = (workspace / Path(*PureWindowsPath(name).parts)).resolve()

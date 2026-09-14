@@ -121,6 +121,7 @@ def create_attempt(session: Session, visit: VisitState) -> StepAttemptModel:
         tokens_used=None,
         cost_estimated=None,
         budget_quality=None,
+        heartbeat_at=utc_now(),
     )
     session.add(attempt)
     session.flush()

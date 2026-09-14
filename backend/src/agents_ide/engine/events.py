@@ -44,6 +44,8 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "run.failed",
         "run.cancelled",
         "run.waiting",
+        "run.resumed",
+        "run.reconciling",
         "node.entered",
         "node.left",
         "transition.selected",
@@ -64,12 +66,17 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "run.state_changed",
         "run.waiting_input",
         "control.applied",
+        "control.requested",
+        "workspace.reservation_released",
         "condition.evaluated",
         "budget.updated",
         "budget.exceeded",
         "error.technical",
         "attempt.retry_scheduled",
         "attempt.text_delta",
+        "attempt.late_result",
+        "process.supervised",
+        "process.interrupted",
     }
 )
 

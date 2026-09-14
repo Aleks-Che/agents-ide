@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from threading import Event
 from typing import Any
 
 
@@ -92,6 +93,8 @@ class AgentAdapterRequest:
     visit_index: int = 1
     deadline_at: float | None = None
     emit_event: Callable[[str, dict[str, Any]], None] | None = None
+    stop_event: Event | None = None
+    check_owned: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,8 @@ class LLMAdapterRequest:
     visit_index: int = 1
     deadline_at: float | None = None
     emit_event: Callable[[str, dict[str, Any]], None] | None = None
+    stop_event: Event | None = None
+    check_owned: Callable[[], None] | None = None
 
 
 class AgentAdapter:

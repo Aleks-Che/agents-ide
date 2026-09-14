@@ -312,6 +312,7 @@ class StepAttempt(Base):
     selection_json: Mapped[str] = mapped_column(Text, default="{}")
     request_artifact_id: Mapped[str | None] = mapped_column(String(32))
     result_artifact_id: Mapped[str | None] = mapped_column(String(32))
+    heartbeat_at: Mapped[float | None] = mapped_column(Float, default=_utcnow)
 
 
 class AgentSession(Base):
@@ -386,6 +387,8 @@ class QueueJob(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
     available_at: Mapped[float] = mapped_column(Float, default=_utcnow)
     claimed_by: Mapped[str | None] = mapped_column(String(32))
+    owner_pid: Mapped[int | None] = mapped_column(Integer)
+    owner_create_time: Mapped[float | None] = mapped_column(Float)
     lease_expires_at: Mapped[float | None] = mapped_column(Float)
     generation: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
@@ -499,6 +502,42 @@ class ModelGroupMember(Base):
     group: Mapped[ModelGroup] = relationship(back_populates="members")
 
 
+class ProcessSupervision(Base):
+    __tablename__ = "process_supervision"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('started','interrupt_requested','killed','finished','unknown')",
+            name="ck_process_state",
+        ),
+        CheckConstraint(
+            "kind IN ('harness','llm','command','git','support')",
+            name="ck_process_kind",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    step_attempt_id: Mapped[str | None] = mapped_column(ForeignKey("step_attempts.id"))
+    role: Mapped[str] = mapped_column(String(32))
+    owner_generation: Mapped[int] = mapped_column(Integer)
+    pid: Mapped[int] = mapped_column(Integer)
+    started_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    create_time: Mapped[float] = mapped_column(Float, default=_utcnow)
+    parent_pid: Mapped[int | None] = mapped_column(Integer)
+    executable: Mapped[str | None] = mapped_column(String(512))
+    kind: Mapped[str] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(16))
+    interrupt_requested_at: Mapped[float | None] = mapped_column(Float)
+    killed_at: Mapped[float | None] = mapped_column(Float)
+    last_external_event_at: Mapped[float | None] = mapped_column(Float)
+    finished_at: Mapped[float | None] = mapped_column(Float)
+    tree_json: Mapped[str | None] = mapped_column(Text)
+    last_health_ok: Mapped[float | None] = mapped_column(Float)
+    transport: Mapped[str | None] = mapped_column(String(32))
+    port: Mapped[int | None] = mapped_column(Integer)
+    workspace_json: Mapped[str | None] = mapped_column(Text)
+
+
 __all__ = [
     "Base",
     "Project",
@@ -522,4 +561,5 @@ __all__ = [
     "RunPolicyRevision",
     "ModelGroup",
     "ModelGroupMember",
+    "ProcessSupervision",
 ]

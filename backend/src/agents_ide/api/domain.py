@@ -31,6 +31,7 @@ from agents_ide.domain.graph_validation import (
     preflight as preflight_binding,
 )
 from agents_ide.domain.schemas import (
+    ApiModel,
     Chat,
     ChatArchive,
     ChatCreate,
@@ -494,6 +495,81 @@ def submit_command_endpoint(
 @router.get("/runs/{run_id}/commands", response_model=list[CommandAccepted])
 def list_command_journal_endpoint(session: SessionDep, run_id: str) -> list[CommandAccepted]:
     return runs.list_command_journal(session, run_id)
+
+
+class ReservationCleanupRequest(ApiModel):
+    command_id: str = Field(min_length=1, max_length=64)
+    expected_state_version: int = Field(ge=0)
+
+
+@router.post("/runs/{run_id}/reservations/cleanup")
+def cleanup_reservation_endpoint(
+    session: SessionDep, run_id: str, payload: ReservationCleanupRequest
+) -> dict[str, Any]:
+    from agents_ide.services.run_controls import cleanup_reservation
+
+    return cleanup_reservation(session, run_id, payload.command_id, payload.expected_state_version)
+
+
+@router.get("/runs/{run_id}/diagnostics")
+def run_diagnostics_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]:
+    from sqlalchemy import select
+
+    from agents_ide.persistence.models import (
+        ProcessSupervision,
+        StepAttempt,
+        WorkspaceReservation,
+    )
+    from agents_ide.persistence.models import (
+        Run as RunModel,
+    )
+    from agents_ide.worker.processes import process_state
+
+    run = session.get(RunModel, run_id)
+    if run is None:
+        raise AppError("run_not_found", "Run не найден", 404)
+    attempt = session.get(StepAttempt, run.current_attempt_id) if run.current_attempt_id else None
+    return {
+        "run_id": run.id,
+        "state": run.state,
+        "state_version": run.state_version,
+        "resume_target": json.loads(run.resume_target_json or "{}"),
+        "stop_goal": run.stop_goal,
+        "waiting_reason": json.loads(run.waiting_reason_json or "null"),
+        "attempt": {
+            "id": attempt.id,
+            "status": attempt.status,
+            "heartbeat_at": attempt.heartbeat_at,
+            "operation_id": attempt.operation_id,
+        }
+        if attempt
+        else None,
+        "processes": [
+            {
+                "id": p.id,
+                "pid": p.pid,
+                "create_time": p.create_time,
+                "owner_generation": p.owner_generation,
+                "state": p.state,
+                "health": process_state(p.pid, p.create_time),
+                "last_health_ok": p.last_health_ok,
+                "last_external_event_at": p.last_external_event_at,
+                "transport": p.transport,
+                "port": p.port,
+            }
+            for p in session.scalars(
+                select(ProcessSupervision).where(ProcessSupervision.run_id == run_id)
+            )
+        ],
+        "reservation_ids": list(
+            session.scalars(
+                select(WorkspaceReservation.id).where(
+                    WorkspaceReservation.run_id == run_id,
+                    WorkspaceReservation.released_at.is_(None),
+                )
+            )
+        ),
+    }
 
 
 @router.get("/runs/{run_id}/snapshot", response_model=RunSnapshot)
