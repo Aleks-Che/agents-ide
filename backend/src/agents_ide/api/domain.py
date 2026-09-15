@@ -129,6 +129,18 @@ def list_presets_endpoint() -> list[dict[str, Any]]:
     ]
 
 
+class PresetCopyRequest(ApiModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+@router.post("/presets/{preset_id}/copy", response_model=PipelineTemplate, status_code=201)
+def copy_preset_endpoint(
+    session: SessionDep, preset_id: str, payload: PresetCopyRequest | None = None
+) -> PipelineTemplate:
+    name = payload.name if payload else None
+    return templates.copy_preset_to_user_template(session, preset_id, name)
+
+
 @router.get("/runs/{run_id}/plan")
 def run_plan_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]:
     from agents_ide.engine.plan_control import load_plan_items, plan_summary

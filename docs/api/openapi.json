@@ -2748,6 +2748,26 @@
         "title": "PreflightRequest",
         "type": "object"
       },
+      "PresetCopyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "PresetCopyRequest",
+        "type": "object"
+      },
       "Project": {
         "additionalProperties": false,
         "properties": {
@@ -3197,6 +3217,111 @@
         "title": "ReservationCleanupRequest",
         "type": "object"
       },
+      "ResolvedProvenanceItem": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "run",
+              "binding",
+              "template",
+              "node",
+              "default"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "name",
+          "source",
+          "value"
+        ],
+        "title": "ResolvedProvenanceItem",
+        "type": "object"
+      },
+      "ResolvedRoleAssignment": {
+        "additionalProperties": false,
+        "properties": {
+          "harness_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Profile Id"
+          },
+          "kind": {
+            "enum": [
+              "agent",
+              "llm"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "provider_connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Connection Id"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection"
+          }
+        },
+        "required": [
+          "kind",
+          "selection"
+        ],
+        "title": "ResolvedRoleAssignment",
+        "type": "object"
+      },
       "ResolvedSettingSource": {
         "additionalProperties": false,
         "properties": {
@@ -3243,6 +3368,20 @@
             "title": "Policy Hash",
             "type": "string"
           },
+          "provenance": {
+            "items": {
+              "$ref": "#/components/schemas/ResolvedProvenanceItem"
+            },
+            "title": "Provenance",
+            "type": "array"
+          },
+          "roles": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResolvedRoleAssignment"
+            },
+            "title": "Roles",
+            "type": "object"
+          },
           "schema_version": {
             "title": "Schema Version",
             "type": "string"
@@ -3253,6 +3392,13 @@
             },
             "title": "Settings",
             "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/ResolvedWarning"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
         "required": [
@@ -3262,6 +3408,43 @@
           "schema_version"
         ],
         "title": "ResolvedSettings",
+        "type": "object"
+      },
+      "ResolvedWarning": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Roles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ResolvedWarning",
         "type": "object"
       },
       "Run": {
@@ -6278,6 +6461,65 @@
           }
         },
         "summary": "List Presets Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/presets/{preset_id}/copy": {
+      "post": {
+        "operationId": "copy_preset_endpoint_api_presets__preset_id__copy_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PresetCopyRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineTemplate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Copy Preset Endpoint",
         "tags": [
           "domain"
         ]

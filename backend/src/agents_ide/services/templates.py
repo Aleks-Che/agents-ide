@@ -8,7 +8,7 @@ execution hash and policy hash.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -31,8 +31,11 @@ from agents_ide.domain.schemas import (
     PipelineTemplateUpdate,
     PipelineVersion,
     PipelineVersionCreate,
+    ResolvedProvenanceItem,
+    ResolvedRoleAssignment,
     ResolvedSettings,
     ResolvedSettingSource,
+    ResolvedWarning,
     SettingsOverrides,
 )
 from agents_ide.errors import AppError
@@ -57,6 +60,7 @@ from agents_ide.services.mapping import (
 )
 from agents_ide.services.settings import (
     DEFAULTS,
+    SettingSource,
     capture_dependencies,
     resolve_configuration,
 )
@@ -98,6 +102,60 @@ def list_templates(session: Session, include_archived: bool = False) -> list[Pip
         stmt = stmt.where(PipelineTemplateModel.archived_at.is_(None))
     stmt = stmt.order_by(PipelineTemplateModel.created_at.desc())
     return [template_from_model(row) for row in session.scalars(stmt).all()]
+
+
+def copy_preset_to_user_template(
+    session: Session, preset_id: str, name: str | None = None
+) -> PipelineTemplate:
+    """Clone a built-in preset into a user-owned template.
+
+    The clone contains a single immutable PipelineVersion copied from the
+    system source and a draft ready for editing. Subsequent edits live on the
+    user copy; the preset stays immutable.
+    """
+    from agents_ide.domain.graph_schema import required_features_for
+    from agents_ide.domain.graph_validation import validate_graph
+    from agents_ide.domain.schemas import PipelineVersionCreate, SettingsOverrides
+    from agents_ide.services.presets import get_builtin_preset
+
+    begin_write(session)
+    definition = get_builtin_preset(preset_id)
+    copy_name = name.strip() if name is not None else f"{definition.name[:112]} - копия"
+    assert_safe_name(copy_name)
+    payload = PipelineVersionCreate(
+        graph=definition.graph,
+        inputs=definition.body.get("default_inputs", {}),
+        settings=SettingsOverrides.model_validate(definition.default_settings),
+        required_features=required_features_for(definition.graph),
+    )
+    report = validate_graph(payload.graph, inputs=payload.inputs)
+    if not report.ok:
+        raise AppError(
+            "preset_invalid",
+            "Bundled preset failed validation",
+            500,
+            {"errors": [issue.to_dict() for issue in report.errors]},
+        )
+    model = PipelineTemplateModel(
+        id=new_id(),
+        name=copy_name,
+        description=definition.description,
+        kind="user",
+        schema_version="1.0.0",
+        draft_json=to_json(payload.model_dump(mode="json", exclude_none=True)),
+        archived_at=None,
+        version=1,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+
+    def _add() -> PipelineTemplate:
+        session.add(model)
+        session.flush()
+        create_version(session, model.id, payload)
+        return template_from_model(model)
+
+    return ensure_unique(session, _add)
 
 
 def get_template(session: Session, template_id: str) -> PipelineTemplate:
@@ -391,6 +449,7 @@ def resolve_settings(
     version = get_or_404(session, PipelineVersionModel, binding.version_id)
     values, sources = resolve_configuration(binding, version, overrides)
     dependencies = capture_dependencies(session, version_from_model(version).graph, values)
+    roles = _binding_role_assignments(version, values)
     settings = []
     for name, value in values.items():
         settings.append(
@@ -412,12 +471,169 @@ def resolve_settings(
                         locked=True,
                     )
                 )
+                if name == "role_parameters" and isinstance(item, dict):
+                    for param, param_value in item.items():
+                        param_name = f"{setting_name}.{param}"
+                        settings.append(
+                            ResolvedSettingSource(
+                                name=param_name,
+                                value=param_value,
+                                source=sources.get(param_name, sources[setting_name]),
+                                locked=True,
+                            )
+                        )
+    provenance = [
+        ResolvedProvenanceItem(name=item.name, source=item.source, value=item.value)
+        for item in settings
+    ]
+    provenance.extend(_binding_provenance(version, dependencies, roles, sources))
     return ResolvedSettings(
         settings=settings,
         execution_hash=effective_execution_hash(version, values, dependencies),
         policy_hash=effective_policy_hash({**values, **dependencies}),
         schema_version=version.schema_version,
+        roles=roles,
+        provenance=provenance,
+        warnings=_binding_warnings(roles),
     )
+
+
+def _binding_role_assignments(
+    version: PipelineVersionModel, values: dict[str, Any]
+) -> dict[str, ResolvedRoleAssignment]:
+    graph_roles: dict[str, str] = (
+        json.loads(version.graph_json).get("roles", {}) if version.graph_json else {}
+    )
+    for node in json.loads(version.graph_json).get("nodes", []):
+        role = node.get("config", {}).get("role")
+        kind = {"AgentTask": "agent", "LLMRequest": "llm"}.get(node.get("type"))
+        if role and kind:
+            graph_roles.setdefault(role, kind)
+    assignments: dict[str, ResolvedRoleAssignment] = {}
+    selections = values.get("model_selections", {})
+    for role, kind in graph_roles.items():
+        selection = selections.get(role)
+        if kind != "agent" and kind != "llm":
+            continue
+        role_kind: Literal["agent", "llm"] = kind  # type: ignore[assignment]
+        if not isinstance(selection, dict):
+            assignments[role] = ResolvedRoleAssignment(
+                kind=role_kind,
+                selection=None,
+                model_id=values.get("model_overrides", {}).get(role),
+                harness_profile_id=values.get("role_assignments", {}).get(role)
+                if kind == "agent"
+                else None,
+            )
+            continue
+        model_id: str | None = None
+        harness_id: str | None = None
+        connection_id: str | None = None
+        if selection.get("kind") == "direct":
+            model_id = selection.get("model_id")
+            if kind == "agent":
+                harness_id = selection.get("harness_profile_id")
+            else:
+                connection_id = selection.get("provider_connection_id")
+        assignments[role] = ResolvedRoleAssignment(
+            kind=role_kind,
+            selection=selection,
+            model_id=model_id,
+            harness_profile_id=harness_id,
+            provider_connection_id=connection_id,
+        )
+    return assignments
+
+
+def _binding_provenance(
+    version: PipelineVersionModel,
+    dependencies: dict[str, Any],
+    roles: dict[str, ResolvedRoleAssignment],
+    sources: dict[str, SettingSource],
+) -> list[ResolvedProvenanceItem]:
+    items: list[ResolvedProvenanceItem] = []
+    for role, assignment in roles.items():
+        items.append(
+            ResolvedProvenanceItem(
+                name=f"role.{role}",
+                source=sources.get(
+                    f"model_selections.{role}", sources.get(f"model_overrides.{role}", "default")
+                ),
+                value=assignment.selection
+                or (
+                    {
+                        "model_id": assignment.model_id,
+                        "harness_profile_id": assignment.harness_profile_id,
+                        "legacy": True,
+                    }
+                    if assignment.model_id or assignment.harness_profile_id
+                    else None
+                ),
+                kind=assignment.kind,
+            )
+        )
+    for raw in json.loads(version.graph_json).get("nodes", []):
+        node = dependencies.get("nodes", {}).get(raw["id"], {})
+        config = raw.get("config", {})
+        role = config.get("role")
+        if node.get("candidates"):
+            items.append(
+                ResolvedProvenanceItem(
+                    name=f"node.{raw['id']}.candidates",
+                    source="node"
+                    if "model_selection" in config
+                    else sources.get(f"model_selections.{role}", "default"),
+                    value=node["candidates"],
+                )
+            )
+        else:
+            for field, channel in [
+                ("model", "model_overrides"),
+                ("harness_profile_id", "role_assignments"),
+                ("connection_id", "role_assignments"),
+            ]:
+                if field in node:
+                    items.append(
+                        ResolvedProvenanceItem(
+                            name=f"node.{raw['id']}.{field}",
+                            source="node"
+                            if field in config
+                            else sources.get(f"{channel}.{role}", "default"),
+                            value=node[field],
+                        )
+                    )
+    return items
+
+
+def _binding_warnings(roles: dict[str, ResolvedRoleAssignment]) -> list[ResolvedWarning]:
+    """Surface soft hints without blocking. Only single-model collisions today."""
+    warnings: list[ResolvedWarning] = []
+    implementer = roles.get("implementer") or ResolvedRoleAssignment(
+        kind="agent", selection=None, model_id=None
+    )
+    verifier = roles.get("verifier") or ResolvedRoleAssignment(
+        kind="llm", selection=None, model_id=None
+    )
+    if (
+        implementer.kind == "agent"
+        and verifier.kind == "llm"
+        and implementer.model_id
+        and verifier.model_id
+        and implementer.model_id == verifier.model_id
+    ):
+        warnings.append(
+            ResolvedWarning(
+                code="implementer_verifier_same_model",
+                message=(
+                    "Реализация и проверка используют одну и ту же модель. "
+                    "Разделение ролей всё равно работает, но перекрёстная "
+                    "проверка слабее, чем при разных моделях."
+                ),
+                roles=["implementer", "verifier"],
+                model_id=implementer.model_id,
+            )
+        )
+    return warnings
 
 
 def update_draft(

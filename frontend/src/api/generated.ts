@@ -54,6 +54,7 @@ export interface ApiSchemas {
   "PipelineVersionCreate": { "graph": Record<string, unknown>; "inputs"?: Record<string, unknown>; "origin"?: "local" | "imported"; "required_features"?: Array<string>; "schema_version"?: string; "settings"?: ApiSchemas["SettingsOverrides"] }
   "PortableGroupMember": { "enabled"?: boolean; "id"?: (string | null); "model_id": string; "params"?: Record<string, unknown>; "resource_ref": string }
   "PreflightRequest": { "execution_mode"?: "real" | "simulated"; "fake_scenario"?: (ApiSchemas["FakeScenarioSpec"] | null); "inputs"?: Record<string, unknown>; "overrides"?: ApiSchemas["SettingsOverrides"] }
+  "PresetCopyRequest": { "name"?: (string | null) }
   "Project": { "archived": boolean; "created_at": string; "id": string; "name": string; "updated_at": string; "version": number; "workspace": ApiSchemas["WorkspaceInfo"] }
   "ProjectArchive": { "archive"?: boolean; "expected_version": number }
   "ProjectCreate": { "name": string; "workspace_path": string }
@@ -63,8 +64,11 @@ export interface ApiSchemas {
   "ProviderConnectionUpdate": { "base_url"?: (string | null); "catalog_ttl_seconds"?: (number | null); "expected_version": number; "manual_models"?: (Array<string> | null); "name"?: (string | null); "secret"?: (string | null) }
   "ProviderTest": { "detail"?: (string | null); "models": Array<string>; "status": "ok" | "failed"; "tested_at": string }
   "ReservationCleanupRequest": { "command_id": string; "expected_state_version": number }
+  "ResolvedProvenanceItem": { "kind"?: (string | null); "name": string; "source": "run" | "binding" | "template" | "node" | "default"; "value": unknown }
+  "ResolvedRoleAssignment": { "harness_profile_id"?: (string | null); "kind": "agent" | "llm"; "model_id"?: (string | null); "provider_connection_id"?: (string | null); "selection": (Record<string, unknown> | null) }
   "ResolvedSettingSource": { "locked": boolean; "name": string; "source": "run" | "binding" | "template" | "node" | "default"; "value": unknown }
-  "ResolvedSettings": { "execution_hash": string; "policy_hash": string; "schema_version": string; "settings": Array<ApiSchemas["ResolvedSettingSource"]> }
+  "ResolvedSettings": { "execution_hash": string; "policy_hash": string; "provenance"?: Array<ApiSchemas["ResolvedProvenanceItem"]>; "roles"?: Record<string, ApiSchemas["ResolvedRoleAssignment"]>; "schema_version": string; "settings": Array<ApiSchemas["ResolvedSettingSource"]>; "warnings"?: Array<ApiSchemas["ResolvedWarning"]> }
+  "ResolvedWarning": { "code": string; "message": string; "model_id"?: (string | null); "roles"?: Array<string> }
   "Run": { "active_intervals"?: Array<ApiSchemas["ActiveInterval"]>; "binding_id": string; "chat_id": (string | null); "created_at": string; "execution_hash": string; "finished_at": (string | null); "id": string; "idempotency_key": string; "pipeline_version_id": string; "policy_hash": string; "project_id": string; "runtime"?: Record<string, unknown>; "schema_version": string; "simulated"?: boolean; "snapshot_hash": string; "started_at": (string | null); "state": ApiSchemas["RunState"]; "state_version": number; "updated_at": string; "waiting_reason"?: (ApiSchemas["WaitingReason"] | null); "worker_generation": number; "worker_id": (string | null) }
   "RunCommand": { "command_id": string; "command_type": "pause" | "stop" | "cancel" | "resume" | "resolve"; "expected_state_version": number; "payload"?: Record<string, unknown> }
   "RunSnapshot": { "last_sequence": number; "min_retained_sequence": number; "run": ApiSchemas["Run"]; [key: string]: unknown }
@@ -129,6 +133,7 @@ export interface ApiOperations {
   "DELETE /api/model_groups/{group_id}/members/{member_id}": { body: never; parameters: { "path.group_id": string; "path.member_id": string; "query.expected_revision": number }; responses: { "200": ApiSchemas["ModelGroup"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/openapi.json": { body: never; parameters: Record<string, never>; responses: { "200": Record<string, unknown> } }
   "GET /api/presets": { body: never; parameters: Record<string, never>; responses: { "200": Array<Record<string, unknown>> } }
+  "POST /api/presets/{preset_id}/copy": { body: (ApiSchemas["PresetCopyRequest"] | null); parameters: { "path.preset_id": string }; responses: { "201": ApiSchemas["PipelineTemplate"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/projects": { body: never; parameters: { "query.include_archived"?: boolean }; responses: { "200": Array<ApiSchemas["Project"]>; "422": ApiSchemas["HTTPValidationError"] } }
   "POST /api/projects": { body: ApiSchemas["ProjectCreate"]; parameters: Record<string, never>; responses: { "201": ApiSchemas["Project"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/projects/{project_id}": { body: never; parameters: { "path.project_id": string }; responses: { "200": ApiSchemas["Project"]; "422": ApiSchemas["HTTPValidationError"] } }

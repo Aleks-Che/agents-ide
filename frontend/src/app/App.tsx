@@ -6,11 +6,13 @@ import {
   type Session,
   type SystemStatus,
 } from '../api/client'
-import { chatsApi, type Project } from '../api/projects'
+import { chatsApi, projectsApi, type Project } from '../api/projects'
 import { ProjectsPanel } from '../features/projects/ProjectsPanel'
 import { ChatsPanel } from '../features/chats/ChatsPanel'
 import { ChatView } from '../features/chats/ChatView'
 import { SettingsView } from '../features/settings/SettingsView'
+import { LibraryView } from '../features/bindings/LibraryView'
+import { RunsView } from '../features/runs/RunsView'
 
 export function App() {
   const client = useQueryClient()
@@ -20,7 +22,9 @@ export function App() {
     queryFn: () => request<Session>('/auth/session'),
     refetchInterval: 30_000,
   })
-  const signedIn = !!session.data && !session.isError
+  const authExpired =
+    session.error instanceof ApiError && session.error.status === 401
+  const signedIn = !!session.data && !authExpired
   const system = useQuery({
     queryKey: ['system'],
     queryFn: () => request<SystemStatus>('/system/status'),
@@ -167,7 +171,13 @@ export function App() {
     <SignedInShell
       system={system.data}
       systemLoading={system.isLoading}
-      systemError={system.error ? describeSystemError(system.error) : null}
+      systemError={
+        session.error
+          ? describeSystemError(session.error)
+          : system.error
+            ? describeSystemError(system.error)
+            : null
+      }
       onLogout={() => logout.mutate()}
       logoutPending={logout.isPending}
     />
@@ -201,6 +211,11 @@ function SignedInShell({
     queryFn: () => chatsApi.list({ projectId: selectedProject!.id }),
     enabled: Boolean(selectedProject),
   })
+  const projects = useQuery({
+    queryKey: ['projects', { includeArchived: false }],
+    queryFn: () => projectsApi.list({ includeArchived: false }),
+    enabled: view === 'library',
+  })
   const selectedChat =
     chats.data?.find((chat) => chat.id === selectedChatId) ??
     chats.data?.[0] ??
@@ -233,6 +248,23 @@ function SignedInShell({
           </button>
           <button
             type="button"
+            className={`quiet nav-button${view === 'library' ? ' selected' : ''}`}
+            aria-pressed={view === 'library'}
+            onClick={() => setView('library')}
+          >
+            Библиотека
+          </button>
+          <button
+            type="button"
+            className={`quiet nav-button${view === 'runs' ? ' selected' : ''}`}
+            aria-pressed={view === 'runs'}
+            onClick={() => setView('runs')}
+            disabled={!selectedProject}
+          >
+            Запуски
+          </button>
+          <button
+            type="button"
             className={`quiet nav-button${view === 'settings' ? ' selected' : ''}`}
             aria-pressed={view === 'settings'}
             onClick={() => setView('settings')}
@@ -244,7 +276,10 @@ function SignedInShell({
           <span className="dot" /> Локальная среда
         </div>
       </aside>
-      <aside className="subpanel" hidden={view === 'settings'}>
+      <aside
+        className="subpanel"
+        hidden={view === 'settings' || view === 'library' || view === 'runs'}
+      >
         <ChatsPanel
           key={selectedProject?.id ?? ''}
           projectId={selectedProject?.id ?? ''}
@@ -257,9 +292,15 @@ function SignedInShell({
           <span>
             {view === 'settings'
               ? 'Настройки'
-              : selectedProject
-                ? selectedProject.name
-                : 'Обзор'}
+              : view === 'library'
+                ? 'Библиотека'
+                : view === 'runs'
+                  ? selectedProject
+                    ? `Запуски · ${selectedProject.name}`
+                    : 'Запуски'
+                  : selectedProject
+                    ? selectedProject.name
+                    : 'Обзор'}
             {view === 'chats' && selectedChat ? (
               <>
                 <span className="slash">/</span>
@@ -272,8 +313,32 @@ function SignedInShell({
           </span>
         </header>
         <main className="workspace-main">
+          {systemError ? (
+            <p role="status" className="error">
+              Связь со службами: {systemError}. Сохранённый экран остаётся
+              доступен.
+            </p>
+          ) : system && system.worker.status !== 'running' ? (
+            <p role="status" className="hint">
+              Исполнитель недоступен. Задания ожидают запуска службы.
+            </p>
+          ) : null}
           {view === 'settings' ? (
             <SettingsView />
+          ) : view === 'library' ? (
+            <LibraryView
+              key={selectedProject?.id ?? 'library'}
+              projects={(projects.data ?? []) as Project[]}
+              selectedProjectId={selectedProject?.id ?? null}
+            />
+          ) : view === 'runs' ? (
+            <RunsView
+              key={selectedProject?.id ?? 'runs'}
+              project={selectedProject}
+              chats={chats.data ?? []}
+              selectedChatId={selectedChatId}
+              onSelectChat={setSelectedChatId}
+            />
           ) : selectedProject ? (
             <ChatView
               key={selectedChat?.id ?? 'empty'}
@@ -302,9 +367,7 @@ function SignedInShell({
           )}
         </main>
         <footer>
-          <span>
-            Этап 9 · Базовый интерфейс. Запуск pipeline появится в gate MVP.
-          </span>
+          <span>Создание запуска из интерфейса ещё разрабатывается.</span>
           <button
             type="button"
             className="quiet"
@@ -319,7 +382,7 @@ function SignedInShell({
   )
 }
 
-type MainView = 'chats' | 'settings'
+type MainView = 'chats' | 'library' | 'runs' | 'settings'
 
 interface WelcomePaneProps {
   system: SystemStatus | undefined
@@ -385,8 +448,8 @@ function WelcomePane({ system, loading, error }: WelcomePaneProps) {
           <span className="badge">Этап 9</span>
         </div>
         <p>
-          В настройках доступны профили, подключения и группы моделей. Далее
-          появятся библиотека шаблонов и запуск пресета на выбранной модели.
+          В настройках доступны профили, подключения и группы моделей. В
+          библиотеке можно скопировать пресет и создать привязку проекта.
         </p>
         <div className="future-items">
           <span>01 &nbsp; Настройки</span>

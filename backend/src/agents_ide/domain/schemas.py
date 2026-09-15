@@ -707,11 +707,36 @@ class ResolvedSettingSource(ApiOutput):
     locked: bool
 
 
+class ResolvedRoleAssignment(ApiOutput):
+    kind: Literal["agent", "llm"]
+    selection: dict[str, Any] | None
+    model_id: str | None = None
+    harness_profile_id: str | None = None
+    provider_connection_id: str | None = None
+
+
+class ResolvedProvenanceItem(ApiOutput):
+    name: str
+    source: Literal["run", "binding", "template", "node", "default"]
+    value: Any
+    kind: str | None = None
+
+
+class ResolvedWarning(ApiOutput):
+    code: str
+    message: str
+    roles: list[str] = Field(default_factory=list)
+    model_id: str | None = None
+
+
 class ResolvedSettings(ApiOutput):
     settings: list[ResolvedSettingSource]
     execution_hash: str
     policy_hash: str
     schema_version: str
+    roles: dict[str, ResolvedRoleAssignment] = Field(default_factory=dict)
+    provenance: list[ResolvedProvenanceItem] = Field(default_factory=list)
+    warnings: list[ResolvedWarning] = Field(default_factory=list)
 
 
 class WaitingReason(ApiModel):

@@ -1,0 +1,108 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../src/api/client'
+import { describeRunError, runsApi } from '../src/api/runs'
+
+afterEach(() => vi.unstubAllGlobals())
+
+function stubJsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+function captureFetch(): ReturnType<typeof vi.fn> {
+  const fetch = vi.fn()
+  vi.stubGlobal('fetch', fetch)
+  return fetch
+}
+
+describe('runsApi', () => {
+  it('lists runs for a project', async () => {
+    const fetch = captureFetch()
+    fetch.mockResolvedValueOnce(stubJsonResponse(200, []))
+    await runsApi.list('p1')
+    expect(fetch.mock.calls[0][0]).toBe('/api/runs?project_id=p1')
+  })
+
+  it('submits commands with expected_state_version and CSRF', async () => {
+    const fetch = captureFetch()
+    fetch.mockResolvedValueOnce(
+      stubJsonResponse(200, { command_id: 'c1', status: 'accepted' }),
+    )
+    await runsApi.submitCommand(
+      'r1',
+      {
+        command_id: 'c1',
+        command_type: 'pause',
+        expected_state_version: 2,
+      },
+      'csrf-r',
+    )
+    const [, init] = fetch.mock.calls[0]
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({
+      command_id: 'c1',
+      command_type: 'pause',
+      expected_state_version: 2,
+    })
+    expect(init.headers.get('X-CSRF-Token')).toBe('csrf-r')
+  })
+
+  it('loads plan summary for a run', async () => {
+    const fetch = captureFetch()
+    fetch.mockResolvedValueOnce(
+      stubJsonResponse(200, { plan: null, summary: {}, items: [] }),
+    )
+    await runsApi.plan('r1')
+    expect(fetch.mock.calls[0][0]).toBe('/api/runs/r1/plan')
+  })
+
+  it('loads diagnostics', async () => {
+    const fetch = captureFetch()
+    fetch.mockResolvedValueOnce(
+      stubJsonResponse(200, {
+        run_id: 'r1',
+        state: 'running',
+        state_version: 1,
+        processes: [],
+      }),
+    )
+    await runsApi.diagnostics('r1')
+    expect(fetch.mock.calls[0][0]).toBe('/api/runs/r1/diagnostics')
+  })
+
+  it('lists artifacts and loads one by id', async () => {
+    const fetch = captureFetch()
+    fetch.mockResolvedValueOnce(stubJsonResponse(200, []))
+    await runsApi.artifacts('r1')
+    expect(fetch.mock.calls[0][0]).toBe('/api/runs/r1/artifacts')
+    fetch.mockResolvedValueOnce(stubJsonResponse(200, { id: 'a1' }))
+    await runsApi.artifact('r1', 'a1')
+    expect(fetch.mock.calls[1][0]).toBe('/api/runs/r1/artifacts/a1')
+  })
+
+  it('paginates events with after and limit', async () => {
+    const fetch = captureFetch()
+    fetch.mockResolvedValueOnce(stubJsonResponse(200, { events: [] }))
+    await runsApi.events('r1', { after: 5, limit: 50 })
+    expect(fetch.mock.calls[0][0]).toBe('/api/runs/r1/events?after=5&limit=50')
+  })
+})
+
+describe('describeRunError', () => {
+  it('extracts api error message', () => {
+    const error = new ApiError(409, {
+      code: 'version_conflict',
+      message: 'Конфликт версии',
+      details: {},
+      request_id: 'req',
+      retryable: false,
+    })
+    expect(describeRunError(error)).toBe('Конфликт версии')
+  })
+
+  it('falls back to default for unknown input', () => {
+    expect(describeRunError(null)).toBe('Неизвестная ошибка')
+  })
+})
