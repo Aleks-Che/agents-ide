@@ -79,6 +79,7 @@ from agents_ide.domain.schemas import (
     RunCommand,
     RunStart,
     SettingsOverrides,
+    SingleAgentSpec,
 )
 from agents_ide.engine.events import event_catalog
 from agents_ide.engine.events_stream import (
@@ -1007,6 +1008,7 @@ class PreflightRequest(ApiModel):
     fake_scenario: FakeScenarioSpec | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
     overrides: SettingsOverrides = Field(default_factory=SettingsOverrides)
+    single_agent: SingleAgentSpec | None = None
 
 
 @router.post("/bindings/{binding_id}/preflight")
@@ -1028,6 +1030,7 @@ def preflight_endpoint(
         fake_scenario=payload.fake_scenario.model_dump(mode="json")
         if payload and payload.fake_scenario
         else None,
+        single_agent=payload.single_agent if payload else None,
     )
     return report.to_dict()
 

@@ -20,7 +20,15 @@ from agents_ide.domain.graph_validation import (
     validate_graph,
     validate_parameters,
 )
-from agents_ide.domain.schemas import SettingsOverrides, _reject_credentials
+from agents_ide.domain.schemas import (
+    SettingsOverrides,
+    SingleAgentSpec,
+    _reject_credentials,
+)
+from agents_ide.domain.single_agent import (
+    build_single_agent_graph,
+    filter_single_agent_configuration,
+)
 from agents_ide.domain.workspace import GitMetadata, collect_workspace
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
@@ -42,12 +50,16 @@ def preflight(
     execution_mode: str = "real",
     fake_scenario: dict[str, Any] | None = None,
     workspace_state: tuple[str, str, int, int, GitMetadata | None] | None = None,
+    single_agent: SingleAgentSpec | None = None,
 ) -> ValidationReport:
     version = session.get(PipelineVersion, binding.version_id)
     project = session.get(Project, binding.project_id)
     if version is None or project is None:
         raise AppError("not_found", "Версия или проект не найдены", 404)
-    graph = json.loads(version.graph_json)
+    if single_agent is not None:
+        graph = build_single_agent_graph(version, single_agent)
+    else:
+        graph = json.loads(version.graph_json)
     values = {**json.loads(version.inputs_json), **(inputs or {})}
     report = validate_graph(graph, inputs=values)
     check_version_features(
@@ -89,6 +101,8 @@ def preflight(
             )
         )
     configuration, sources = resolve_configuration(binding, version, overrides)
+    if single_agent is not None:
+        filter_single_agent_configuration(configuration, sources, single_agent, graph)
     limit_caps = {
         "max_calls": 10000,
         "max_node_visits": 1000,
@@ -120,6 +134,13 @@ def preflight(
         "mutable_checks_required_before_dispatch": True,
         "requires_trust": getattr(version, "origin", "local") == "imported",
     }
+    if single_agent is not None:
+        report.preview["single_agent"] = {
+            **single_agent.model_dump(mode="json"),
+            "node_id": graph["nodes"][1]["id"],
+            "selection": configuration["model_selections"].get(single_agent.role),
+        }
+        report.preview["graph"] = graph
     report.add_warning(
         ValidationIssue(
             "runtime_unimplemented",
@@ -147,9 +168,13 @@ def preflight(
         values,
         execution_mode=execution_mode,
         fake_scenario=fake_scenario,
+        graph=graph if single_agent is not None else None,
+        single_agent_role=single_agent.role if single_agent is not None else None,
     )
     report.preview["execution_mode"] = execution_mode
     report.preview["simulated"] = execution_mode == "simulated"
+    if single_agent is not None:
+        report.features = sorted({*report.features, "single_agent"})
     report.features = sorted(set(report.features) | set(json.loads(version.required_features_json)))
     if dependencies["model_groups"]:
         report.features = sorted({*report.features, "model_groups"})
@@ -240,6 +265,13 @@ def preflight(
         config = dependencies["nodes"][node_id]
         if node["type"] in ("AgentTask", "LLMRequest"):
             _candidates(session, node, config, dependencies, configuration, report)
+            if single_agent is not None:
+                for candidate in report.preview["candidates"].get(node_id, []):
+                    if single_agent.selection is not None:
+                        candidate["selection_source"] = "run"
+                    candidate["parameter_sources"].update(
+                        dict.fromkeys(single_agent.parameters or {}, "run")
+                    )
         if node["type"] == "Command":
             commands = config["commands"]
             if isinstance(commands, dict):
@@ -383,6 +415,8 @@ def preflight(
             values,
             execution_mode=execution_mode,
             fake_scenario=fake_scenario,
+            graph=graph if single_agent is not None else None,
+            single_agent_role=single_agent.role if single_agent is not None else None,
         )
     if execution_mode == "real" and all(
         n["type"]
@@ -407,6 +441,8 @@ def preflight(
         values,
         execution_mode=execution_mode,
         fake_scenario=fake_scenario,
+        graph=graph if single_agent is not None else None,
+        single_agent_role=single_agent.role if single_agent is not None else None,
     )
     return report
 

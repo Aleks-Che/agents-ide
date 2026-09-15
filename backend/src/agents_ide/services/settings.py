@@ -112,20 +112,27 @@ def execution_hash(
     *,
     execution_mode: str = "real",
     fake_scenario: dict[str, Any] | None = None,
+    graph: dict[str, Any] | None = None,
+    single_agent_role: str | None = None,
 ) -> str:
-    return content_hash(
-        {
-            "pipeline_execution_hash": version.execution_hash,
-            "configuration": configuration,
-            "dependencies": dependencies,
-            "inputs": json.loads(version.inputs_json) if inputs is None else inputs,
-            **(
-                {"execution_mode": execution_mode, "fake_scenario": fake_scenario}
-                if execution_mode == "simulated"
-                else {}
-            ),
-        }
-    )
+    payload: dict[str, Any] = {
+        "pipeline_execution_hash": version.execution_hash,
+        "configuration": configuration,
+        "dependencies": dependencies,
+        "inputs": json.loads(version.inputs_json) if inputs is None else inputs,
+        **(
+            {"execution_mode": execution_mode, "fake_scenario": fake_scenario}
+            if execution_mode == "simulated"
+            else {}
+        ),
+    }
+    if graph is not None:
+        from agents_ide.domain.graph_validation import executable_payload
+
+        payload["graph"] = executable_payload(graph)
+    if single_agent_role is not None:
+        payload["single_agent_role"] = single_agent_role
+    return content_hash(payload)
 
 
 def capture_dependencies(

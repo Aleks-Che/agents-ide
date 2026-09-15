@@ -33,7 +33,12 @@ from agents_ide.domain.graph_schema import (
     node_schemas,
     required_features_for,
 )
-from agents_ide.domain.schemas import SettingsOverrides, _reject_credentials, validate_model_params
+from agents_ide.domain.schemas import (
+    SettingsOverrides,
+    SingleAgentSpec,
+    _reject_credentials,
+    validate_model_params,
+)
 from agents_ide.domain.workspace import GitMetadata
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import PipelineBinding, PipelineVersion
@@ -831,6 +836,7 @@ def preflight(
     execution_mode: str = "real",
     fake_scenario: dict[str, Any] | None = None,
     workspace_state: tuple[str, str, int, int, GitMetadata | None] | None = None,
+    single_agent: SingleAgentSpec | None = None,
 ) -> ValidationReport:
     from agents_ide.domain.graph_preflight import preflight as run_preflight
 
@@ -842,4 +848,5 @@ def preflight(
         workspace_state=workspace_state,
         execution_mode=execution_mode,
         fake_scenario=fake_scenario,
+        single_agent=single_agent,
     )

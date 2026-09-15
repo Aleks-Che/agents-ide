@@ -2384,6 +2384,7 @@
     "llmrequest",
     "model_groups",
     "plan_control",
+    "single_agent",
     "transition_assignments",
     "verified_plan_git"
   ]

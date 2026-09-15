@@ -2743,6 +2743,16 @@
           },
           "overrides": {
             "$ref": "#/components/schemas/SettingsOverrides"
+          },
+          "single_agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SingleAgentSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "PreflightRequest",
@@ -3739,6 +3749,16 @@
             "title": "Project Id",
             "type": "string"
           },
+          "single_agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SingleAgentSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "trusted_execution_hash": {
             "anyOf": [
               {
@@ -3908,6 +3928,65 @@
           }
         },
         "title": "SettingsOverrides",
+        "type": "object"
+      },
+      "SingleAgentSpec": {
+        "additionalProperties": false,
+        "description": "Run only one AgentTask/LLMRequest node from the binding's graph.\n\nThe binding is still required: it owns the version, workspace and policy.\nThe synthetic run graph is ``Start → <selected_node> → End`` and never\npersists a new :class:`PipelineVersion` row. ``selection`` defaults to the\nbinding's resolved selection for that role; ``parameters`` override the\nnode parameters without changing the original version.",
+        "properties": {
+          "node_id": {
+            "anyOf": [
+              {
+                "pattern": "^[a-zA-Z][a-zA-Z0-9_\\-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "parameters": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "maxProperties": 128,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parameters"
+          },
+          "role": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Role",
+            "type": "string"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DirectAgentSelection"
+              },
+              {
+                "$ref": "#/components/schemas/DirectLLMSelection"
+              },
+              {
+                "$ref": "#/components/schemas/GroupSelection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "title": "SingleAgentSpec",
         "type": "object"
       },
       "ValidationError": {

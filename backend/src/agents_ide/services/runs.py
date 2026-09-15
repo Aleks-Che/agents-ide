@@ -29,6 +29,10 @@ from agents_ide.domain.schemas import (
     RunCommand,
     RunStart,
 )
+from agents_ide.domain.single_agent import (
+    build_single_agent_graph,
+    filter_single_agent_configuration,
+)
 from agents_ide.domain.workspace import (
     assert_identity_matches,
     collect_workspace,
@@ -188,6 +192,12 @@ def start_run(session: Session, payload: RunStart) -> Run:
             )
         ]
     configuration, sources = resolve_configuration(binding, version, payload.overrides)
+    synthetic_graph = None
+    if payload.single_agent is not None:
+        synthetic_graph = build_single_agent_graph(version, payload.single_agent)
+        filter_single_agent_configuration(
+            configuration, sources, payload.single_agent, synthetic_graph
+        )
     from agents_ide.domain.graph_validation import preflight as preflight_binding
 
     report = preflight_binding(
@@ -200,6 +210,7 @@ def start_run(session: Session, payload: RunStart) -> Run:
         if payload.fake_scenario
         else None,
         workspace_state=(project.workspace_entered_path, normalized, dev, ino, git),
+        single_agent=payload.single_agent,
     )
     if not report.ok:
         if len(report.errors) == 1 and report.errors[0].code in {
@@ -230,6 +241,19 @@ def start_run(session: Session, payload: RunStart) -> Run:
             "execution_hash_changed", "Исполняемая конфигурация изменилась после preflight", 409
         )
     snapshot = _build_snapshot(project, version)
+    if payload.single_agent is not None:
+        snapshot["single_agent"] = {
+            "role": payload.single_agent.role,
+            "selection": payload.single_agent.selection.model_dump(mode="json", exclude_none=True)
+            if payload.single_agent.selection is not None
+            else None,
+            "parameters": payload.single_agent.parameters,
+            **({"node_id": payload.single_agent.node_id} if payload.single_agent.node_id else {}),
+        }
+        snapshot["graph"] = synthetic_graph
+        snapshot["required_features"] = sorted(
+            set(snapshot.get("required_features", [])) | {"single_agent"}
+        )
     snapshot["execution_mode"] = payload.execution_mode
     snapshot["fake_scenario"] = (
         payload.fake_scenario.model_dump(mode="json") if payload.fake_scenario else None
@@ -258,6 +282,8 @@ def start_run(session: Session, payload: RunStart) -> Run:
         snapshot["input"]["values"],
         execution_mode=payload.execution_mode,
         fake_scenario=snapshot["fake_scenario"],
+        graph=synthetic_graph,
+        single_agent_role=payload.single_agent.role if payload.single_agent else None,
     )
     if snapshot["dependencies"]["model_groups"]:
         snapshot["required_features"] = sorted(

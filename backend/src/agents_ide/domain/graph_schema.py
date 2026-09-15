@@ -53,6 +53,7 @@ SUPPORTED_FEATURES = frozenset(
         "verified_plan_git",
         "conditions",
         "model_groups",
+        "single_agent",
         "bounded_loops",
         "transition_assignments",
     }

@@ -678,6 +678,29 @@ class ModelGroupImport(ApiModel):
 from agents_ide.adapters.fake import FakeScenarioSpec  # noqa: E402
 
 
+class SingleAgentSpec(ApiModel):
+    """Run only one AgentTask/LLMRequest node from the binding's graph.
+
+    The binding is still required: it owns the version, workspace and policy.
+    The synthetic run graph is ``Start → <selected_node> → End`` and never
+    persists a new :class:`PipelineVersion` row. ``selection`` defaults to the
+    binding's resolved selection for that role; ``parameters`` override the
+    node parameters without changing the original version.
+    """
+
+    role: NonEmptyStr
+    node_id: str | None = Field(default=None, pattern=r"^[a-zA-Z][a-zA-Z0-9_\-]{0,63}$")
+    selection: ModelSelection | None = None
+    parameters: dict[str, Any] | None = Field(default=None, max_length=128)
+
+    @field_validator("parameters")
+    @classmethod
+    def _validate_parameters(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is not None:
+            validate_model_params(value)
+        return value
+
+
 class RunStart(ApiModel):
     execution_mode: Literal["real", "simulated"] = "real"
     fake_scenario: FakeScenarioSpec | None = None
@@ -690,6 +713,7 @@ class RunStart(ApiModel):
     initiator: ShortStr = "ui"
     inputs: dict[str, Any] = Field(default_factory=dict)
     overrides: SettingsOverrides = Field(default_factory=SettingsOverrides)
+    single_agent: SingleAgentSpec | None = None
 
     @model_validator(mode="after")
     def _one_of(self) -> RunStart:

@@ -1,5 +1,194 @@
 # Журнал реализации
 
+### 2026-09-15 · Ревью этапа 9 · Одиночный агент direct/group
+
+**Статус:** замечания к одиночному запуску исправлены. Этап 9 остаётся
+частичным; реальный gate MVP этим ревью не закрывается. Запись ниже сохраняет
+первоначальный отчёт, эта запись уточняет итоговую реализацию и проверки.
+
+**Найдено и исправлено.**
+
+- Снимок содержал `required_features: ["single_agent", …]`, но движок не
+  объявлял поддержку этой возможности: успешно созданный Run уходил в
+  `waiting_input/schema_unsupported`. Возможность зарегистрирована в
+  [`graph_schema.py`](../backend/src/agents_ide/domain/graph_schema.py),
+  контракт возможностей обновлён. Добавлена проверка завершения через
+  настоящий процесс worker с fake-адаптером.
+- [`single_agent.py`](../backend/src/agents_ide/domain/single_agent.py)
+  сохраняет исходный ID узла, prompt, `timeout_seconds` и `max_retries`.
+  Раньше ограничения узла терялись, а ID всегда заменялся на `agent`.
+  Опциональный `SingleAgentSpec.node_id` снимает неоднозначность общих ролей:
+  без него роль с несколькими узлами возвращает `single_agent_node_required`.
+  UI предлагает именно существующие узлы, включая несколько узлов одной
+  роли; неиспользуемые декларации ролей не становятся вариантами запуска.
+- `parameters` дополняет параметры узла по полям, поэтому пустой `{}`
+  сохраняет наследование. Прямой выбор и группа заменяются целиком; при
+  наследовании сохраняется приоритет назначения узла. Неиспользуемое
+  назначение той же роли на архивную группу больше не блокирует узел.
+  Фильтрация охватывает также legacy assignments/overrides, параметры
+  остальных ролей и их источники. Унаследованный фильтр команд полного
+  pipeline опускается: синтетический граф не содержит Command. Явно
+  переданные неизвестные ID команд по-прежнему отклоняет preflight.
+- Preflight показывает фактический синтетический граф, узел, выбор,
+  порядок кандидатов и источники параметров Run. Форма больше не запрашивает
+  резолюцию полного pipeline для одиночного запуска и не показывает его
+  посторонние роли/устаревшие назначения под «Будут использованы».
+  Восстановлены видимые ошибки и повтор загрузки версии в обоих режимах;
+  ошибки загрузки исполнителей также видимы и позволяют повторить запрос.
+- `execution_hash` учитывает исполняемое содержимое синтетического графа;
+  labels/координаты/visual исключаются общей канонизацией, как у pipeline.
+  Изменение параметров после проверки отклоняется с
+  `execution_hash_changed`, исходные версия и snapshot не меняются.
+
+**Проверки ревью.**
+
+- [`test_stage9_single_agent.py`](../backend/tests/integration/test_stage9_single_agent.py):
+  **19 passed** после финальных изменений (в исходном отчёте было 8).
+  Четыре комбинации AgentTask/LLMRequest × direct/group доходят до completed
+  через очередь и Runner; отдельно проверен процесс worker. Проверены
+  неизменность snapshot/версии, единственный внешний вызов выбранного узла,
+  тайм-аут/повторы, наследование, неоднозначные роли, контекст плана,
+  визуально эквивалентные графы и отказ изменённых параметров со старым hash.
+- Ещё **121 связанный backend-тест** этапов 2A/3/4/5/9 прошёл в расширенном
+  прогоне. Полный backend-набор не запускался. Предупреждения pytest —
+  существующие deprecation Starlette/httpx/anyio и ACL кэша pytest.
+- Vitest: **95 passed**; ESLint/Prettier и TypeScript/Vite build — зелёные.
+  Добавлены проверки списка конкретных узлов, `node_id`, несовместимого
+  типа группы/ресурса и неоднозначного direct-выбора.
+- Playwright: **17 passed** полным набором. Два новых сценария в
+  [`single-agent.spec.ts`](../frontend/tests/e2e/single-agent.spec.ts)
+  работают с реальным локальным API: наследование → direct → group,
+  исключение посторонней архивной группы, фактические параметры/кандидаты,
+  ошибки загрузки с повтором, потеря ответа после создания Run и reload с
+  повтором того же ключа. Ширина 390 px проверена без горизонтального
+  переполнения. Браузерные Run ставятся в очередь в simulated-режиме;
+  исполнение проверяется отдельными backend-тестами.
+- Ruff check/format, mypy Windows + Linux (82 модуля),
+  `generate_contracts.py --check` — зелёные. OpenAPI/TypeScript и
+  `docs/api/nodes.json` синхронизированы. Wheel/sdist не пересобирались.
+
+**Границы и нюансы.**
+
+- Привязка и исходная версия обязательны. Схема входов и значения по
+  умолчанию, workspace и политики наследуются; это не создание произвольного
+  агента без шаблона. Новая PipelineVersion при запуске не создаётся.
+- Узел, чей основной prompt требует результатов предыдущих шагов или
+  выбранного пункта плана, а также `plan_check`, возвращает
+  `single_agent_context_required` до отправки задания. Нужно запустить
+  pipeline целиком либо выбрать самодостаточный узел. Предыдущие результаты,
+  PlanItem и evidence из другого Run автоматически не подставляются.
+- Обязательный preflight, явное доверие импортированной версии и устойчивый
+  idempotency key сохраняются. Потеря ответа, закрытие формы и reload вкладки
+  повторяют весь исходный запрос, включая `single_agent`. Хранилище повтора
+  ограничено текущей вкладкой (`sessionStorage`).
+- Клиент проверяет JSON, выбор доступного ресурса и соответствие его типа
+  узлу; окончательная проверка параметров/capability остаётся серверной.
+  JSON-поле не заменяет редактор подтверждённых параметров моделей.
+- Direct/group проверены на fake для AgentTask и LLMRequest. Реальные
+  платные модели, OpenCode, writable permissions, весь пресет, heavy/flash,
+  Git/stop/resume/recovery в gate MVP этим ревью не проверялись.
+  Полная сводка группы в Run, редактор параметров и остальные открытые
+  пункты этапов 6/9/9A/10/11 сохраняются в плане.
+
+### 2026-09-15 · Этап 9 · Запуск одиночного агента direct/group из чата
+
+**Статус:** добавлен отдельный пользовательский сценарий запуска одного
+`AgentTask` или `LLMRequest` из чата. Привязка остаётся обязательной (она
+даёт версию, граф и workspace), но исполняется синтетический граф
+`Start → <узел> → End` без новой `PipelineVersion`. Этап 9 остаётся
+частичным: редактор параметров кандидатов, полная сводка выбранной группы в
+экране Run, gate MVP с реальным OpenCode/LLM/heavy/flash и наблюдение UI
+(этап 11) остаются следующими пунктами.
+
+**Реализовано.**
+
+- [`backend/src/agents_ide/domain/schemas.py`](../backend/src/agents_ide/domain/schemas.py:687) —
+  новая `SingleAgentSpec` (`role` + опциональные `selection`/`parameters`)
+  и поле `single_agent` в `RunStart`. Выбор direct/group проходит через
+  прежний `ModelSelection`, запрещено переопределять ресурсы через
+  `parameters` (валидируется против `validate_model_params`).
+- [`backend/src/agents_ide/domain/single_agent.py`](../backend/src/agents_ide/domain/single_agent.py:1) —
+  `build_single_agent_graph` собирает синтетический граф из версии +
+  выбранного `role`, оставляя `pipeline_version_id` неизменным. Проверяет,
+  что узел — `AgentTask`/`LLMRequest`, тип узла и выбора модели
+  совпадают, и поднимает понятные `single_agent_*` ошибки.
+- [`backend/src/agents_ide/domain/graph_preflight.py`](../backend/src/agents_ide/domain/graph_preflight.py:36) и
+  [`graph_validation.py`](../backend/src/agents_ide/domain/graph_validation.py:825) — `preflight`
+  принимает `single_agent`, подменяет граф, фильтрует резолюцию
+  (`_filter_configuration_for_single_agent`) и пишет финальный
+  `execution_hash` от `graph` + `single_agent_role`.
+- [`backend/src/agents_ide/services/settings.py`](../backend/src/agents_ide/services/settings.py:107) —
+  `execution_hash` дополнен опциональными `graph` и `single_agent_role`,
+  чтобы снимок одиночного агента не смешивался с полным графом версии.
+- [`backend/src/agents_ide/services/runs.py`](../backend/src/agents_ide/services/runs.py:190) —
+  `start_run` использует тот же фильтр перед `preflight` и кладёт
+  синтетический граф + `single_agent`-метаданные в snapshot; Run
+  остаётся привязан к `pipeline_version_id` оригинала.
+- [`backend/src/agents_ide/api/domain.py`](../backend/src/agents_ide/api/domain.py:1005) —
+  `PreflightRequest` принимает `single_agent` и прокидывает его в
+  `preflight_binding`. OpenAPI/TS-контракты перегенерированы.
+- [`frontend/src/features/runs/LaunchRunDialog.tsx`](../frontend/src/features/runs/LaunchRunDialog.tsx:1) —
+  режим запуска «Привязка проекта» / «Одиночный агент». Для одиночного
+  показывается выбор роли из графа версии (`graphRoles`), табы
+  «Наследовать» / «Прямая модель» / «Группа», ресурсная панель
+  (harness/connection/group), JSON-поле параметров и сводка роли в
+  preflight. Все клиентские проверки повторяют серверные.
+- [`frontend/src/features/runs/launch_single_agent.ts`](../frontend/src/features/runs/launch_single_agent.ts:1) —
+  чистые хелперы `buildSingleAgent` и `parseOptionalJsonObject`
+  (причина сохраняется через `Error.cause`).
+- [`frontend/src/app/styles.css`](../frontend/src/app/styles.css:1173) —
+  секции `.single-agent-form` и `.single-agent-row`.
+
+**Нюансы и решения.**
+
+- При выборе роли сбрасывается ранее выбранный исполнитель и
+  `check.reset()` — изменение роли инвалидирует любой прошлый preflight.
+- Граф версии без ролей в `AgentTask`/`LLMRequest` не предлагает
+  одиночный запуск и подсказывает использовать запуск привязки.
+- Роль, помеченная `agent`, требует harness-профиль и блокирует выбор
+  LLM-подключения (и наоборот); kind mismatch отдаётся сервером с кодом
+  `single_agent_selection_mismatch`.
+- Невалидные `parameters` отклоняются в `SingleAgentSpec`
+  (`validate_model_params`), клиент дополнительно парсит JSON.
+- Подсказка об одной модели у implementer/verifier остаётся только при
+  direct-выборе и direct-выборах в `binding.model_selections`; одиночный
+  агент использует только `single_agent.selection` (если задан) и не
+  трогает привязку.
+- Snapshot содержит `single_agent`-метаданные и подменённый граф,
+  иммутабельные настройки версии и `pipeline_version_id` сохраняются;
+  новая `PipelineVersion` не создаётся.
+- Независимые селекторы привязки остаются (как и для групп), но Run
+  фильтрует `model_selections` до выбранной роли, поэтому архивные
+  группы в других ролях не блокируют запуск.
+
+**Проверки.**
+
+- Backend: новый `tests/integration/test_stage9_single_agent.py` —
+  **8 passed**: synthetic graph и pinned selection для agent/LLM;
+  fallback к выбору привязки; LLM-группа с порядком кандидатов; отказ
+  по `single_agent_role_unknown` и `single_agent_selection_mismatch`;
+  изоляция архивной группы в другой роли; отказ параметров с
+  routing-ключами (`validation_error`); идемпотентный replay с тем же
+  `snapshot_hash`. Существующие `test_stage9_*`,
+  `test_stage2a_*`, `test_stage3_*` остаются зелёными (157 passed
+  на сокращённом наборе интеграционных тестов).
+- Ruff check/format, mypy src (82 модуля), `generate_contracts.py
+  --check` — синхронизированы.
+- Frontend: новый `tests/launch_single_agent.test.ts` — **18 passed**
+  (валидация параметров, выбор ресурса, group, kind mismatch,
+  архивные ресурсы). Все существующие vitest — **93 passed**.
+- ESLint, Prettier, `tsc -b && vite build` — зелёные; бандл 397,78 kB
+  (gzip 110,17 kB).
+- Playwright и сборка wheel/sdist не запускались в этой итерации.
+  Реальная модель/harness не вызывались; всё проверено через
+  `simulated` режим и локальные фикстуры.
+
+**Границы следующей работы.** Редактор параметров кандидатов в группах
+(после подтверждения capability конкретных моделей), полная сводка
+закреплённых кандидатов и фактического исполнителя в экране Run (вне
+окна событий), gate MVP с реальным OpenCode/LLM/heavy/flash и наблюдение
+UI (этап 11) остаются открытыми пунктами плана.
+
 ### 2026-09-15 · Ревью этапа 9 · Запуск привязки из чата
 
 **Статус:** замечания к форме запуска исправлены. Это запуск существующей

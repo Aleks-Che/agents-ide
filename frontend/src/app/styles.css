@@ -1170,6 +1170,35 @@ button.primary {
   display: list-item;
 }
 
+.launch-dialog .single-agent-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid #2c383c;
+  border-radius: 10px;
+  padding: 14px;
+  background: #0c1714;
+}
+
+.launch-dialog .single-agent-form > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.launch-dialog .single-agent-row {
+  border: 1px solid #25383c;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.launch-dialog .single-agent-row .group-toggle {
+  align-self: flex-start;
+}
+
 .chat-runs header {
   display: flex;
   flex-direction: column;

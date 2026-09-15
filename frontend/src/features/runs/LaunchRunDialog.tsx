@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
+import type { ApiSchemas } from '../../api/generated'
 import {
   bindingsApi,
   templatesApi,
@@ -8,12 +9,16 @@ import {
   type PreflightReport,
   type ResolvedSettings,
 } from '../../api/bindings'
+import { connectionsApi, groupsApi, harnessApi } from '../../api/settings'
 import { runsApi, type RunRecord } from '../../api/runs'
 import type { Chat, Project } from '../../api/projects'
 import { Modal } from '../../app/Modal'
 import { formatDateTime, shortHash } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
-import { formatSettingSource } from '../bindings/utils'
+import {
+  formatSettingSource,
+  type BindingSelectionDraft,
+} from '../bindings/utils'
 import {
   launchParameters,
   launchError,
@@ -22,6 +27,14 @@ import {
   uncertainStart,
   type StartRequest,
 } from './launch'
+import {
+  buildSingleAgent,
+  singleAgentNodes,
+  type SingleAgentNode,
+  type LaunchResources,
+} from './launch_single_agent'
+
+type LaunchMode = 'binding' | 'single_agent'
 
 interface LaunchRunDialogProps {
   project: Project
@@ -48,12 +61,20 @@ export function LaunchRunDialog({
 }: LaunchRunDialogProps) {
   const csrf = useCsrfToken()
   const client = useQueryClient()
+  const [mode, setMode] = useState<LaunchMode>('binding')
   const [bindingId, setBindingId] = useState('')
-  const [mode, setMode] = useState<'real' | 'simulated'>('real')
+  const [executionMode, setExecutionMode] = useState<'real' | 'simulated'>(
+    'real',
+  )
   const [useDraft, setUseDraft] = useState(false)
   const [inputsText, setInputsText] = useState('{}')
   const [limitsText, setLimitsText] = useState('{}')
   const [commandsText, setCommandsText] = useState('null')
+  const [singleNodeId, setSingleNodeId] = useState('')
+  const [singleSelection, setSingleSelection] = useState<BindingSelectionDraft>(
+    { kind: null },
+  )
+  const [singleParametersText, setSingleParametersText] = useState('{}')
   const [trustedKey, setTrustedKey] = useState<string | null>(null)
   const [storage] = useState(() => {
     try {
@@ -76,22 +97,34 @@ export function LaunchRunDialog({
     queryFn: () => templatesApi.getVersion(selectedBinding!.version_id),
     enabled: Boolean(selectedBinding),
   })
+  const resourceState = useLaunchResources(mode === 'single_agent')
+  const resources = resourceState.resources
+  const nodes = useMemo(
+    () => (version.data ? singleAgentNodes(version.data.graph) : []),
+    [version.data],
+  )
+  const selectedNode = nodes.find((node) => node.id === singleNodeId)
+
   // Every user-editable launch input invalidates both the preview and import consent.
   const formKey = JSON.stringify([
+    mode,
     bindingId,
     selectedBinding?.version,
-    mode,
+    executionMode,
     inputsText,
     limitsText,
     commandsText,
     useDraft,
     draft,
+    singleNodeId,
+    singleSelection,
+    singleParametersText,
   ])
   const check = useMutation({
     mutationFn: async () => {
       if (!selectedBinding) throw new Error('Выберите доступную привязку.')
       const parameters = launchParameters(
-        mode,
+        executionMode,
         inputsText,
         limitsText,
         commandsText,
@@ -99,17 +132,43 @@ export function LaunchRunDialog({
       const message = useDraft && draft.trim() ? draft.trim() : undefined
       if (message && message.length > 65536)
         throw new Error('Черновик превышает 65536 символов.')
+      let singleAgent: ApiSchemas['SingleAgentSpec'] | undefined
+      if (mode === 'single_agent') {
+        if (!selectedNode) throw new Error('Выберите узел одиночного агента.')
+        singleAgent = buildSingleAgent(
+          selectedNode.role,
+          singleSelection,
+          singleParametersText,
+          resources,
+          selectedNode,
+        )
+        parameters.single_agent = singleAgent
+      }
       const [report, resolved] = await Promise.all([
         bindingsApi.preflight(bindingId, csrf, parameters),
-        bindingsApi
-          .resolvedWithOverrides(bindingId, parameters.overrides ?? {}, csrf)
-          .then((data) => ({ data, error: null }))
-          .catch((error: unknown) => ({
-            data: null,
-            error: launchError(error),
-          })),
+        singleAgent
+          ? Promise.resolve({ data: null, error: null })
+          : bindingsApi
+              .resolvedWithOverrides(
+                bindingId,
+                parameters.overrides ?? {},
+                csrf,
+              )
+              .then((data) => ({ data, error: null }))
+              .catch((error: unknown) => ({
+                data: null,
+                error: launchError(error),
+              })),
       ])
-      return { key: formKey, report, resolved, parameters, message, bindingId }
+      return {
+        key: formKey,
+        report,
+        resolved,
+        parameters,
+        message,
+        bindingId,
+        singleAgent,
+      }
     },
   })
   const checked = check.data?.key === formKey ? check.data : null
@@ -145,10 +204,12 @@ export function LaunchRunDialog({
       sending.current = false
     },
   })
+  const singleAgentReady = mode !== 'single_agent' || Boolean(selectedNode)
   const ready = Boolean(
     checked?.report.ok &&
     checked.report.execution_hash &&
-    (!requiresTrust || trustedKey === formKey),
+    (!requiresTrust || trustedKey === formKey) &&
+    singleAgentReady,
   )
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
@@ -165,6 +226,9 @@ export function LaunchRunDialog({
         initiator: 'ui',
         idempotency_key: crypto.randomUUID(),
         trusted_execution_hash: checked.report.execution_hash,
+      }
+      if (mode === 'single_agent' && checked.singleAgent) {
+        body.single_agent = checked.singleAgent
       }
     }
     sending.current = true
@@ -206,6 +270,12 @@ export function LaunchRunDialog({
             <p>
               Ключ: <code>{pending.idempotency_key}</code> · режим{' '}
               {pending.execution_mode}
+              {pending.single_agent ? (
+                <>
+                  {' '}
+                  · одиночный агент <code>{pending.single_agent.role}</code>
+                </>
+              ) : null}
             </p>
             <details>
               <summary>Сохранённый запрос</summary>
@@ -214,6 +284,35 @@ export function LaunchRunDialog({
           </section>
         ) : (
           <>
+            <fieldset className="mode-toggle">
+              <legend>Режим запуска</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="launch-mode-kind"
+                  checked={mode === 'binding'}
+                  onChange={() => {
+                    setMode('binding')
+                    check.reset()
+                    setTrustedKey(null)
+                  }}
+                />
+                Привязка проекта
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="launch-mode-kind"
+                  checked={mode === 'single_agent'}
+                  onChange={() => {
+                    setMode('single_agent')
+                    check.reset()
+                    setTrustedKey(null)
+                  }}
+                />
+                Одиночный агент
+              </label>
+            </fieldset>
             {bindingsError ? (
               <p role="alert" className="error">
                 Не удалось загрузить привязки: {launchError(bindingsError)}{' '}
@@ -231,6 +330,9 @@ export function LaunchRunDialog({
               value={bindingId}
               onChange={(event) => {
                 setBindingId(event.target.value)
+                setSingleNodeId('')
+                setSingleSelection({ kind: null })
+                setSingleParametersText('{}')
                 check.reset()
                 setTrustedKey(null)
               }}
@@ -259,28 +361,28 @@ export function LaunchRunDialog({
               </p>
             ) : null}
             <fieldset className="mode-toggle">
-              <legend>Режим</legend>
+              <legend>Режим исполнения</legend>
               <label>
                 <input
                   type="radio"
-                  name="launch-mode"
-                  checked={mode === 'real'}
-                  onChange={() => setMode('real')}
+                  name="launch-execution-mode"
+                  checked={executionMode === 'real'}
+                  onChange={() => setExecutionMode('real')}
                 />
                 Реальный
               </label>
               <label>
                 <input
                   type="radio"
-                  name="launch-mode"
-                  checked={mode === 'simulated'}
-                  onChange={() => setMode('simulated')}
+                  name="launch-execution-mode"
+                  checked={executionMode === 'simulated'}
+                  onChange={() => setExecutionMode('simulated')}
                 />
                 Имитация (fake)
               </label>
             </fieldset>
             {version.isLoading ? (
-              <p role="status">Загружаем входы версии…</p>
+              <p role="status">Загружаем граф версии…</p>
             ) : null}
             {version.error ? (
               <p role="alert" className="error">
@@ -289,6 +391,46 @@ export function LaunchRunDialog({
                   Повторить загрузку версии
                 </button>
               </p>
+            ) : null}
+            {mode === 'single_agent' && selectedBinding ? (
+              <>
+                {resourceState.loading ? (
+                  <p role="status">Загружаем исполнителей…</p>
+                ) : null}
+                {resourceState.errors.map((error, index) => (
+                  <p role="alert" className="error" key={index}>
+                    Не удалось загрузить исполнителей: {launchError(error)}{' '}
+                    <button type="button" onClick={resourceState.retry}>
+                      Повторить загрузку исполнителей
+                    </button>
+                  </p>
+                ))}
+                <SingleAgentForm
+                  nodes={nodes}
+                  loaded={Boolean(version.data)}
+                  nodeId={singleNodeId}
+                  onNode={(nodeId) => {
+                    setSingleNodeId(nodeId)
+                    setSingleSelection({ kind: null })
+                    setSingleParametersText('{}')
+                    check.reset()
+                    setTrustedKey(null)
+                  }}
+                  selection={singleSelection}
+                  onSelection={(draft) => {
+                    setSingleSelection(draft)
+                    check.reset()
+                    setTrustedKey(null)
+                  }}
+                  parametersText={singleParametersText}
+                  onParameters={(text) => {
+                    setSingleParametersText(text)
+                    check.reset()
+                    setTrustedKey(null)
+                  }}
+                  resources={resources}
+                />
+              </>
             ) : null}
             {version.data ? (
               <details>
@@ -385,7 +527,8 @@ export function LaunchRunDialog({
                     !version.data ||
                     Boolean(version.error) ||
                     Boolean(bindingsError) ||
-                    !csrf
+                    !csrf ||
+                    (mode === 'single_agent' && !selectedNode)
                   }
                   onClick={() => {
                     setTrustedKey(null)
@@ -411,6 +554,7 @@ export function LaunchRunDialog({
                   <LaunchPreview
                     report={checked.report}
                     resolved={checked.resolved.data}
+                    singleAgent={checked.singleAgent}
                   />
                   {checked.resolved.error ? (
                     <p className="error">
@@ -453,7 +597,10 @@ export function LaunchRunDialog({
               !csrf ||
               Boolean(storage.error) ||
               (!pending &&
-                (!ready || Boolean(bindingsError) || !selectedBinding))
+                (!ready ||
+                  Boolean(bindingsError) ||
+                  !selectedBinding ||
+                  (mode === 'single_agent' && !singleAgentReady)))
             }
           >
             {launch.isPending
@@ -468,14 +615,278 @@ export function LaunchRunDialog({
   )
 }
 
+function useLaunchResources(enabled: boolean) {
+  const harnesses = useQuery({
+    enabled,
+    queryKey: ['harness_profiles', { includeArchived: true }],
+    queryFn: () => harnessApi.list({ includeArchived: true }),
+  })
+  const connections = useQuery({
+    enabled,
+    queryKey: ['connections', { includeArchived: true }],
+    queryFn: () => connectionsApi.list({ includeArchived: true }),
+  })
+  const agentGroups = useQuery({
+    enabled,
+    queryKey: ['model_groups', { kind: 'agent', includeArchived: true }],
+    queryFn: () => groupsApi.list({ kind: 'agent', includeArchived: true }),
+  })
+  const llmGroups = useQuery({
+    enabled,
+    queryKey: ['model_groups', { kind: 'llm', includeArchived: true }],
+    queryFn: () => groupsApi.list({ kind: 'llm', includeArchived: true }),
+  })
+  return {
+    loading: [harnesses, connections, agentGroups, llmGroups].some(
+      (query) => query.isLoading,
+    ),
+    errors: [harnesses, connections, agentGroups, llmGroups].flatMap((query) =>
+      query.error ? [query.error] : [],
+    ),
+    retry: () => {
+      for (const query of [harnesses, connections, agentGroups, llmGroups])
+        void query.refetch()
+    },
+    resources: {
+      groups: { agent: agentGroups.data ?? [], llm: llmGroups.data ?? [] },
+      harnesses: harnesses.data ?? [],
+      connections: connections.data ?? [],
+    },
+  }
+}
+
+interface SingleAgentFormProps {
+  nodes: SingleAgentNode[]
+  loaded: boolean
+  nodeId: string
+  onNode: (nodeId: string) => void
+  selection: BindingSelectionDraft
+  onSelection: (draft: BindingSelectionDraft) => void
+  parametersText: string
+  onParameters: (text: string) => void
+  resources: LaunchResources
+}
+
+function SingleAgentForm({
+  nodes,
+  loaded,
+  nodeId,
+  onNode,
+  selection,
+  onSelection,
+  parametersText,
+  onParameters,
+  resources,
+}: SingleAgentFormProps) {
+  const node = nodes.find((item) => item.id === nodeId)
+  return (
+    <section className="single-agent-form" aria-label="Одиночный агент">
+      <header>
+        <strong>Одиночный агент</strong>
+      </header>
+      {loaded && nodes.length === 0 ? (
+        <p className="hint">
+          Граф этой версии не объявляет AgentTask/LLMRequest с ролью. Одиночный
+          запуск недоступен — используйте запуск привязки.
+        </p>
+      ) : null}
+      <label htmlFor="single-role">Узел и роль</label>
+      <select
+        id="single-role"
+        value={nodeId}
+        onChange={(event) => onNode(event.target.value)}
+      >
+        <option value="">Выберите узел</option>
+        {nodes.map((node) => (
+          <option key={node.id} value={node.id}>
+            {node.role} · {node.kind} · {node.id}
+          </option>
+        ))}
+      </select>
+      {node ? (
+        <SingleAgentDirectRow
+          kind={node.kind}
+          draft={selection}
+          onChange={onSelection}
+          resources={resources}
+        />
+      ) : null}
+      <label htmlFor="single-parameters">Параметры модели (JSON)</label>
+      <textarea
+        id="single-parameters"
+        rows={3}
+        value={parametersText}
+        onChange={(event) => onParameters(event.target.value)}
+      />
+      <p className="hint">
+        Указанные поля дополняют параметры узла; пустой объект сохраняет
+        наследование. Допускаются только поля возможностей модели (temperature,
+        top_p и т. п.); credentials, role, prompt, инструменты и адреса
+        запрещены и будут отклонены сервером.
+      </p>
+    </section>
+  )
+}
+
+interface SingleAgentDirectRowProps {
+  kind: 'agent' | 'llm'
+  draft: BindingSelectionDraft
+  onChange: (draft: BindingSelectionDraft) => void
+  resources: LaunchResources
+}
+
+function SingleAgentDirectRow({
+  kind,
+  draft,
+  onChange,
+  resources,
+}: SingleAgentDirectRowProps) {
+  const isAgent = kind === 'agent'
+  const options = isAgent
+    ? resources.harnesses.filter((profile) => !profile.archived)
+    : resources.connections.filter((conn) => !conn.archived)
+  const groups = isAgent ? resources.groups.agent : resources.groups.llm
+  const setDirect = (patch: Partial<BindingSelectionDraft>) => {
+    onChange({ ...draft, ...patch, kind: 'direct' })
+  }
+  const updateGroup = (groupId: string) => {
+    onChange({ kind: 'group', group_id: groupId })
+  }
+  return (
+    <fieldset className="single-agent-row" aria-label="Выбор исполнителя">
+      <legend>Выбор исполнителя</legend>
+      <div className="group-toggle" role="tablist" aria-label="Тип выбора">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={draft.kind === null}
+          className={`quiet tab${draft.kind === null ? ' selected' : ''}`}
+          onClick={() => onChange({ kind: null })}
+        >
+          Наследовать
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={draft.kind === 'direct'}
+          className={`quiet tab${draft.kind === 'direct' ? ' selected' : ''}`}
+          onClick={() => {
+            if (draft.kind === 'direct') return
+            onChange({ kind: 'direct', model_id: '' })
+          }}
+        >
+          Прямая модель
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={draft.kind === 'group'}
+          className={`quiet tab${draft.kind === 'group' ? ' selected' : ''}`}
+          onClick={() => {
+            if (draft.kind === 'group') return
+            onChange({ kind: 'group', group_id: '' })
+          }}
+        >
+          Группа
+        </button>
+      </div>
+      {draft.kind === null ? (
+        <p className="hint">
+          Будет использован выбор из привязки или узла графа.
+        </p>
+      ) : null}
+      {draft.kind === 'direct' ? (
+        <>
+          <label htmlFor="single-resource">
+            {isAgent ? 'Harness-профиль' : 'LLM-подключение'}
+          </label>
+          <select
+            id="single-resource"
+            value={
+              isAgent
+                ? (draft.harness_profile_id ?? '')
+                : (draft.provider_connection_id ?? '')
+            }
+            onChange={(event) => {
+              if (isAgent) {
+                setDirect({
+                  harness_profile_id: event.target.value,
+                  provider_connection_id: undefined,
+                })
+              } else {
+                setDirect({
+                  provider_connection_id: event.target.value,
+                  harness_profile_id: undefined,
+                })
+              }
+            }}
+          >
+            <option value="" disabled>
+              {options.length === 0
+                ? 'Нет доступных ресурсов'
+                : 'Выберите ресурс'}
+            </option>
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.name}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="single-model-id">ID модели</label>
+          <input
+            id="single-model-id"
+            value={draft.model_id ?? ''}
+            onChange={(event) => setDirect({ model_id: event.target.value })}
+            spellCheck={false}
+          />
+        </>
+      ) : null}
+      {draft.kind === 'group' ? (
+        <>
+          <label htmlFor="single-group">Группа моделей</label>
+          <select
+            id="single-group"
+            value={draft.group_id ?? ''}
+            onChange={(event) => updateGroup(event.target.value)}
+          >
+            <option value="" disabled>
+              {groups.length === 0 ? 'Нет доступных групп' : 'Выберите группу'}
+            </option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id} disabled={group.archived}>
+                {group.name}
+                {group.archived ? ' · архив' : ''} · {group.members.length}{' '}
+                кандидатов
+              </option>
+            ))}
+          </select>
+          {draft.group_id ? (
+            <span className="muted">
+              {groups
+                .find((group) => group.id === draft.group_id)
+                ?.members.filter((member) => member.enabled)
+                .map((member) => member.model_id)
+                .join(', ') || 'нет включённых кандидатов'}
+            </span>
+          ) : null}
+        </>
+      ) : null}
+    </fieldset>
+  )
+}
+
 function LaunchPreview({
   report,
   resolved,
+  singleAgent,
 }: {
   report: PreflightReport
   resolved: ResolvedSettings | null
+  singleAgent: ApiSchemas['SingleAgentSpec'] | undefined
 }) {
   const preview = report.preview
+  const effectiveSingle = (preview.single_agent ?? singleAgent) as
+    ApiSchemas['SingleAgentSpec'] | undefined
   const candidates = (preview.candidates ?? {}) as Record<
     string,
     Array<Record<string, unknown>>
@@ -487,6 +898,25 @@ function LaunchPreview({
           ? 'Проверка пройдена. Доступность ресурсов повторно проверит worker перед исполнением.'
           : 'Проверка выявила ошибки.'}
       </p>
+      {effectiveSingle ? (
+        <p className="hint">
+          Запускается один агент: <code>{effectiveSingle.role}</code> · узел{' '}
+          <code>{effectiveSingle.node_id}</code>
+          {effectiveSingle.selection
+            ? ` · ${
+                effectiveSingle.selection.kind === 'group'
+                  ? `группа ${String(effectiveSingle.selection.group_id)}`
+                  : `прямая модель ${String(effectiveSingle.selection.model_id)}`
+              }`
+            : ' · наследуемый прямой выбор; параметры ниже'}
+        </p>
+      ) : null}
+      {effectiveSingle && preview.graph ? (
+        <details>
+          <summary>Граф одиночного запуска</summary>
+          <pre>{JSON.stringify(preview.graph, null, 2)}</pre>
+        </details>
+      ) : null}
       {(['errors', 'warnings'] as const).map((kind) =>
         report[kind].length ? (
           <ul
@@ -561,26 +991,41 @@ function LaunchPreview({
         ))}
         <details>
           <summary>Итоговые настройки и происхождение</summary>
-          <table className="provenance-table">
-            <thead>
-              <tr>
-                <th>Настройка</th>
-                <th>Источник</th>
-                <th>Значение</th>
-              </tr>
-            </thead>
-            <tbody>
-              {resolved?.provenance?.map((item) => (
-                <tr key={item.name}>
-                  <td>{item.name}</td>
-                  <td>{formatSettingSource(item.source)}</td>
-                  <td>
-                    <pre>{JSON.stringify(item.value, null, 2)}</pre>
-                  </td>
+          {singleAgent ? (
+            <pre>
+              {JSON.stringify(
+                {
+                  settings: preview.resolved_settings,
+                  sources: preview.setting_sources,
+                  single_agent: preview.single_agent,
+                  candidates,
+                },
+                null,
+                2,
+              )}
+            </pre>
+          ) : (
+            <table className="provenance-table">
+              <thead>
+                <tr>
+                  <th>Настройка</th>
+                  <th>Источник</th>
+                  <th>Значение</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {resolved?.provenance?.map((item) => (
+                  <tr key={item.name}>
+                    <td>{item.name}</td>
+                    <td>{formatSettingSource(item.source)}</td>
+                    <td>
+                      <pre>{JSON.stringify(item.value, null, 2)}</pre>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </details>
         <details>
           <summary>Входы, команды, назначения данных и Git</summary>
