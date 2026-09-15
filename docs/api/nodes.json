@@ -286,6 +286,12 @@
                   "maximum": 200,
                   "minimum": 1,
                   "type": "integer"
+                },
+                "scope": {
+                  "enum": [
+                    "item",
+                    "run"
+                  ]
                 }
               },
               "required": [
@@ -490,6 +496,12 @@
                       "additionalProperties": true,
                       "type": "object"
                     },
+                    "plan_check": {
+                      "enum": [
+                        "current",
+                        "all"
+                      ]
+                    },
                     "prompt": {
                       "maxLength": 65536,
                       "minLength": 1,
@@ -610,6 +622,12 @@
                     "params": {
                       "additionalProperties": true,
                       "type": "object"
+                    },
+                    "plan_check": {
+                      "enum": [
+                        "current",
+                        "all"
+                      ]
                     },
                     "prompt": {
                       "maxLength": 65536,
@@ -875,11 +893,30 @@
                   "additionalProperties": false,
                   "properties": {
                     "context_paths": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "maxItems": 100,
-                      "type": "array"
+                      "oneOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "maxItems": 100,
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "ref": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ref"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "include_run_history": {
+                      "type": "boolean"
                     },
                     "include_untracked": {
                       "type": "boolean"
@@ -938,6 +975,9 @@
                         "collect",
                         "resolve_requests"
                       ]
+                    },
+                    "requests_from_node_id": {
+                      "type": "string"
                     },
                     "sources": {
                       "items": {
@@ -1054,12 +1094,46 @@
                     "allow_untracked": {
                       "type": "boolean"
                     },
+                    "allowlist": {
+                      "oneOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "maxItems": 100,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "ref": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ref"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "hook_policy": {
+                      "enum": [
+                        "allow_pre_configured",
+                        "fail_on_unattended"
+                      ]
+                    },
                     "message": {
                       "maxLength": 512,
                       "type": "string"
                     },
                     "no_changes_is_progress": {
                       "type": "boolean"
+                    },
+                    "verification_node_id": {
+                      "pattern": "^[a-zA-Z][a-zA-Z0-9_\\-]{0,63}$",
+                      "type": "string"
                     }
                   },
                   "type": "object"
@@ -1171,6 +1245,12 @@
                     "commit_node_id": {
                       "pattern": "^[a-zA-Z][a-zA-Z0-9_\\-]{0,63}$",
                       "type": "string"
+                    },
+                    "completion_policy": {
+                      "enum": [
+                        "verified_commit",
+                        "verified_only"
+                      ]
                     },
                     "initial_mode": {
                       "enum": [
@@ -1331,6 +1411,12 @@
               "additionalProperties": true,
               "type": "object"
             },
+            "plan_check": {
+              "enum": [
+                "current",
+                "all"
+              ]
+            },
             "prompt": {
               "maxLength": 65536,
               "minLength": 1,
@@ -1413,11 +1499,30 @@
           "additionalProperties": false,
           "properties": {
             "context_paths": {
-              "items": {
-                "type": "string"
-              },
-              "maxItems": 100,
-              "type": "array"
+              "oneOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "include_run_history": {
+              "type": "boolean"
             },
             "include_untracked": {
               "type": "boolean"
@@ -1476,6 +1581,9 @@
                 "collect",
                 "resolve_requests"
               ]
+            },
+            "requests_from_node_id": {
+              "type": "string"
             },
             "sources": {
               "items": {
@@ -1885,12 +1993,46 @@
             "allow_untracked": {
               "type": "boolean"
             },
+            "allowlist": {
+              "oneOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "hook_policy": {
+              "enum": [
+                "allow_pre_configured",
+                "fail_on_unattended"
+              ]
+            },
             "message": {
               "maxLength": 512,
               "type": "string"
             },
             "no_changes_is_progress": {
               "type": "boolean"
+            },
+            "verification_node_id": {
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_\\-]{0,63}$",
+              "type": "string"
             }
           },
           "type": "object"
@@ -1984,6 +2126,12 @@
               "additionalProperties": true,
               "type": "object"
             },
+            "plan_check": {
+              "enum": [
+                "current",
+                "all"
+              ]
+            },
             "prompt": {
               "maxLength": 65536,
               "minLength": 1,
@@ -2068,6 +2216,12 @@
             "commit_node_id": {
               "pattern": "^[a-zA-Z][a-zA-Z0-9_\\-]{0,63}$",
               "type": "string"
+            },
+            "completion_policy": {
+              "enum": [
+                "verified_commit",
+                "verified_only"
+              ]
             },
             "initial_mode": {
               "enum": [
@@ -2230,6 +2384,7 @@
     "llmrequest",
     "model_groups",
     "plan_control",
-    "transition_assignments"
+    "transition_assignments",
+    "verified_plan_git"
   ]
 }

@@ -1,15 +1,16 @@
-# Движок графов после этапов 4, 5 и 7
+# Движок графов после этапов 4, 5, 7 и 8
 
 Статус: независимый worker выполняет графы, поддерживает управление/recovery этапа 5
-и [HTTP, Command, CollectContext этапа 7](LLM_COMMAND_EVIDENCE.md). Native harness,
-GitCommit и PlanControl ожидают этапов 6/8. Основания: [план](../IMPLEMENTATION_PLAN.md),
+и [HTTP, Command, CollectContext этапа 7](LLM_COMMAND_EVIDENCE.md),
+[GitCommit, PlanControl и пресет этапа 8](GIT_PLAN_RUNTIME.md). Native harness ожидает
+этапа 6A. Основания: [план](../IMPLEMENTATION_PLAN.md),
 [состояния](STATE_MACHINES.md), [runtime](RUNTIME_CONTRACTS.md), [графы](GRAPH_VALIDATION.md).
 
 ## Явное исполнение и границы
 
 `POST /api/runs` принимает `execution_mode=real|simulated`, по умолчанию real.
-В real работают Start/Condition/End, LLMRequest, Command и CollectContext. Не реализованные
-AgentTask/GitCommit/PlanControl дают configuration_invalid с конкретной причиной ожидания.
+В real работают Start/Condition/End, LLMRequest, Command, CollectContext, GitCommit и PlanControl.
+Не реализованный AgentTask даёт configuration_invalid с причиной harness_adapter_unimplemented.
 В simulated поддержаны fake AgentTask/LLMRequest и Start/Condition/End; реальные процессы
 и HTTP не подставляются в simulation. Подробности — в [контракте этапа 7](LLM_COMMAND_EVIDENCE.md).
 
@@ -41,7 +42,7 @@ Claim атомарно фиксирует поколение и резервац
 
 `Run.runtime_json` хранит work, следующий узел, cycle_id, loop_counts, visits, external_calls, длительность активного исполнения, retry_at, позицию/историю кандидатов и usage с quality. Активные интервалы хранятся отдельно. Пределы max_calls/max_node_visits/max_backward_transitions/max_duration_seconds и локальный loop.max_iterations действуют в runtime. Пропуск кандидата не расходует вызов; retry/fallback расходуют. При limit_exceeded новых попыток нет.
 
-Результаты latest выбираются только из succeeded-посещений текущих cycle/scope. Condition маршрутизирует true/false/unknown по серверному boolean/null decision. Переход с loop увеличивает цикл и счётчики после вычисления assignments в старом контексте. Repair выбирает prompt_repair и сохранённый feedback. Невалидный JSON/output_schema/verdict даёт invalid_response_format; inconclusive идёт в unknown, а не false. Реальная актуальность evidence по версии файлов остаётся этапам 7–8.
+Результаты latest выбираются только из succeeded-посещений текущих cycle/scope. Condition маршрутизирует true/false/unknown по серверному boolean/null decision. Переход с loop увеличивает цикл и счётчики после вычисления assignments в старом контексте. Repair выбирает prompt_repair и сохранённый feedback. Невалидный JSON/output_schema/verdict даёт invalid_response_format; inconclusive идёт в unknown, а не false. Актуальность evidence проверяется по циклу, scope и manifest файлов; дополнение evidence имеет явный источник и отдельный ограниченный цикл.
 
 ## Кандидаты и ошибки
 

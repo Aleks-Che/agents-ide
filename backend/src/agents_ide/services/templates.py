@@ -151,10 +151,12 @@ def archive_template(session: Session, template_id: str, expected_version: int) 
 
 
 def create_version(
-    session: Session, template_id: str, payload: PipelineVersionCreate
+    session: Session, template_id: str, payload: PipelineVersionCreate, *, _system: bool = False
 ) -> PipelineVersion:
     begin_write(session)
     template = get_or_404(session, PipelineTemplateModel, template_id)
+    if template.kind == "system" and not _system:
+        raise AppError("system_template_immutable", "Copy the system template before editing", 409)
     if template.archived_at is not None:
         raise AppError("template_archived", "Архивный шаблон недоступен", 409)
     # Strict validation: a published version must run successfully.

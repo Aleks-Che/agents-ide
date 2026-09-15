@@ -109,6 +109,51 @@ SecretDep = Annotated[SecretStore, Depends(get_secret_store)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
+@router.get("/presets")
+def list_presets_endpoint() -> list[dict[str, Any]]:
+    from agents_ide.domain.common import content_hash
+    from agents_ide.services.presets import list_builtin_presets
+
+    return [
+        {
+            "id": p.preset_id,
+            "name": p.name,
+            "description": p.description,
+            "template_id": content_hash({"builtin_preset": p.preset_id})[:32],
+            "preset_version": p.body["preset_version"],
+            "roles": p.graph["roles"],
+        }
+        for p in list_builtin_presets()
+    ]
+
+
+@router.get("/runs/{run_id}/plan")
+def run_plan_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]:
+    from agents_ide.engine.plan_control import load_plan_items, plan_summary
+    from agents_ide.persistence.models import Run as RunRow
+
+    row = session.get(RunRow, run_id)
+    if row is None:
+        raise AppError("run_not_found", "Run not found", 404)
+    return {
+        "plan": json.loads(row.snapshot_json).get("plan"),
+        "summary": plan_summary(session, run_id).as_work(),
+        "items": [
+            {
+                "id": i.item_id,
+                "order": i.order_index,
+                "title": i.title,
+                "acceptance_criteria": json.loads(i.acceptance_criteria_json),
+                "status": i.status,
+                "evidence_ids": json.loads(i.evidence_ids_json),
+                "commit_shas": json.loads(i.commit_shas_json),
+                "related_execution_ids": json.loads(i.related_execution_ids_json),
+            }
+            for i in load_plan_items(session, run_id)
+        ],
+    }
+
+
 # ----------------------------------------------------------------------------- Workspace probe
 
 

@@ -62,6 +62,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             bind=engine, expire_on_commit=False, autoflush=False
         )
         app.state.secrets = SecretStore(settings.data_dir / "secrets")
+        from agents_ide.services.presets import install_all
+
+        def install_presets() -> None:
+            with app.state.session_factory() as session:
+                install_all(session)
+                session.commit()
+
+        await asyncio.to_thread(install_presets)
         from agents_ide.engine.events_stream import StreamHub
 
         app.state.run_streams = StreamHub(app.state.session_factory)

@@ -513,7 +513,11 @@ def test_retry_stays_on_candidate_then_falls_forward(
             session.scalars(select(RunEvent).where(RunEvent.type == "attempt.retry_scheduled"))
         )
         assert len(retries) == 2
-        assert all(json.loads(e.payload_json)["retry_at"] > e.persisted_at for e in retries)
+        # SQLite/event persistence can outlast a short backoff under load.
+        # The behavioral contract is that the next attempt never starts early.
+        for event in retries:
+            payload = json.loads(event.payload_json)
+            assert attempts[payload["retry_index"]].started_at >= payload["retry_at"]
 
 
 def test_disabled_candidate_does_not_consume_call_budget(

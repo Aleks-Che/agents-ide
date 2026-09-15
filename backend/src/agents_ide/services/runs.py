@@ -188,8 +188,6 @@ def start_run(session: Session, payload: RunStart) -> Run:
             )
         ]
     configuration, sources = resolve_configuration(binding, version, payload.overrides)
-    if configuration["dirty_policy"] == "allow_nonoverlap":
-        raise AppError("policy_unsupported", "allow_nonoverlap ожидает проверок этапа 8", 409)
     from agents_ide.domain.graph_validation import preflight as preflight_binding
 
     report = preflight_binding(
@@ -248,6 +246,10 @@ def start_run(session: Session, payload: RunStart) -> Run:
     snapshot["dependencies"] = capture_dependencies(session, snapshot["graph"], configuration)
     if report.preview.get("command_programs"):
         snapshot["dependencies"]["command_programs"] = report.preview["command_programs"]
+    if report.preview.get("git_dependencies"):
+        snapshot["dependencies"]["git"] = report.preview["git_dependencies"]
+    if report.preview.get("plan"):
+        snapshot["plan"] = report.preview["plan"]
     snapshot["pipeline_execution_hash"] = version.execution_hash
     snapshot["execution_hash"] = execution_hash(
         version,
@@ -305,6 +307,10 @@ def start_run(session: Session, payload: RunStart) -> Run:
     )
     session.add(model)
     session.flush()
+    if snapshot.get("plan"):
+        from agents_ide.engine.plan_control import upsert_plan_items
+
+        upsert_plan_items(session, model.id, snapshot["plan"]["items"])
     # A queued Run does not own its workspace. The worker reserves it at dispatch.
     session.add(
         QueueJobModel(

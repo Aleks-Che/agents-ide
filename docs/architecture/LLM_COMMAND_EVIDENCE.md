@@ -10,8 +10,9 @@
 ## Исполнение и HTTP
 
 В `execution_mode=real` работают Start, Condition, End, LLMRequest, Command и CollectContext.
-AgentTask, GitCommit и PlanControl возвращают `waiting_input(configuration_invalid)` с причиной
-`harness_adapter_unimplemented`, `git_commit_unimplemented` или `plan_control_unimplemented`.
+AgentTask возвращает `waiting_input(configuration_invalid)` с причиной
+`harness_adapter_unimplemented`. GitCommit и PlanControl добавлены
+[этапом 8](GIT_PLAN_RUNTIME.md) с проверками Git/evidence и фиксированным планом.
 В simulated-режиме сохраняются прежние fake AgentTask/LLMRequest и отдельный тестовый workspace.
 Реальные команды не включаются в simulation неявно.
 
@@ -125,4 +126,5 @@ success_exit_codes, строгие типы, журнал и правила unkn
 Исходный снимок и [MIT License](../../sources/claudexor/LICENSE) сохранены без изменений.
 
 Платные модели, удалённый CI, реальный Linux runtime и harness не проверялись в этом ревью.
-Git commit/intent/hooks, PlanControl и полный пресет остаются этапу 8; harness — этапу 6.
+Git commit/intent/hooks, PlanControl и полный пресет проверены отдельным
+[ревью этапа 8](GIT_PLAN_RUNTIME.md); harness остаётся этапу 6A.

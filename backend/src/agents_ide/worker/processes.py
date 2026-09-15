@@ -33,6 +33,7 @@ from agents_ide.services.transactions import begin_write
 
 class ProcessGroup:
     def __init__(self) -> None:
+        self._handle_lock = threading.RLock()
         self.job: Any = None
         self.handles: list[Any] = []
         self.children: list[subprocess.Popen[Any]] = []
@@ -211,6 +212,10 @@ class ProcessGroup:
         return process
 
     def members(self) -> list[psutil.Process]:
+        with self._handle_lock:
+            return self._members()
+
+    def _members(self) -> list[psutil.Process]:
         if self.job is not None:
             import win32job
 
@@ -229,6 +234,10 @@ class ProcessGroup:
         return members
 
     def close(self) -> None:
+        with self._handle_lock:
+            self._close()
+
+    def _close(self) -> None:
         if self.job is not None:
             self.job.Close()
             self.job = None
@@ -367,12 +376,17 @@ class ProcessRegistry:
             entry.state = "killed"
             entry.killed_at = time.time()
 
-    def mark_finished(self, pid: int, owner_generation: int) -> None:
-        entry = self._entries.get((pid, owner_generation))
-        if entry is not None:
-            entry.state = "finished"
-            entry.finished_at = time.time()
-        self._entries.pop((pid, owner_generation), None)
+    def mark_finished(
+        self, pid: int, owner_generation: int, *, create_time: float | None = None
+    ) -> None:
+        with self.lock:
+            entry = self._entries.get((pid, owner_generation))
+            if entry is not None:
+                if create_time is not None and entry.create_time != create_time:
+                    return  # A later process may already have reused this PID.
+                entry.state = "finished"
+                entry.finished_at = time.time()
+            self._entries.pop((pid, owner_generation), None)
 
     def lookup(self, pid: int, owner_generation: int) -> ProcessRegistryEntry | None:
         return self._entries.get((pid, owner_generation))
@@ -503,7 +517,7 @@ def stop_owned(
     stopped = True
     for entry in entries:
         if interrupt(entry, cooperative_seconds=cooperative_seconds, kill_seconds=kill_seconds):
-            registry.mark_finished(entry.pid, owner_generation)
+            registry.mark_finished(entry.pid, owner_generation, create_time=entry.create_time)
         else:
             stopped = False
     return stopped
@@ -623,7 +637,7 @@ class ProcessSupervisor:
                 owned_job(session, self.run_id, self.worker_id, self.generation)
                 run = session.get(Run, self.run_id)
                 assert run is not None
-                if kind == "command":
+                if kind in {"command", "git"}:
                     from agents_ide.security.filesystem import directory_identity
 
                     workspace = json.loads(run.snapshot_json)["workspace"]
@@ -634,12 +648,15 @@ class ProcessSupervisor:
                             "workspace_conflict", "Workspace changed before dispatch", 409
                         )
                 continuing_step = (
-                    kind == "command"
+                    kind in {"command", "git"}
                     and attempt_id is not None
                     and run.current_attempt_id == attempt_id
                     and run.state == "pause_requested"
                 )
-                if run.state not in {"running", "queued"} and not continuing_step:
+                allowed_states = (
+                    {"running", "queued", "recovering"} if kind == "git" else {"running", "queued"}
+                )
+                if run.state not in allowed_states and not continuing_step:
                     raise AppError("dispatch_blocked", "Управление запретило запуск процесса", 409)
                 session.add(
                     ProcessSupervision(
@@ -706,7 +723,9 @@ class ProcessSupervisor:
             group.close()
             entry = holder.get("entry")
             if entry:
-                self.registry.mark_finished(entry.pid, self.generation)
+                self.registry.mark_finished(
+                    entry.pid, self.generation, create_time=entry.create_time
+                )
             raise
         entry = holder.get("entry")
         assert entry is not None
@@ -721,6 +740,7 @@ class ProcessSupervisor:
         role: str = "command",
         kind: str = "command",
         attempt_id: str | None = None,
+        stdin: int = subprocess.DEVNULL,
     ) -> tuple[ProcessRegistryEntry, subprocess.Popen[str]]:
         """Start an owned process with captured stdio; used by Command nodes."""
 
@@ -736,14 +756,14 @@ class ProcessSupervisor:
             port=None,
         )
         try:
-            child = group.popen_stdio(
-                argv, cwd, env, before_resume=callback, stdin=subprocess.DEVNULL
-            )
+            child = group.popen_stdio(argv, cwd, env, before_resume=callback, stdin=stdin)
         except BaseException:
             group.close()
             entry = holder.get("entry")
             if entry:
-                self.registry.mark_finished(entry.pid, self.generation)
+                self.registry.mark_finished(
+                    entry.pid, self.generation, create_time=entry.create_time
+                )
             raise
         entry = holder.get("entry")
         assert entry is not None
@@ -755,6 +775,7 @@ class ProcessSupervisor:
             if entry.owner_generation != self.generation:
                 continue
             verified = capture_tree(entry)
+            finished = False
             with self.factory() as session:
                 begin_write(session)
                 owned_job(session, self.run_id, self.worker_id, self.generation)
@@ -780,7 +801,14 @@ class ProcessSupervisor:
                         row.last_external_event_at = utc_now()
                     if wait_descendants_stopped(entry, 0):
                         row.state, row.finished_at = "finished", utc_now()
+                        finished = True
                 session.commit()
+            if finished:
+                if entry.group:
+                    entry.group.close()
+                self.registry.mark_finished(
+                    entry.pid, self.generation, create_time=entry.create_time
+                )
 
     def stop(self, *, cooperative_seconds: float = 10, kill_seconds: float = 5) -> bool:
         stopped = True
@@ -832,7 +860,9 @@ class ProcessSupervisor:
             if result:
                 if entry.group:
                     entry.group.close()
-                self.registry.mark_finished(entry.pid, self.generation)
+                self.registry.mark_finished(
+                    entry.pid, self.generation, create_time=entry.create_time
+                )
         return stopped
 
     def request_interrupt(self, callback: Callable[[ProcessRegistryEntry], bool]) -> None:

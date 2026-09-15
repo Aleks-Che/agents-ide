@@ -77,6 +77,16 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "attempt.late_result",
         "process.supervised",
         "process.interrupted",
+        "git.no_changes",
+        "git.tree_built",
+        "git.commit_created",
+        "git.commit_intent_saved",
+        "git.commit_recovered",
+        "git.baseline_saved",
+        "git.branch_selected",
+        "plan.item_changed",
+        "plan.final_check",
+        "plan.commit_attached",
     }
 )
 

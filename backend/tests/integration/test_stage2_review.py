@@ -554,7 +554,7 @@ def test_review_migration_preserves_existing_stage2_history(authenticated, tmp_p
     assert repeat.json()["code"] == "idempotency_unverifiable"
 
 
-def test_queued_run_does_not_enable_unverified_dirty_policy(authenticated, tmp_path):
+def test_read_only_graph_accepts_nonoverlap_policy(authenticated, tmp_path):
     client, headers = authenticated
     *_, payload = setup_run(client, headers, tmp_path / "workspace")
     response = client.post(
@@ -565,8 +565,7 @@ def test_queued_run_does_not_enable_unverified_dirty_policy(authenticated, tmp_p
             "overrides": {"dirty_policy": "allow_nonoverlap"},
         },
     )
-    assert response.status_code == 409
-    assert response.json()["code"] == "policy_unsupported"
+    assert response.status_code == 201, response.text
 
 
 @pytest.mark.parametrize(

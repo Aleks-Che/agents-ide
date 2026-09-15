@@ -114,10 +114,13 @@ def preflight(
             "Исполнение и повторная проверка под резервацией относятся к этапам 4–8",
         )
     )
-    if configuration["dirty_policy"] == "allow_nonoverlap":
+    if configuration["dirty_policy"] == "allow_nonoverlap" and any(
+        n["type"] in {"AgentTask", "Command"} for n in graph["nodes"]
+    ):
         report.add_error(
             ValidationIssue(
-                "policy_unsupported", "allow_nonoverlap требует подтверждённой изоляции этапа 8"
+                "policy_unsupported",
+                "allow_nonoverlap requires an adapter with enforced write isolation; use strict",
             )
         )
     try:
@@ -172,18 +175,52 @@ def preflight(
                         "git_repository_required", "GitCommit требует репозиторий с HEAD"
                     )
                 )
-            elif git.dirty:
-                report.add_error(
-                    ValidationIssue(
-                        "git_dirty", "GitCommit требует проверки чистого исходного состояния"
-                    )
+            else:
+                from agents_ide.engine.git_commit import capture_baseline, normalize_allowlist
+
+                allowed: set[str] = set()
+                for node in graph["nodes"]:
+                    if node["type"] != "GitCommit":
+                        continue
+                    raw = node.get("config", {}).get("allowlist", ["**"])
+                    if isinstance(raw, dict):
+                        raw = evaluate(
+                            ASTNode.from_json(raw),
+                            EvaluationContext(inputs={k: Value.of(v) for k, v in values.items()}),
+                        ).raw
+                    allowed.update(normalize_allowlist(raw))
+                baseline = capture_baseline(
+                    workspace,
+                    "preflight",
+                    tuple(allowed),
+                    dirty_policy=configuration["dirty_policy"],
                 )
-            elif configuration["branch_policy"] == "current" and git.default_branch is None:
-                report.add_error(
-                    ValidationIssue("git_detached_head", "current не поддерживает detached HEAD")
+                if configuration["branch_policy"] == "current" and baseline.branch is None:
+                    report.add_error(
+                        ValidationIssue("git_detached_head", "current requires a branch")
+                    )
+                git_dependencies = {
+                    "fingerprint": baseline.fingerprint,
+                    "executable": shutil.which("git"),
+                }
+                dependencies["git"] = git_dependencies
+                report.preview["git_dependencies"] = git_dependencies
+                report.preview["git_plan"].update(
+                    hooks_and_baseline="checked_read_only",
+                    hooks=list(baseline.hooks),
+                    signing_required=baseline.signing_required,
                 )
     except AppError as exc:
         report.add_error(ValidationIssue(exc.code, exc.message))
+    except (OSError, ValueError, TypeError) as exc:
+        report.add_error(ValidationIssue("git_preflight_failed", type(exc).__name__))
+    if any(n["type"] == "PlanControl" for n in graph["nodes"]):
+        from agents_ide.engine.plan_control import normalize_plan
+
+        try:
+            report.preview["plan"] = normalize_plan(values)
+        except AppError as exc:
+            report.add_error(ValidationIssue(exc.code, exc.message))
     all_command_ids: set[str] = set()
     pinned_programs: dict[str, dict[str, str]] = {}
     for node in graph["nodes"]:
@@ -256,9 +293,20 @@ def preflight(
                     {"node_id": node_id, **command, "resolved_program": resolved}
                 )
         if node["type"] == "CollectContext":
-            paths = config.get("context_paths", []) + [
-                s["path"] for s in config.get("sources", []) if "path" in s
-            ]
+            paths_value = config.get("context_paths", [])
+            if isinstance(paths_value, dict):
+                paths_value = evaluate(
+                    ASTNode.from_json(paths_value),
+                    EvaluationContext(inputs={k: Value.of(v) for k, v in values.items()}),
+                ).raw
+            if not isinstance(paths_value, list) or any(
+                not isinstance(x, str) for x in paths_value
+            ):
+                report.add_error(
+                    ValidationIssue("input_invalid", "Context paths require a list", node_id)
+                )
+                continue
+            paths = paths_value + [s["path"] for s in config.get("sources", []) if "path" in s]
             for path_text in paths:
                 try:
                     _local_path(workspace, path_text)
@@ -325,11 +373,29 @@ def preflight(
             fake_scenario=fake_scenario,
         )
     if execution_mode == "real" and all(
-        n["type"] in {"Start", "End", "Condition", "Command", "CollectContext", "LLMRequest"}
+        n["type"]
+        in {
+            "Start",
+            "End",
+            "Condition",
+            "Command",
+            "CollectContext",
+            "LLMRequest",
+            "GitCommit",
+            "PlanControl",
+        }
         for n in graph["nodes"]
     ):
         report.warnings = [w for w in report.warnings if w.code != "runtime_unimplemented"]
         report.preview["dispatch_ready"] = report.ok
+    report.execution_hash = execution_hash(
+        version,
+        configuration,
+        dependencies,
+        values,
+        execution_mode=execution_mode,
+        fake_scenario=fake_scenario,
+    )
     return report
 
 

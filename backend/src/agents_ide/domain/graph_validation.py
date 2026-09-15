@@ -379,6 +379,40 @@ def _validate_node_content(
             _reference_type(path, nodes, schema)
     if "params" in config:
         validate_parameters(config["params"])
+    if "requests_from_node_id" in config and (
+        config["requests_from_node_id"] not in nodes
+        or nodes[config["requests_from_node_id"]]["type"] not in {"AgentTask", "LLMRequest"}
+        or config.get("mode") != "resolve_requests"
+    ):
+        raise ASTError("Invalid evidence request source")
+    if node["type"] in {"GitCommit", "PlanControl"}:
+        for key, kinds in (
+            ("verification_node_id", {"AgentTask", "LLMRequest"}),
+            ("commit_node_id", {"GitCommit"}),
+        ):
+            if key in config and (
+                config[key] not in nodes or nodes[config[key]]["type"] not in kinds
+            ):
+                raise ASTError("Invalid verification/commit reference")
+        if node["type"] == "GitCommit" and isinstance(config.get("allowlist"), dict):
+            ast = _check_ast(config["allowlist"], nodes, names, schema)
+            if ast.op != Op.REF or ast.value[0] not in ("input", "inputs"):
+                raise ASTError("Git allowlist must reference immutable inputs")
+        if node["type"] == "PlanControl":
+            operation = config["operation"]
+            if (
+                operation in {"record_verified", "record_final_check"}
+                and "verification_node_id" not in config
+            ):
+                raise ASTError("PlanControl requires an explicit verification reference")
+            if (
+                operation == "attach_commit"
+                or (
+                    operation == "record_verified"
+                    and config.get("completion_policy", "verified_commit") == "verified_commit"
+                )
+            ) and "commit_node_id" not in config:
+                raise ASTError("PlanControl requires an explicit commit reference")
     if node["type"] == "Command":
         commands = config["commands"]
         selected = config.get("command_filter", [])
@@ -417,8 +451,14 @@ def _validate_node_content(
                 check_relative_path(source["path"])
             if source.get("redact_secrets") is False:
                 raise ASTError("Secret redaction cannot be disabled")
-        for path_text in config.get("context_paths", []):
-            check_relative_path(path_text)
+        paths = config.get("context_paths", [])
+        if isinstance(paths, dict):
+            ast = _check_ast(paths, nodes, names, schema)
+            if ast.op != Op.REF or ast.value[0] not in ("input", "inputs"):
+                raise ASTError("Context paths must reference immutable inputs")
+        else:
+            for path_text in paths:
+                check_relative_path(path_text)
     if node["type"] == "PlanControl":
         required = {
             "record_verified": "verification_node_id",

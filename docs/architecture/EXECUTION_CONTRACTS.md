@@ -130,6 +130,11 @@ GitCommit формирует кандидат только из allowlist про
 
 ## 7. Коммит, hooks и неизвестный результат
 
+Уточнение реализации: staging кандидата использует только временный index. После
+проверенного коммита ранее чистый пользовательский index согласуется с новым HEAD
+под `index.lock`, если его hash не изменился. Чужие staged-правки не перезаписываются.
+Пределы и восстановление описаны в [GIT_PLAN_RUNTIME](GIT_PLAN_RUNTIME.md).
+
 До вызова Git сохраняется intent: operation_id, Run/execution/attempt, branch, parent_sha, expected_tree, allowlist, message_hash, baseline_ref и разрешённая политика hooks/signing. В сообщение включается служебный trailer с intent ID для сверки. После вызова сохраняются SHA, actual_tree, stdout/stderr и состояние рабочих файлов.
 
 Hooks и signing считаются исполняемым кодом/внешними процессами. Preflight показывает их наличие; разрешённая политика и fingerprint hooks фиксируются до старта. Настроенные hooks не выключаются незаметно. Интерактивная подпись, отказ hook или зависание получают timeout/signing_required, без ожидания в невидимом окне. Изменение hooks/config во время Run блокирует дальнейший коммит до сверки.

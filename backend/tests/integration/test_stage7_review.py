@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import subprocess
 import sys
 import threading
 import time
@@ -590,8 +591,6 @@ def test_connection_probe_does_not_change_pinned_configuration_revision(authenti
                 },
             },
         },
-        {"id": "later", "type": "PlanControl", "config": {"operation": "select_next"}},
-        {"id": "later", "type": "GitCommit", "config": {}},
     ],
 )
 def test_future_node_gates_return_valid_waiting_reason(authenticated, tmp_path, settings, node):
@@ -605,6 +604,38 @@ def test_future_node_gates_return_valid_waiting_reason(authenticated, tmp_path, 
         reason = json.loads(session.get(Run, run["id"]).waiting_reason_json)
         assert reason["code"] == "configuration_invalid"
         assert reason["details"]["reason"].endswith("unimplemented")
+
+
+def test_plan_control_cannot_complete_without_verification(authenticated, tmp_path, settings):
+    node = {"id": "select_next", "type": "PlanControl", "config": {"operation": "select_next"}}
+    run, factory = make_run(
+        authenticated,
+        tmp_path,
+        graph=chain(node),
+        execution_mode="real",
+        inputs={"plan": "one fixed item"},
+    )
+    result = run_now(run, factory, settings)
+    assert result.final_state == "waiting_input"
+    assert result.waiting_reason.code == "missing_data"
+
+
+def test_git_commit_requires_verification(authenticated, tmp_path, settings):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "a.txt").write_text("base")
+    _init_git(workspace)
+    node = {"id": "commit", "type": "GitCommit", "config": {"message": "stage8"}}
+    run, factory = make_run(authenticated, tmp_path, graph=chain(node), execution_mode="real")
+    result = run_now(run, factory, settings)
+    assert result.final_state == "waiting_input"
+    assert result.waiting_reason.details["reason"] == "git_verification_required"
+    assert (
+        subprocess.check_output(
+            ["git", "-C", str(workspace), "rev-list", "--count", "HEAD"]
+        ).strip()
+        == b"1"
+    )
 
 
 def test_supervisor_rechecks_workspace_before_resuming_child(authenticated, tmp_path, settings):

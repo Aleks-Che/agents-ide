@@ -5,7 +5,8 @@
 Проекты, чаты и конфигурация pipeline доступны через API. Независимый worker выполняет
 графы, сохраняет результаты/артефакты/SSE и поддерживает pause/stop/resume/recovery.
 В реальном режиме работают LLM HTTP, Command и CollectContext; fake остаётся явным режимом.
-Native harness, Git/пресет и основной UI ожидают следующих этапов [плана](docs/IMPLEMENTATION_PLAN.md).
+Этап 8 добавляет [GitCommit, фиксированный план и встроенный пресет](docs/architecture/GIT_PLAN_RUNTIME.md).
+Native harness и основной UI ожидают этапов 6A/9 [плана](docs/IMPLEMENTATION_PLAN.md).
 
 [Журнал реализации](docs/IMPLEMENTATION_LOG.md): нюансы разработки, фичи, открытые блокеры, результаты проверок и заметки для следующих этапов.
 
@@ -13,7 +14,7 @@ Native harness, Git/пресет и основной UI ожидают след�
 
 Этап 2A добавляет [группы моделей](docs/architecture/MODEL_GROUPS.md): упорядоченные agent/llm-кандидаты, выбор direct/group для ролей и узлов, наследование параметров, полный снимок исполнителей и перенос определений групп. Этап 4 проверяет выбор и fallback на fake; реальные LLM-подключения добавлены этапом 7, harness остаются этапу 6.
 
-Этап 3 добавляет [схемы, AST и серверную валидацию графов](docs/architecture/GRAPH_VALIDATION.md), ограниченные циклы, импорт/экспорт, доверие итоговому hash и preflight. Реальные capability, права и Git-проверки остаются этапам 6–8.
+Этап 3 добавляет [схемы, AST и серверную валидацию графов](docs/architecture/GRAPH_VALIDATION.md), ограниченные циклы, импорт/экспорт, доверие итоговому hash и preflight. Серверные Git-проверки добавлены этапом 8; capability и права реального harness требуют этапа 6A.
 
 Этап 4 добавляет [движок на fake-исполнителе](docs/architecture/ENGINE_RUNTIME.md): `execution_mode=simulated`, сценарии ответов/правок в отдельном тестовом каталоге, repair-циклы, лимиты, безопасный retry/fallback, durable checkpoint и события/артефакты. Обычный Run не подменяется fake. Этап 5 добавляет [управление, восстановление и CLI](docs/architecture/CONTROL_AND_RECOVERY.md): сохранение посещения/кандидата при resume, проверку прежнего владельца, аудит лимитов и Windows ProcessSupervisor. Попытка с неизвестным исходом автоматически не повторяется.
 

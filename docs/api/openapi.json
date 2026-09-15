@@ -517,6 +517,13 @@
               "error.reported",
               "error.technical",
               "evidence.collected",
+              "git.baseline_saved",
+              "git.branch_selected",
+              "git.commit_created",
+              "git.commit_intent_saved",
+              "git.commit_recovered",
+              "git.no_changes",
+              "git.tree_built",
               "limits.warning",
               "model_group.candidate_selected",
               "model_group.candidate_skipped",
@@ -524,6 +531,9 @@
               "model_group.exhausted",
               "node.entered",
               "node.left",
+              "plan.commit_attached",
+              "plan.final_check",
+              "plan.item_changed",
               "process.interrupted",
               "process.supervised",
               "run.cancelled",
@@ -5961,6 +5971,32 @@
         "summary": "Schema"
       }
     },
+    "/api/presets": {
+      "get": {
+        "operationId": "list_presets_endpoint_api_presets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Presets Endpoint Api Presets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Presets Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
     "/api/projects": {
       "get": {
         "operationId": "list_projects_endpoint_api_projects_get",
@@ -6800,6 +6836,50 @@
           }
         },
         "summary": "Replay Run Events Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/plan": {
+      "get": {
+        "operationId": "run_plan_endpoint_api_runs__run_id__plan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Run Plan Endpoint Api Runs  Run Id  Plan Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Plan Endpoint",
         "tags": [
           "domain"
         ]

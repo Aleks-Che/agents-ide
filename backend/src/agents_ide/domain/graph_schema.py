@@ -50,6 +50,7 @@ SUPPORTED_FEATURES = frozenset(
         "git_commit",
         "git",
         "plan_control",
+        "verified_plan_git",
         "conditions",
         "model_groups",
         "bounded_loops",
@@ -204,10 +205,17 @@ def _collect_config() -> dict[str, Any]:
                 "maxItems": 100,
             },
             "context_paths": {
-                "type": "array",
-                "items": {"type": "string"},
-                "maxItems": 100,
+                "oneOf": [
+                    {"type": "array", "items": {"type": "string"}, "maxItems": 100},
+                    {
+                        "type": "object",
+                        "required": ["ref"],
+                        "properties": {"ref": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                ],
             },
+            "include_run_history": {"type": "boolean"},
             "include_untracked": {"type": "boolean"},
             "strategy": {"enum": ["summary", "full", "truncate"]},
             "max_files": {"type": "integer", "minimum": 1, "maximum": 100},
@@ -215,6 +223,7 @@ def _collect_config() -> dict[str, Any]:
             "max_total_bytes": {"type": "integer", "minimum": 1024, "maximum": 2097152},
             "summary_max_bytes": {"type": "integer", "minimum": 256, "maximum": 65536},
             "max_command_replays": {"type": "integer", "minimum": 0, "maximum": 2},
+            "requests_from_node_id": {"type": "string"},
             "missing_evidence_filter": {
                 "type": "array",
                 "items": {
@@ -253,6 +262,7 @@ def _plan_control_config() -> dict[str, Any]:
             "commit_node_id": {"type": "string", "pattern": _ID_PATTERN.pattern},
             "scope": {"type": "string", "pattern": _ID_PATTERN.pattern},
             "initial_mode": {"enum": ["initial", "repair", "next_item"]},
+            "completion_policy": {"enum": ["verified_commit", "verified_only"]},
         },
         "additionalProperties": False,
     }
@@ -273,6 +283,7 @@ def _agent_or_llm_config(node_type: str) -> dict[str, Any]:
             "output_schema": {"type": "object"},
             "prompt_repair": {"type": "string", "minLength": 1, "maxLength": 65536},
             "prompt_next_item": {"type": "string", "minLength": 1, "maxLength": 65536},
+            "plan_check": {"enum": ["current", "all"]},
             # Original stage 2 direct channel is explicit and remains supported.
             "connection_id": {"type": "string", "minLength": 1},
             "harness_profile_id": {"type": "string", "minLength": 1},
@@ -303,6 +314,19 @@ def _git_commit_config() -> dict[str, Any]:
             "message": {"type": "string", "maxLength": 512},
             "allow_untracked": {"type": "boolean"},
             "no_changes_is_progress": {"type": "boolean"},
+            "allowlist": {
+                "oneOf": [
+                    {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}},
+                    {
+                        "type": "object",
+                        "required": ["ref"],
+                        "properties": {"ref": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                ]
+            },
+            "verification_node_id": {"type": "string", "pattern": _ID_PATTERN.pattern},
+            "hook_policy": {"enum": ["allow_pre_configured", "fail_on_unattended"]},
         },
         "additionalProperties": False,
     }
@@ -451,6 +475,15 @@ def required_features_for(graph: Mapping[str, Any]) -> list[str]:
         if not isinstance(node, Mapping):
             continue
         node_type = node.get("type")
+        config = node.get("config", {})
+        if (
+            node_type in {"GitCommit", "PlanControl"}
+            or config.get("plan_check")
+            or config.get("include_run_history")
+            or config.get("requests_from_node_id")
+            or isinstance(config.get("context_paths"), Mapping)
+        ):
+            features.add("verified_plan_git")
         if node_type in ("AgentTask", "LLMRequest"):
             features.add(node_type.lower())
         if node_type == "PlanControl":
@@ -475,6 +508,8 @@ def required_features_for(graph: Mapping[str, Any]) -> list[str]:
     for edge in iter_edges(graph):
         if edge.get("loop"):
             features.add("bounded_loops")
+            if edge["loop"].get("scope") == "item":
+                features.add("verified_plan_git")
         if edge.get("assignments"):
             features.add("transition_assignments")
     return sorted(features)
@@ -509,6 +544,7 @@ def graph_schema(nodes: dict[str, Any], definitions: dict[str, Any]) -> dict[str
                 "properties": {
                     "id": identifier,
                     "max_iterations": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "scope": {"enum": ["item", "run"]},
                 },
                 "additionalProperties": False,
             },

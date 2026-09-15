@@ -245,7 +245,7 @@ def test_validate_endpoint_collects_required_features(authenticated):
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert set(body["features"]) == {"collect_context", "git_commit"}
+    assert set(body["features"]) == {"collect_context", "git_commit", "verified_plan_git"}
 
 
 # --------------------------------------------------------------------------- AST behavior

@@ -201,6 +201,7 @@ def collect_context(
     launcher: Any = None,
     stop_event: Any = None,
     deadline_at: float | None = None,
+    run_context: dict[str, Any] | None = None,
 ) -> ContextCollection:
     from agents_ide.engine.artifacts import encode, sanitize
     from agents_ide.persistence.models import StepExecution
@@ -238,6 +239,7 @@ def collect_context(
         "base_head_sha": base_head_sha,
         "current_head_sha": head.strip() if head else None,
         "workspace_hash": before_hash,
+        **({"run_context": run_context} if run_context is not None else {}),
     }
     files: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -447,6 +449,10 @@ def collect_context(
     while len(encode(package).encode()) > cap and (package["files"] or package["omissions"]):
         package["truncated"] = True
         (package["omissions"] if package["omissions"] else package["files"]).pop()
+    if len(encode(package).encode()) > cap:
+        package.pop("run_context", None)
+        package["truncated"] = True
+        package["omissions"] = [{"kind": "run_context", "reason": "metadata_limit"}]
     summary = {key: value for key, value in package.items() if key != "files"}
     summary["files"] = files.copy()
     summary["omissions"] = list(package["omissions"])

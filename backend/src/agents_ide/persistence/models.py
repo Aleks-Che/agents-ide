@@ -439,6 +439,7 @@ class PlanItem(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
     item_id: Mapped[str] = mapped_column(String(64))
+    scope: Mapped[str] = mapped_column(String(64), default="__default__")
     order_index: Mapped[int] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(Text)
     acceptance_criteria_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -446,6 +447,8 @@ class PlanItem(Base):
     evidence_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     commit_shas_json: Mapped[str] = mapped_column(Text, default="[]")
     related_execution_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    updated_at: Mapped[float] = mapped_column(Float, default=_utcnow)
 
 
 class RunPolicyRevision(Base):

@@ -35,7 +35,6 @@ from agents_ide.adapters.base import (
     LLMResult,
 )
 from agents_ide.adapters.fake import FakeAgentAdapter, FakeLLMAdapter, parse_fake_scenario
-from agents_ide.adapters.llm_http import HttpLLMAdapter
 from agents_ide.domain.common import new_id, to_json, utc_now
 from agents_ide.domain.contracts import RunState
 from agents_ide.domain.graph_ast import (
@@ -76,6 +75,14 @@ if TYPE_CHECKING:
 
 INTERRUPT_SECONDS = 10.0
 KILL_SECONDS = 5.0
+
+
+def _build_http_llm() -> Any:
+    """Late-bind :class:`HttpLLMAdapter` to avoid the engine/adapter cycle."""
+
+    from agents_ide.adapters.llm_http import HttpLLMAdapter
+
+    return HttpLLMAdapter()
 
 
 @dataclass
@@ -368,6 +375,25 @@ class Runner:
         from agents_ide.worker.processes import recovery_evidence
 
         evidence = recovery_evidence(self.session_factory, self.run_id, target)
+        if evidence["stopped"]:
+            from agents_ide.engine.stage8 import reconcile_git
+
+            try:
+                if reconcile_git(self):
+                    target["blockers"] = [
+                        code
+                        for code in target.get("blockers", [])
+                        if code != "unknown_external_result"
+                    ]
+            except AppError as exc:
+                if exc.code in {"queue_job_lost", "database_unavailable"}:
+                    raise
+                return self._waiting(
+                    "external_change_detected"
+                    if exc.code == "external_change_detected"
+                    else "unknown_external_result",
+                    {"reason": exc.code},
+                )
         if evidence["stopped"] and not self.runtime:
             with self.session_factory() as session:
                 has_work = session.scalar(
@@ -532,6 +558,21 @@ class Runner:
             )
         try:
             self._workspace_check()
+            paused_hash = self.runtime.get("git_paused_workspace_hash")
+            if paused_hash:
+                from agents_ide.engine.context_sources import workspace_hash
+
+                if (
+                    workspace_hash(Path(self.snapshot["workspace"]["workspace_path"]))
+                    != paused_hash
+                ):
+                    return self._waiting(
+                        "external_change_detected", {"reason": "files_changed_while_paused"}
+                    )
+                self.runtime.pop("git_paused_workspace_hash")
+            from agents_ide.engine.stage8 import prepare_git
+
+            prepare_git(self)
             agent, llm = self._build_adapters(self.snapshot)
             while self.runtime.get("next_node_id") is not None:
                 if control := self._controls():
@@ -614,7 +655,11 @@ class Runner:
                     self._persist(run)
                 result: AgentResult | LLMResult | None = None
                 if node["type"] in {"AgentTask", "LLMRequest"}:
-                    if not self.simulated and node["type"] == "AgentTask":
+                    if (
+                        not self.simulated
+                        and node["type"] == "AgentTask"
+                        and type(agent) is AgentAdapter
+                    ):
                         return self._waiting(
                             "configuration_invalid",
                             {"node_id": node["id"], "reason": "harness_adapter_unimplemented"},
@@ -655,27 +700,29 @@ class Runner:
                             return external
                         result = external
                 elif node["type"] == "GitCommit":
-                    return self._waiting(
-                        "configuration_invalid",
-                        {
-                            "reason": "git_commit_unimplemented"
-                            if not self.simulated
-                            else "simulated_commit_unsupported",
-                            "node_id": node["id"],
-                        },
-                        visit,
-                    )
+                    if self.simulated:
+                        # GitCommit is meaningful only for the user's real
+                        # checkout. The fake/private workspace has no shared
+                        # history, so we treat the node as a no-op with an
+                        # explicit waiting reason to make this explicit.
+                        return self._waiting(
+                            "configuration_invalid",
+                            {"reason": "simulated_commit_unsupported", "node_id": node["id"]},
+                            visit,
+                        )
+                    result = self._saved_result(visit) if reuse else None
+                    if result is None:
+                        external = self._git_commit_node(node, visit)
+                        if isinstance(external, RunnerResult):
+                            return external
+                        result = external
                 elif node["type"] == "PlanControl":
-                    return self._waiting(
-                        "configuration_invalid",
-                        {
-                            "reason": "plan_control_unimplemented"
-                            if not self.simulated
-                            else "simulated_plan_unsupported",
-                            "node_id": node["id"],
-                        },
-                        visit,
-                    )
+                    result = self._saved_result(visit) if reuse else None
+                    if result is None:
+                        external = self._plan_control_node(node, visit)
+                        if isinstance(external, RunnerResult):
+                            return external
+                        result = external
                 if finished := self._finish_visit(node, visit, result):
                     return finished
             return RunnerResult(RunState.COMPLETED)
@@ -685,12 +732,19 @@ class Runner:
             if exc.code in {"queue_job_lost", "database_unavailable"}:
                 raise
             return self._waiting(
-                "external_change_detected"
-                if exc.code == "external_change_detected"
+                exc.code
+                if exc.code
+                in {
+                    "external_change_detected",
+                    "unknown_external_result",
+                    "missing_data",
+                    "no_progress",
+                    "signing_required",
+                }
                 else "workspace_conflict"
                 if exc.code in {"workspace_conflict", "path_invalid", "path_unavailable"}
                 else "configuration_invalid",
-                {"reason": exc.code},
+                {"reason": exc.code, "details": exc.details or {}},
             )
         except (ValueError, OSError, KeyError):
             return self._waiting(
@@ -739,7 +793,8 @@ class Runner:
             Path(normalized), git
         ).get("git_common_identity") != workspace["scope"].get("git_common_identity"):
             raise AppError("workspace_conflict", "Рабочий каталог изменился после Start", 409)
-        if git and workspace.get("git_head_sha") and git.head_sha != workspace["git_head_sha"]:
+        expected_head = self.runtime.get("git", {}).get("head", workspace.get("git_head_sha"))
+        if git and expected_head and git.head_sha != expected_head:
             raise AppError("external_change_detected", "Git HEAD изменился после Start", 409)
         if self.simulated:
             from agents_ide.engine.workspace_checkpoint import fingerprint
@@ -754,7 +809,7 @@ class Runner:
         if not self.simulated:
             # Real LLM calls use the pinned connection per candidate; the base
             # agent adapter stays unimplemented until the harness stage.
-            return AgentAdapter(), HttpLLMAdapter()
+            return AgentAdapter(), _build_http_llm()
         root = self.data_dir.resolve() / "simulated"
         workspace = root / self.run_id
         workspace.mkdir(parents=True, exist_ok=True)
@@ -843,6 +898,13 @@ class Runner:
             key=lambda c: ({"pause": 1, "stop": 2, "cancel": 3}[c.command_type], c.sequence),
         )
         target = {"pause": "paused", "stop": "stopped", "cancel": "cancelled"}[chosen.command_type]
+        if target in {"paused", "stopped"} and self.runtime.get("git") and not self.simulated:
+            from agents_ide.engine.context_sources import workspace_hash
+
+            checkpoint_hash = workspace_hash(Path(self.snapshot["workspace"]["workspace_path"]))
+            if checkpoint_hash is None:
+                raise AppError("missing_data", "Workspace checkpoint unavailable", 409)
+            self.runtime["git_paused_workspace_hash"] = checkpoint_hash
         for command in commands:
             command.status = "applied" if command.id == chosen.id else "superseded"
             command.applied_at = utc_now()
@@ -905,6 +967,18 @@ class Runner:
         def invoke() -> None:
             try:
                 results.append(fn())
+            except AppError as exc:
+                results.append(
+                    LLMResult(
+                        ExternalOutcome.UNKNOWN,
+                        "",
+                        None,
+                        None,
+                        error=AdapterError(
+                            exc.code, exc.message, "unknown", details=exc.details or {}
+                        ),
+                    )
+                )
             except Exception:
                 results.append(
                     LLMResult(
@@ -1187,7 +1261,7 @@ class Runner:
             "required_incomplete": [],
             "workspace_hash": current_hash,
         }
-        seen_nodes: set[str] = set()
+        seen_context = False
         seen_commands: set[str] = set()
         rows = session.scalars(
             select(ArtifactManifest)
@@ -1212,9 +1286,9 @@ class Runner:
                 or bool(row.truncation_json)
             )
             if row.schema_type == "context_package":
-                if execution.node_id in seen_nodes:
+                if seen_context:
                     continue
-                seen_nodes.add(execution.node_id)
+                seen_context = True
                 if stale:
                     evidence["omissions"].append({"artifact_id": row.id, "reason": "stale_context"})
                 elif evidence["context"] is None:
@@ -1339,6 +1413,16 @@ class Runner:
                 return control
             if result.outcome == ExternalOutcome.SUCCEEDED and validation_error is None:
                 return result
+            if metadata.get("kind") == "git_commit" and result.error:
+                code = result.error.code
+                if code in {"external_change_detected", "git_index_dirty", "path_violation"}:
+                    return self._waiting(
+                        "external_change_detected", {"reason": code, **result.error.details}, visit
+                    )
+                if self.runtime.get("git", {}).get("baseline", {}).get(
+                    "signing_required"
+                ) and code in {"git_failed", "git_timeout"}:
+                    return self._waiting("signing_required", {"reason": code}, visit)
             if validation_error or result.outcome == ExternalOutcome.INVALID_FORMAT:
                 return self._waiting(
                     "invalid_response_format",
@@ -1581,6 +1665,11 @@ class Runner:
             "context_paths": self.snapshot["resolved_settings"].get("context_paths", []),
             **self.snapshot["dependencies"]["nodes"][node["id"]],
         }
+        if isinstance(config.get("context_paths"), dict):
+            with self.session_factory() as session:
+                config["context_paths"] = evaluate(
+                    ASTNode.from_json(config["context_paths"]), self._context(session)
+                ).raw
         if config.get("mode") == "resolve_requests":
             return self._resolve_requests_node(node, visit, config)
         workspace = Path(self.snapshot["workspace"]["workspace_path"])
@@ -1588,6 +1677,15 @@ class Runner:
 
         def run(stop_event: threading.Event, deadline: float) -> LLMResult:
             context_sources.ensure_workspace_readable(workspace)
+            run_context = None
+            if config.get("include_run_history"):
+                from agents_ide.engine.git_commit import list_run_commits
+                from agents_ide.engine.git_process import using_transport
+                from agents_ide.engine.stage8 import transport
+
+                with using_transport(transport(self, stop_event, deadline)):
+                    history = list_run_commits(workspace, self.run_id)
+                run_context = {"plan": self.snapshot.get("plan"), "commits": history}
             with self.session_factory() as session:
                 collection = context_sources.collect_context(
                     config,
@@ -1600,6 +1698,7 @@ class Runner:
                     launcher=self._command_launcher(),
                     stop_event=stop_event,
                     deadline_at=deadline,
+                    run_context=run_context,
                 )
             with self._write() as (session, run_row):
                 self._event(
@@ -1642,7 +1741,7 @@ class Runner:
         self, node: dict[str, Any], visit: visits.VisitState, config: dict[str, Any]
     ) -> AgentResult | LLMResult | RunnerResult:
         limit = int(config.get("max_command_replays", 2))
-        missing = self._latest_missing_evidence()
+        missing = self._latest_missing_evidence(config.get("requests_from_node_id"))
         scope = (
             str(self.runtime["work"].get("scope") or "__default__")
             + ":"
@@ -1738,19 +1837,25 @@ class Runner:
             return outcome
         return outcome
 
-    def _latest_missing_evidence(self) -> list[dict[str, Any]]:
+    def _latest_missing_evidence(self, source_node: str | None = None) -> list[dict[str, Any]]:
         scope = self.runtime["work"].get("scope")
         with self.session_factory() as session:
             rows = session.scalars(
                 select(StepExecution)
                 .where(
                     StepExecution.run_id == self.run_id,
-                    StepExecution.cycle_id == self.runtime["cycle_id"],
+                    StepExecution.cycle_id.in_(
+                        [self.runtime["cycle_id"], self.runtime["cycle_id"] - 1]
+                        if source_node
+                        else [self.runtime["cycle_id"]]
+                    ),
                     StepExecution.status == "succeeded",
                 )
                 .order_by(StepExecution.finished_at.desc())
             )
             for row in rows:
+                if source_node and row.node_id != source_node:
+                    continue
                 if scope is not None and row.scope != scope:
                     continue
                 try:
@@ -1777,6 +1882,20 @@ class Runner:
             except AppError:
                 continue
         return result
+
+    def _git_commit_node(
+        self, node: dict[str, Any], visit: visits.VisitState
+    ) -> AgentResult | LLMResult | RunnerResult:
+        from agents_ide.engine.stage8 import git_commit_node
+
+        return git_commit_node(self, node, visit)
+
+    def _plan_control_node(
+        self, node: dict[str, Any], visit: visits.VisitState
+    ) -> LLMResult | RunnerResult:
+        from agents_ide.engine.stage8 import plan_control_node
+
+        return plan_control_node(self, node, visit)
 
     def _external(
         self, node: dict[str, Any], visit: visits.VisitState, adapter: AgentAdapter | LLMAdapter
@@ -1879,9 +1998,10 @@ class Runner:
                     context_package = {
                         "__node_id__": node["id"],
                         "input": self.snapshot["input"],
-                        "work": self.runtime["work"],
+                        "work": json.loads(to_json(self.runtime["work"])),
                         "resolution_artifact_ids": self.runtime.get("resolution_artifact_ids", []),
                         "evidence": evidence_package,
+                        "plan": self.snapshot.get("plan"),
                     }
                     artifact = self._artifact(
                         session,
@@ -1989,8 +2109,13 @@ class Runner:
                 if node["type"] == "AgentTask":
                     request = AgentAdapterRequest(
                         **common,
-                        workspace_path=str(self.data_dir / "simulated" / self.run_id),
-                        capabilities={"source": "simulated", "network": False},
+                        workspace_path=str(self.data_dir / "simulated" / self.run_id)
+                        if self.simulated
+                        else self.snapshot["workspace"]["workspace_path"],
+                        capabilities={
+                            "source": "simulated" if self.simulated else "engine",
+                            "network": False,
+                        },
                     )
                 else:
                     request = LLMAdapterRequest(
@@ -2191,6 +2316,34 @@ class Runner:
             invalid = self._missing_evidence_error(body["missing_evidence"])
             if invalid:
                 return invalid
+        if config.get("plan_check"):
+            from agents_ide.engine.plan_control import validate_item_results
+
+            ids = (
+                self.runtime["work"].get("plan_item_ids", [])
+                if config["plan_check"] == "all"
+                else [self.runtime["work"].get("current_plan_item_id")]
+            )
+            try:
+                items = validate_item_results(
+                    body.get("item_results") if isinstance(body, dict) else None, ids
+                )
+                with self.session_factory() as session:
+                    for item in items:
+                        for evidence_id in item.get("evidence_ids", []):
+                            artifact = session.get(ArtifactManifest, evidence_id)
+                            if artifact is None or artifact.run_id != self.run_id:
+                                return "plan_evidence_invalid"
+            except (AppError, TypeError):
+                return "plan_item_results_invalid"
+            body = {
+                **(body or {}),
+                "verdict": "failed"
+                if any(i["verdict"] == "failed" for i in items)
+                else "inconclusive"
+                if any(i["verdict"] != "passed" for i in items)
+                else "passed",
+            }
         verdict = (
             body.get("verdict", result.decision) if isinstance(body, dict) else result.decision
         )
@@ -2239,6 +2392,11 @@ class Runner:
                     },
                 }
                 verdict = override
+                if config.get("plan_check"):
+                    body["item_results"] = [
+                        {**i, "verdict": override if i["verdict"] == "passed" else i["verdict"]}
+                        for i in body["item_results"]
+                    ]
         # Result envelopes are frozen: only the server-created normalized copy is persisted.
         object.__setattr__(result, "validated_result", artifacts.sanitize(body))
         object.__setattr__(result, "decision", verdict)
@@ -2469,6 +2627,31 @@ class Runner:
     ) -> RunnerResult | None:
         if not self._stop_processes_if_requested(terminal=node["type"] == "End"):
             return self._waiting("process_not_responding", {"reason": "local_tree_alive"}, visit)
+        if node["type"] == "End" and self.snapshot.get("plan"):
+            from agents_ide.engine.plan_control import plan_summary
+
+            with self.session_factory() as plan_session:
+                remaining = plan_summary(plan_session, self.run_id).remaining
+            final = self.runtime.get("plan_final_check", {})
+            needs_final = any(
+                n.get("config", {}).get("operation") == "record_final_check"
+                for n in self.nodes.values()
+            )
+            if remaining or (
+                needs_final
+                and (
+                    not final.get("complete")
+                    or final.get("workspace_hash")
+                    != context_sources.workspace_hash(
+                        Path(self.snapshot["workspace"]["workspace_path"])
+                    )
+                )
+            ):
+                return self._waiting(
+                    "missing_data",
+                    {"reason": "plan_not_fully_verified", "remaining": list(remaining)},
+                    visit,
+                )
         with self._write() as (session, run):
             execution = session.get(StepExecution, visit.execution_id)
             assert execution is not None
@@ -2543,8 +2726,15 @@ class Runner:
             edge = edges[0]
             target = edge.get("to") or edge.get("target") or edge.get("to_node")
             loop = edge.get("loop")
+            loop_key = (
+                loop["id"] + ":" + self.runtime["work"]["scope"]
+                if loop and loop.get("scope") == "item"
+                else loop["id"]
+                if loop
+                else ""
+            )
             if loop:
-                count = self.runtime["loop_counts"].get(loop["id"], 0)
+                count = self.runtime["loop_counts"].get(loop_key, 0)
                 limit = (
                     "max_backward_transitions"
                     if self.runtime["backward_transitions"]
@@ -2571,9 +2761,59 @@ class Runner:
                     return self._state(session, run, "waiting_input", reason)
             updates = apply_assignments(edge.get("assignments", {}), context)
             self.runtime["work"].update({key: value.raw for key, value in updates.items()})
+            if (
+                loop
+                and self.snapshot.get("plan")
+                and self.nodes[target]["type"] == "AgentTask"
+                and self.runtime["work"]["mode"] == "repair"
+            ):
+                from agents_ide.domain.common import content_hash
+                from agents_ide.engine.plan_control import load_plan_items
+
+                feedback = self.runtime["work"].get("plan_feedback", {})
+                findings = feedback.get("item_results", []) if isinstance(feedback, dict) else []
+                signature = content_hash(
+                    {
+                        "code": context_sources.workspace_hash(
+                            Path(self.snapshot["workspace"]["workspace_path"])
+                        ),
+                        "items": [
+                            (i.item_id, i.status) for i in load_plan_items(session, self.run_id)
+                        ],
+                        "findings": sorted(
+                            (
+                                str(i.get("plan_item_id")),
+                                sorted(str(f).strip().lower() for f in i.get("findings", [])),
+                            )
+                            for i in findings
+                        ),
+                    }
+                )
+                key = self.runtime["work"]["scope"]
+                previous = self.runtime.setdefault("plan_progress", {}).get(key, {})
+                stalls = (
+                    previous.get("stalls", 0) + 1 if previous.get("signature") == signature else 0
+                )
+                self.runtime["plan_progress"][key] = {"signature": signature, "stalls": stalls}
+                if stalls >= 2:
+                    reason = WaitingReason(
+                        code="no_progress",
+                        details={"node_id": node["id"], "scope": key},
+                        allowed_actions=["resolve", "stop", "cancel"],
+                    )
+                    run.resume_target_json = to_json(
+                        {
+                            "action": "dispatch_next",
+                            "blocked_edge": edge,
+                            "node_id": node["id"],
+                            "execution_id": visit.execution_id,
+                            "blockers": ["no_progress"],
+                        }
+                    )
+                    return self._state(session, run, "waiting_input", reason)
             if loop:
-                self.runtime["loop_counts"][loop["id"]] = (
-                    self.runtime["loop_counts"].get(loop["id"], 0) + 1
+                self.runtime["loop_counts"][loop_key] = (
+                    self.runtime["loop_counts"].get(loop_key, 0) + 1
                 )
                 self.runtime["backward_transitions"] += 1
                 self.runtime["cycle_id"] += 1
