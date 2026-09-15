@@ -499,6 +499,15 @@
           },
           "type": {
             "enum": [
+              "agent.message_delta",
+              "agent.permission_requested",
+              "agent.permission_resolved",
+              "agent.server_started",
+              "agent.session_aborted",
+              "agent.session_created",
+              "agent.session_invalidated",
+              "agent.session_resumed",
+              "agent.tool_call",
               "artifact.recorded",
               "assignment.applied",
               "attempt.finished",
@@ -945,12 +954,83 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HarnessProbe": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tested_at": {
+            "format": "date-time",
+            "title": "Tested At",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "status",
+          "version",
+          "detail",
+          "tested_at"
+        ],
+        "title": "HarnessProbe",
+        "type": "object"
+      },
       "HarnessProfile": {
         "additionalProperties": false,
         "properties": {
           "archived": {
             "title": "Archived",
             "type": "boolean"
+          },
+          "catalog_fetched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Fetched At"
+          },
+          "catalog_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Catalog Models",
+            "type": "array"
+          },
+          "catalog_ttl_seconds": {
+            "title": "Catalog Ttl Seconds",
+            "type": "integer"
           },
           "created_at": {
             "format": "date-time",
@@ -980,6 +1060,29 @@
             "title": "Id",
             "type": "string"
           },
+          "last_test_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Test At"
+          },
+          "last_test_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Test Status"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -1005,6 +1108,11 @@
           "harness_kind",
           "executable_path",
           "settings",
+          "catalog_models",
+          "catalog_fetched_at",
+          "catalog_ttl_seconds",
+          "last_test_status",
+          "last_test_at",
           "archived",
           "version",
           "created_at",
@@ -1013,9 +1121,64 @@
         "title": "HarnessProfile",
         "type": "object"
       },
+      "HarnessProfileCatalog": {
+        "additionalProperties": false,
+        "properties": {
+          "fetched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At"
+          },
+          "models": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "unverified",
+              "fresh",
+              "stale"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "models",
+          "fetched_at",
+          "ttl_seconds"
+        ],
+        "title": "HarnessProfileCatalog",
+        "type": "object"
+      },
       "HarnessProfileCreate": {
         "additionalProperties": false,
         "properties": {
+          "catalog_ttl_seconds": {
+            "default": 900,
+            "maximum": 86400.0,
+            "minimum": 60.0,
+            "title": "Catalog Ttl Seconds",
+            "type": "integer"
+          },
           "executable_path": {
             "anyOf": [
               {
@@ -1058,6 +1221,19 @@
       "HarnessProfileUpdate": {
         "additionalProperties": false,
         "properties": {
+          "catalog_ttl_seconds": {
+            "anyOf": [
+              {
+                "maximum": 86400.0,
+                "minimum": 60.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Ttl Seconds"
+          },
           "executable_path": {
             "anyOf": [
               {
@@ -5133,6 +5309,90 @@
           }
         },
         "summary": "Archive Harness Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/harness_profiles/{harness_id}/models": {
+      "get": {
+        "operationId": "harness_models_endpoint_api_harness_profiles__harness_id__models_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "harness_id",
+            "required": true,
+            "schema": {
+              "title": "Harness Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HarnessProfileCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Harness Models Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/harness_profiles/{harness_id}/test": {
+      "post": {
+        "operationId": "harness_test_endpoint_api_harness_profiles__harness_id__test_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "harness_id",
+            "required": true,
+            "schema": {
+              "title": "Harness Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HarnessProbe"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Harness Test Endpoint",
         "tags": [
           "domain"
         ]

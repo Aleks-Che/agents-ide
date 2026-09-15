@@ -401,6 +401,7 @@ class HarnessProfileCreate(ApiModel):
     harness_kind: Literal["codex", "opencode"]
     executable_path: str | None = Field(default=None, max_length=512)
     settings: dict[str, Any] = Field(default_factory=dict)
+    catalog_ttl_seconds: int = Field(default=900, ge=60, le=86400)
 
     @field_validator("settings")
     @classmethod
@@ -413,6 +414,7 @@ class HarnessProfileUpdate(ApiModel):
     name: NonEmptyStr | None = None
     executable_path: str | None = Field(default=None, max_length=512)
     settings: dict[str, Any] | None = None
+    catalog_ttl_seconds: int | None = Field(default=None, ge=60, le=86400)
     expected_version: int = Field(ge=1)
 
     @field_validator("settings")
@@ -420,6 +422,37 @@ class HarnessProfileUpdate(ApiModel):
     def _no_credentials(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
         _reject_credentials(value)
         return value
+
+
+class HarnessProfile(ApiOutput):
+    id: str
+    name: str
+    harness_kind: Literal["codex", "opencode"]
+    executable_path: str | None
+    settings: dict[str, Any]
+    catalog_models: list[str]
+    catalog_fetched_at: datetime | None
+    catalog_ttl_seconds: int
+    last_test_status: str | None
+    last_test_at: datetime | None
+    archived: bool
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class HarnessProfileCatalog(ApiOutput):
+    status: Literal["unverified", "fresh", "stale"]
+    models: list[dict[str, str]]
+    fetched_at: datetime | None
+    ttl_seconds: int
+
+
+class HarnessProbe(ApiOutput):
+    status: Literal["ok", "failed"]
+    version: str | None
+    detail: str | None
+    tested_at: datetime
 
 
 def _reject_credentials(value: Any) -> None:
@@ -431,18 +464,6 @@ def _reject_credentials(value: Any) -> None:
     elif isinstance(value, list):
         for item in value:
             _reject_credentials(item)
-
-
-class HarnessProfile(ApiOutput):
-    id: str
-    name: str
-    harness_kind: Literal["codex", "opencode"]
-    executable_path: str | None
-    settings: dict[str, Any]
-    archived: bool
-    version: int
-    created_at: datetime
-    updated_at: datetime
 
 
 # ----------------------------------------------------------------------------- Model groups

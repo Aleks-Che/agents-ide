@@ -6,7 +6,8 @@
 графы, сохраняет результаты/артефакты/SSE и поддерживает pause/stop/resume/recovery.
 В реальном режиме работают LLM HTTP, Command и CollectContext; fake остаётся явным режимом.
 Этап 8 добавляет [GitCommit, фиксированный план и встроенный пресет](docs/architecture/GIT_PLAN_RUNTIME.md).
-Native harness и основной UI ожидают этапов 6A/9 [плана](docs/IMPLEMENTATION_PLAN.md).
+OpenCode подключён в [режиме без инструментов](docs/architecture/OPENCODE_RUNTIME.md);
+разрешённая изолированная запись и основной UI остаются этапам 6A/9 [плана](docs/IMPLEMENTATION_PLAN.md).
 
 [Журнал реализации](docs/IMPLEMENTATION_LOG.md): нюансы разработки, фичи, открытые блокеры, результаты проверок и заметки для следующих этапов.
 

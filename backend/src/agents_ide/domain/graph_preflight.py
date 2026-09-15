@@ -486,6 +486,34 @@ def _candidates(
         elif isinstance(resource, HarnessProfile):
             if resource.executable_path and shutil.which(resource.executable_path) is None:
                 reason = reason or "executable_unavailable"
+            row["catalog"] = {
+                "fetched_at": resource.catalog_fetched_at,
+                "ttl_seconds": resource.catalog_ttl_seconds,
+                "availability": "unverified",
+            }
+            if resource.harness_kind == "opencode":
+                from agents_ide.engine.opencode_runtime import validate_settings
+
+                settings = dependencies["harness_profiles"][resource.id]["settings"]
+                row["capabilities"]["permissions"] = settings.get("permission_mode", "unverified")
+                if candidate["enabled"] and report.preview.get("execution_mode") == "real":
+                    try:
+                        validate_settings(settings)
+                        if candidate["params"]:
+                            raise AppError(
+                                "configuration_invalid",
+                                "OpenCode parameters require verified mapping",
+                                422,
+                            )
+                    except AppError as exc:
+                        report.add_error(
+                            ValidationIssue(
+                                exc.code,
+                                exc.message,
+                                node_id,
+                                details={"member_id": candidate["id"]},
+                            )
+                        )
             row["destination"] = {
                 "kind": "harness",
                 "profile_id": resource.id,

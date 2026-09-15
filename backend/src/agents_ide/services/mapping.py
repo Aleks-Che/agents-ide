@@ -204,6 +204,11 @@ def harness_from_model(model: HarnessProfileModel) -> HarnessProfile:
         harness_kind=model.harness_kind,  # type: ignore[arg-type]
         executable_path=model.executable_path,
         settings=from_json(model.settings_json, {}),
+        catalog_models=from_json(model.catalog_models_json, []),
+        catalog_fetched_at=_dt(model.catalog_fetched_at),
+        catalog_ttl_seconds=model.catalog_ttl_seconds,
+        last_test_status=model.last_test_status,
+        last_test_at=_dt(model.last_test_at),
         archived=model.archived_at is not None,
         version=model.version,
         created_at=_dt(model.created_at) or datetime.now(tz=UTC),

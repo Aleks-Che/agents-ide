@@ -38,7 +38,9 @@ from agents_ide.domain.schemas import (
     ChatUpdate,
     CommandAccepted,
     DraftPublish,
+    HarnessProbe,
     HarnessProfile,
+    HarnessProfileCatalog,
     HarnessProfileCreate,
     HarnessProfileUpdate,
     Message,
@@ -500,6 +502,16 @@ def archive_harness_endpoint(
     expected_version: int = Query(ge=1),
 ) -> HarnessProfile:
     return harness.archive_harness(session, harness_id, expected_version)
+
+
+@router.get("/harness_profiles/{harness_id}/models", response_model=HarnessProfileCatalog)
+def harness_models_endpoint(session: SessionDep, harness_id: str) -> HarnessProfileCatalog:
+    return harness.model_catalog(session, harness_id)
+
+
+@router.post("/harness_profiles/{harness_id}/test", response_model=HarnessProbe)
+def harness_test_endpoint(session: SessionDep, harness_id: str) -> HarnessProbe:
+    return harness.probe_harness(session, harness_id)
 
 
 # ----------------------------------------------------------------------------- Runs

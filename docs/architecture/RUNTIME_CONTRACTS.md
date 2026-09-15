@@ -1,8 +1,10 @@
 # Очередь, события, процессы и бюджеты
 
+Проверенная часть OpenCode 6A и её ограничения: [OPENCODE_RUNTIME](OPENCODE_RUNTIME.md).
+
 Статус: решения v1 для реализации. Связи: [состояния](STATE_MACHINES.md), [исполнение](EXECUTION_CONTRACTS.md), [безопасность и эксплуатация](SECURITY_AND_OPERATIONS.md).
 
-Реализованная часть этапа 4 и её точные границы описаны в [ENGINE_RUNTIME](ENGINE_RUNTIME.md). Fake запускается явно; очередь, checkpoint, retry/fallback, поток delta и SSE проверены. [Этап 5](CONTROL_AND_RECOVERY.md) реализует resume/reconciliation и проверенный на Windows ProcessSupervisor. Внешние протоколы, native interrupt/permissions и Git/evidence остаются этапам 6–8. Актуальные имена событий выдаёт единый [каталог](../api/events.json); таблица ниже задаёт целевую v1, включая ещё не подключённые процессы/Git/PlanControl.
+Реализованные этапы и границы описаны в [ENGINE_RUNTIME](ENGINE_RUNTIME.md). Fake запускается явно; очередь, checkpoint, retry/fallback, поток delta и SSE проверены. [Этап 5](CONTROL_AND_RECOVERY.md) реализует resume/reconciliation и Windows ProcessSupervisor; Git/evidence добавлены этапами 7–8. OpenCode подключён с запретом инструментов; разрешённая изолированная запись, interactive permissions и Codex остаются gates 6A/6B. Актуальные имена событий выдаёт единый [каталог](../api/events.json); таблицы ниже задают целевую v1, включая ещё не завершённые возможности.
 
 Выбор кандидата в группах моделей (§7.5) делается только по snapshot Run. Direct-выбор сохраняет прежнюю семантику без автоматической замены. Переключение между кандидатами расходует общие лимиты Run и записывается отдельной StepAttempt с фиксированной причиной. Исчерпание всех включённых подходящих кандидатов переводит Run в `waiting_input` с `model_group_exhausted`; возобновление требует явной команды и сохраняет прежние счётчики.
 

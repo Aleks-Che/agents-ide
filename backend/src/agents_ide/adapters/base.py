@@ -51,6 +51,9 @@ class AgentResult:
     elapsed_seconds: float = 0.0
     finished_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     no_effect: bool = False
+    tokens_used: int | None = None
+    cost_estimated: float | None = None
+    budget_quality: str | None = None
 
     @property
     def succeeded(self) -> bool:

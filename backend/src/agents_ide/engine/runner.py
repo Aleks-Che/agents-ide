@@ -136,6 +136,7 @@ class Runner:
         self.simulated = False
         self._attempt_id: str | None = None
         self._current_evidence: dict[str, Any] = {}
+        self._opencode_live: dict[str, Any] = {}
 
     @contextmanager
     def _write(self) -> Iterator[tuple[Session, Run]]:
@@ -275,6 +276,7 @@ class Runner:
     def _waiting(
         self, code: str, details: dict[str, Any], visit: visits.VisitState | None = None
     ) -> RunnerResult:
+        self._close_opencode()
         reason = WaitingReason.model_validate(
             {
                 "code": code,
@@ -307,6 +309,12 @@ class Runner:
             return self._state(session, run, "waiting_input", reason)
 
     def execute(self, run_id: str) -> RunnerResult:
+        try:
+            return self._execute(run_id)
+        finally:
+            self._close_opencode()
+
+    def _execute(self, run_id: str) -> RunnerResult:
         self.run_id = run_id
         with self.session_factory() as session:
             row = session.get(Run, run_id)
@@ -655,16 +663,6 @@ class Runner:
                     self._persist(run)
                 result: AgentResult | LLMResult | None = None
                 if node["type"] in {"AgentTask", "LLMRequest"}:
-                    if (
-                        not self.simulated
-                        and node["type"] == "AgentTask"
-                        and type(agent) is AgentAdapter
-                    ):
-                        return self._waiting(
-                            "configuration_invalid",
-                            {"node_id": node["id"], "reason": "harness_adapter_unimplemented"},
-                            visit,
-                        )
                     result = self._saved_result(visit) if reuse else None
                     if result is None:
                         external = self._external(
@@ -808,7 +806,9 @@ class Runner:
     def _build_adapters(self, snapshot: dict[str, Any]) -> tuple[AgentAdapter, LLMAdapter]:
         if not self.simulated:
             # Real LLM calls use the pinned connection per candidate; the base
-            # agent adapter stays unimplemented until the harness stage.
+            # agent adapter returns an unimplemented instance. The runner
+            # selects the actual harness adapter per candidate via
+            # ``_agent_adapter_for``.
             return AgentAdapter(), _build_http_llm()
         root = self.data_dir.resolve() / "simulated"
         workspace = root / self.run_id
@@ -816,7 +816,71 @@ class Runner:
         if root.resolve() != root or workspace.resolve() != workspace:
             raise AppError("path_violation", "Каталог simulation перенаправлен", 409)
         scenario = parse_fake_scenario(snapshot.get("fake_scenario"))
+        self._fake_scenario = scenario
         return FakeAgentAdapter(scenario, workspace), FakeLLMAdapter(scenario, workspace)
+
+    def _agent_adapter_for(
+        self, candidate: dict[str, Any], request: AgentAdapterRequest
+    ) -> AgentAdapter:
+        from agents_ide.adapters.opencode import OpenCodeAdapter
+        from agents_ide.engine.opencode_runtime import OpenCodeRuntime, validate_settings
+        from agents_ide.worker.processes import ProcessRegistry, ProcessSupervisor
+
+        profile_id = str(candidate.get("harness_profile_id") or "")
+        profile = self.snapshot["dependencies"]["harness_profiles"].get(profile_id, {})
+        if profile.get("harness_kind") != "opencode":
+            raise AppError("configuration_invalid", "harness_adapter_unimplemented", 409)
+        validate_settings(profile.get("settings", {}))
+        if request.params:
+            raise AppError("configuration_invalid", "OpenCode model parameters are unverified", 409)
+        if self.registry is None:
+            self.registry = ProcessRegistry()
+        runtime = self._opencode_live.get(profile_id)
+        if runtime is None:
+            # There is at most one OpenCode listener per Run. A completed
+            # candidate cannot leave another server alive during profile fallback.
+            self._close_opencode()
+            runtime = OpenCodeRuntime.start(
+                supervisor=ProcessSupervisor(
+                    self.session_factory,
+                    self.registry,
+                    self.run_id,
+                    self.worker_id,
+                    self.generation,
+                ),
+                executable=str(profile.get("executable_path") or ""),
+                workspace_path=Path(request.workspace_path),
+                attempt_id=self._attempt_id,
+                check_owned=self._check_owned,
+                stop_event=request.stop_event,
+            )
+            self._opencode_live[profile_id] = runtime
+            with self._write() as (session, run):
+                self.runtime.setdefault("opencode_runtimes", {})[profile_id] = runtime.to_dict()
+                self._event(
+                    session, "agent.server_started", runtime.to_dict(), attempt_id=self._attempt_id
+                )
+                self._persist(run)
+        return OpenCodeAdapter(session=runtime.session())
+
+    def _agent_session_key(self, candidate: dict[str, Any], role: str) -> str:
+        from hashlib import sha256
+
+        return sha256(
+            to_json(
+                {
+                    "candidate": candidate,
+                    "role": role,
+                    "scope": self.runtime["work"].get("scope"),
+                    "directory": self.snapshot["workspace"],
+                }
+            ).encode()
+        ).hexdigest()
+
+    def _close_opencode(self) -> None:
+        for runtime in self._opencode_live.values():
+            runtime.close()
+        self._opencode_live.clear()
 
     def _context(self, session: Session) -> EvaluationContext:
         work = {key: Value.of(value) for key, value in self.runtime["work"].items()}
@@ -866,6 +930,9 @@ class Runner:
             requested = run is not None and (
                 run.state == "stop_requested" or run.stop_goal in {"cancelled", "stopped"}
             )
+            paused = run is not None and run.state == "pause_requested"
+        if terminal or requested or paused:
+            self._close_opencode()
         if terminal or requested:
             from agents_ide.worker.processes import ProcessSupervisor
 
@@ -2028,13 +2095,28 @@ class Runner:
                     }
                     self.runtime["retry_at"] = None
                     if node["type"] == "AgentTask":
+                        profile = (
+                            self.snapshot.get("dependencies", {})
+                            .get("harness_profiles", {})
+                            .get(candidate.get("harness_profile_id") or "", {})
+                        )
+                        harness_kind = (
+                            profile.get("harness_kind") if isinstance(profile, dict) else None
+                        ) or ("fake" if self.simulated else "opencode")
+                        capabilities = {
+                            "simulated": self.simulated,
+                            "network": not self.simulated,
+                            "harness_kind": harness_kind,
+                        }
+                        if isinstance(profile, dict) and profile.get("server_version"):
+                            capabilities["server_version"] = profile["server_version"]
                         session.add(
                             AgentSession(
                                 id=new_id(),
                                 attempt_id=attempt_id,
-                                harness_kind="fake",
+                                harness_kind=harness_kind,
                                 role=config.get("role", ""),
-                                capabilities_json=to_json({"simulated": True, "network": False}),
+                                capabilities_json=to_json(capabilities),
                                 started_at=utc_now(),
                             )
                         )
@@ -2051,12 +2133,27 @@ class Runner:
                         visit,
                         attempt_id,
                     )
+                self._attempt_id = attempt_id
                 request: AgentAdapterRequest | LLMAdapterRequest
 
                 def emit_progress(
-                    type_: str, payload: dict[str, Any], _attempt_id: str = attempt_id
+                    type_: str,
+                    payload: dict[str, Any],
+                    _attempt_id: str = attempt_id,
+                    _candidate: dict[str, Any] = candidate,
                 ) -> None:
-                    if type_ != "attempt.text_delta":
+                    allowed = {
+                        "attempt.text_delta",
+                        "attempt.progress",
+                        "agent.session_created",
+                        "agent.session_resumed",
+                        "agent.session_invalidated",
+                        "agent.tool_call",
+                        "agent.permission_requested",
+                        "agent.permission_resolved",
+                        "agent.session_aborted",
+                    }
+                    if type_ not in allowed:
                         raise ValueError("Adapter cannot emit state transitions")
                     with self._write() as (progress_session, progress_run):
                         attempt_row = progress_session.get(StepAttempt, _attempt_id)
@@ -2070,6 +2167,52 @@ class Runner:
                             select(AgentSession).where(AgentSession.attempt_id == _attempt_id)
                         ):
                             agent_session.last_external_event_at = utc_now()
+                            if payload.get("session_id") and not late:
+                                agent_session.external_session_id = payload["session_id"]
+                            if (
+                                payload.get("message_id")
+                                and payload.get("role") == "assistant"
+                                and not late
+                            ):
+                                agent_session.external_turn_id = payload["message_id"]
+                            if (
+                                type_ in {"agent.session_created", "agent.session_resumed"}
+                                and not late
+                            ):
+                                agent_session.resume_count = payload.get("resume_count", 0)
+                                caps = json.loads(agent_session.capabilities_json)
+                                caps.update(
+                                    server_version=payload.get("server_version"),
+                                    permission_mode="no_tools",
+                                )
+                                agent_session.capabilities_json = to_json(caps)
+                                key = self._agent_session_key(
+                                    _candidate, str(config.get("role", ""))
+                                )
+                                previous_session = self.runtime.setdefault(
+                                    "native_sessions", {}
+                                ).get(key, {})
+                                self.runtime["native_sessions"][key] = {
+                                    "session_id": payload["session_id"],
+                                    "server_version": payload.get("server_version"),
+                                    "resume_count": previous_session.get("resume_count", 0) + 1
+                                    if type_ == "agent.session_resumed"
+                                    else 0,
+                                }
+                                agent_session.resume_count = self.runtime["native_sessions"][key][
+                                    "resume_count"
+                                ]
+                                agent_session.cwd_identity_dev = self.snapshot["workspace"][
+                                    "identity_dev"
+                                ]
+                                agent_session.cwd_identity_ino = self.snapshot["workspace"][
+                                    "identity_ino"
+                                ]
+                            if type_ == "agent.session_invalidated" and not late:
+                                key = self._agent_session_key(
+                                    _candidate, str(config.get("role", ""))
+                                )
+                                self.runtime.setdefault("native_sessions", {}).pop(key, None)
                         for process in progress_session.scalars(
                             select(ProcessSupervision).where(
                                 ProcessSupervision.step_attempt_id == _attempt_id
@@ -2114,9 +2257,14 @@ class Runner:
                         else self.snapshot["workspace"]["workspace_path"],
                         capabilities={
                             "source": "simulated" if self.simulated else "engine",
-                            "network": False,
+                            "network": not self.simulated,
                         },
                     )
+                    key = self._agent_session_key(candidate, str(config.get("role", "")))
+                    native = self.runtime.get("native_sessions", {}).get(key, {})
+                    if native.get("resume_count", 0) < 3:
+                        request = replace(request, resume_session_id=native.get("session_id"))
+                    bound_adapter: AgentAdapter | LLMAdapter = adapter
                 else:
                     request = LLMAdapterRequest(
                         **common,
@@ -2124,12 +2272,45 @@ class Runner:
                         output_schema=config.get("output_schema"),
                         connection=connection,
                     )
+                    bound_adapter = adapter
 
                 def invoke_adapter(
-                    bound_adapter: AgentAdapter | LLMAdapter = adapter,
-                    bound_request: AgentAdapterRequest | LLMAdapterRequest = request,
+                    _adapter: AgentAdapter | LLMAdapter = bound_adapter,
+                    _request: AgentAdapterRequest | LLMAdapterRequest = request,
+                    _candidate: dict[str, Any] = candidate,
                 ) -> AgentResult | LLMResult:
-                    return call_adapter(bound_adapter, bound_request)
+                    if (
+                        type(_adapter) is AgentAdapter
+                        and isinstance(_request, AgentAdapterRequest)
+                        and not self.simulated
+                    ):
+                        try:
+                            _adapter = self._agent_adapter_for(_candidate, _request)
+                            key = self._agent_session_key(_candidate, _request.role)
+                            native = self.runtime.get("native_sessions", {}).get(key, {})
+                            if native.get("server_version") != getattr(
+                                _adapter, "server_version", None
+                            ):
+                                _request = replace(_request, resume_session_id=None)
+                        except AppError as exc:
+                            return AgentResult(
+                                ExternalOutcome.CONFIRMED_FAILURE,
+                                "",
+                                None,
+                                None,
+                                error=AdapterError(
+                                    "configuration_invalid",
+                                    exc.message,
+                                    "safe",
+                                    {
+                                        "reason": "harness_adapter_unimplemented"
+                                        if exc.message == "harness_adapter_unimplemented"
+                                        else exc.code
+                                    },
+                                ),
+                                no_effect=True,
+                            )
+                    return call_adapter(_adapter, _request)
 
                 result = self._call_monitored(
                     invoke_adapter,
@@ -2205,6 +2386,9 @@ class Runner:
                         {
                             "node_id": node["id"],
                             "error": result.error.code if result.error else "confirmed_failure",
+                            "reason": result.error.details.get("reason", result.error.code)
+                            if result.error
+                            else "confirmed_failure",
                         },
                         visit,
                     )
@@ -2547,13 +2731,13 @@ class Runner:
                 if result.error
                 else None
             )
-            if isinstance(result, LLMResult):
+            if isinstance(result, (AgentResult, LLMResult)):
                 attempt.tokens_used, attempt.cost_estimated, attempt.budget_quality = (
                     result.tokens_used,
                     result.cost_estimated,
                     result.budget_quality or "unknown",
                 )
-                if self.nodes[visit.node_id]["type"] == "LLMRequest":
+                if self.nodes[visit.node_id]["type"] in {"LLMRequest", "AgentTask"}:
                     self.runtime["tokens_used"] += result.tokens_used or 0
                     self.runtime["cost_estimated"] += result.cost_estimated or 0
                     self.runtime["budget_quality"] = (
@@ -2593,6 +2777,7 @@ class Runner:
                 select(AgentSession).where(AgentSession.attempt_id == attempt_id)
             ):
                 agent_session.finished_at = attempt.finished_at
+                agent_session.last_message_preview = artifacts.sanitize(result.raw_text[:1000])
             self._event(
                 session,
                 "attempt.finished",
@@ -2625,6 +2810,8 @@ class Runner:
     def _finish_visit(
         self, node: dict[str, Any], visit: visits.VisitState, result: AgentResult | LLMResult | None
     ) -> RunnerResult | None:
+        if node["type"] == "End":
+            self._close_opencode()
         if not self._stop_processes_if_requested(terminal=node["type"] == "End"):
             return self._waiting("process_not_responding", {"reason": "local_tree_alive"}, visit)
         if node["type"] == "End" and self.snapshot.get("plan"):

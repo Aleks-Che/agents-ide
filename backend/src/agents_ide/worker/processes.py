@@ -637,7 +637,7 @@ class ProcessSupervisor:
                 owned_job(session, self.run_id, self.worker_id, self.generation)
                 run = session.get(Run, self.run_id)
                 assert run is not None
-                if kind in {"command", "git"}:
+                if kind in {"command", "git", "harness"}:
                     from agents_ide.security.filesystem import directory_identity
 
                     workspace = json.loads(run.snapshot_json)["workspace"]

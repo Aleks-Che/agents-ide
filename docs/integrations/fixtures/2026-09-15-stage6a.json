@@ -1,0 +1,28 @@
+{
+  "date": "2026-09-15",
+  "platform": "Windows",
+  "python_version": "3.12.7",
+  "harness": "opencode",
+  "server_version": "1.18.30",
+  "real_executable": true,
+  "catalog_count_in_native_profile": 91,
+  "owned_loopback_listener": "verified",
+  "directory": "verified_including_unicode",
+  "permissions": "deny_all_tools_confirmed_by_session",
+  "session_create": "succeeded",
+  "session_resume": "succeeded_same_native_id",
+  "model_transport": "synthetic_local_openai_compatible_http_server",
+  "local_provider_calls": 2,
+  "paid_provider_calls": 0,
+  "message_results": ["succeeded", "succeeded"],
+  "events_observed": [
+    "agent.session_created",
+    "agent.session_resumed",
+    "attempt.progress",
+    "attempt.text_delta"
+  ],
+  "owned_process_termination": "verified",
+  "write_isolation": "unverified",
+  "real_model_acceptance": "not_performed",
+  "full_stage6a_acceptance": "pending"
+}

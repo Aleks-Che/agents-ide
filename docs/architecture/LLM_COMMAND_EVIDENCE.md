@@ -10,7 +10,8 @@
 ## Исполнение и HTTP
 
 В `execution_mode=real` работают Start, Condition, End, LLMRequest, Command и CollectContext.
-AgentTask возвращает `waiting_input(configuration_invalid)` с причиной
+AgentTask с OpenCode поддерживает [no_tools](OPENCODE_RUNTIME.md); неподключённый
+harness возвращает `waiting_input(configuration_invalid)` с причиной
 `harness_adapter_unimplemented`. GitCommit и PlanControl добавлены
 [этапом 8](GIT_PLAN_RUNTIME.md) с проверками Git/evidence и фиксированным планом.
 В simulated-режиме сохраняются прежние fake AgentTask/LLMRequest и отдельный тестовый workspace.
@@ -127,4 +128,4 @@ success_exit_codes, строгие типы, журнал и правила unkn
 
 Платные модели, удалённый CI, реальный Linux runtime и harness не проверялись в этом ревью.
 Git commit/intent/hooks, PlanControl и полный пресет проверены отдельным
-[ревью этапа 8](GIT_PLAN_RUNTIME.md); harness остаётся этапу 6A.
+[ревью этапа 8](GIT_PLAN_RUNTIME.md); проверенная часть OpenCode — [этап 6A](OPENCODE_RUNTIME.md).

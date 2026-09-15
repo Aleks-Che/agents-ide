@@ -54,3 +54,11 @@ backend/.venv/Scripts/python.exe scripts/probe_integrations.py `
 Control probe повторяется командой `backend/.venv/Scripts/python.exe scripts/probe_controls.py --opencode 'C:/path/to/opencode.exe' --output <new-file.json>`. Он запрашивает разрешение только на синтетическое действие и всегда отказывает, проверяет завершённую историю после перезапуска, отдельно запускает Codex без сохранённой авторизации. Первый smoke получил тайм-аут Codex interrupt; после ожидания фактической delta и сохранения раннего terminal notification control probe подтвердил `interrupted`. Исходное наблюдение оставлено для воспроизводимости.
 
 Оставшиеся gates 6A/6B: provider auth failure OpenCode, восстановление незавершённой операции, отрицательные проверки записи за пределами workspace. До их проверки соответствующие возможности остаются `unverified`; no-go автономной записи зафиксирован, а не заменён fake-проверкой.
+
+## Ревью интеграции 6A — 2026-09-15
+
+Установленный OpenCode 1.18.30 проверен через новый адаптер: session/message/SSE delta,
+resume по native ID и directory с кириллицей. Модель заменена локальным HTTP-провайдером,
+платных вызовов нет. [Наблюдение](fixtures/2026-09-15-stage6a.json) и
+[границы реализации](../architecture/OPENCODE_RUNTIME.md). Предыдущий no-go разрешённой
+автономной записи сохраняется; no_tools и успешный транспорт не закрывают этот gate.

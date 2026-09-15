@@ -2,15 +2,16 @@
 
 Статус: независимый worker выполняет графы, поддерживает управление/recovery этапа 5
 и [HTTP, Command, CollectContext этапа 7](LLM_COMMAND_EVIDENCE.md),
-[GitCommit, PlanControl и пресет этапа 8](GIT_PLAN_RUNTIME.md). Native harness ожидает
-этапа 6A. Основания: [план](../IMPLEMENTATION_PLAN.md),
+[GitCommit, PlanControl и пресет этапа 8](GIT_PLAN_RUNTIME.md),
+[OpenCode без инструментов](OPENCODE_RUNTIME.md). Основания: [план](../IMPLEMENTATION_PLAN.md),
 [состояния](STATE_MACHINES.md), [runtime](RUNTIME_CONTRACTS.md), [графы](GRAPH_VALIDATION.md).
 
 ## Явное исполнение и границы
 
 `POST /api/runs` принимает `execution_mode=real|simulated`, по умолчанию real.
 В real работают Start/Condition/End, LLMRequest, Command, CollectContext, GitCommit и PlanControl.
-Не реализованный AgentTask даёт configuration_invalid с причиной harness_adapter_unimplemented.
+AgentTask с OpenCode поддерживает [режим no_tools](OPENCODE_RUNTIME.md).
+Неподключённый harness даёт configuration_invalid с причиной harness_adapter_unimplemented.
 В simulated поддержаны fake AgentTask/LLMRequest и Start/Condition/End; реальные процессы
 и HTTP не подставляются в simulation. Подробности — в [контракте этапа 7](LLM_COMMAND_EVIDENCE.md).
 

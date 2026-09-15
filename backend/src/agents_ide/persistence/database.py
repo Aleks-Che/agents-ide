@@ -8,7 +8,7 @@ from sqlalchemy import URL, Engine, create_engine, event
 
 from agents_ide.config import Settings
 
-SCHEMA_REVISION = "0011_stage8_review"
+SCHEMA_REVISION = "0012_stage6a_harness_catalog"
 
 
 def create_database(settings: Settings) -> Engine:

@@ -87,6 +87,15 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "plan.item_changed",
         "plan.final_check",
         "plan.commit_attached",
+        "agent.server_started",
+        "agent.session_created",
+        "agent.session_resumed",
+        "agent.session_aborted",
+        "agent.message_delta",
+        "agent.tool_call",
+        "agent.permission_requested",
+        "agent.permission_resolved",
+        "agent.session_invalidated",
     }
 )
 

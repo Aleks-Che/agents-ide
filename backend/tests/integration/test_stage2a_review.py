@@ -122,7 +122,7 @@ def version_binding(
     return version, binding
 
 
-def start(client, headers, project, binding, key="run", overrides=None):
+def start(client, headers, project, binding, key="run", overrides=None, execution_mode="real"):
     return post(
         client,
         headers,
@@ -133,6 +133,7 @@ def start(client, headers, project, binding, key="run", overrides=None):
             "message": "task",
             "idempotency_key": key,
             "overrides": overrides or {},
+            "execution_mode": execution_mode,
         },
     )
 
@@ -588,7 +589,9 @@ def test_unavailable_first_profile_does_not_hide_other_candidates(authenticated,
     _, binding = version_binding(
         client, headers, project, template, {"kind": "group", "group_id": group["id"]}
     )
-    data = snapshot(client, start(client, headers, project, binding))
+    # This is a configuration-layer test; its OpenCode profile has no verified
+    # executable or permissions and must not authorize real execution.
+    data = snapshot(client, start(client, headers, project, binding, execution_mode="simulated"))
     candidates = data["dependencies"]["nodes"]["work"]["candidates"]
     assert candidates[0]["unavailable_reason"] == "archived"
     assert candidates[1]["unavailable_reason"] is None
