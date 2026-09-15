@@ -9,6 +9,15 @@ export type EventBatchResponse = ApiSchemas['EventBatchResponse']
 export type ArtifactView = ApiSchemas['ArtifactView']
 export type RunSnapshot = ApiSchemas['RunSnapshot']
 export type WaitingReason = ApiSchemas['WaitingReason']
+export type SelectionSummary = NonNullable<
+  ApiSchemas['RunSnapshot']['selection']
+>
+export type SelectionNodeEntry = NonNullable<SelectionSummary['nodes']>[number]
+export type SelectionCandidateEntry = NonNullable<
+  SelectionNodeEntry['candidates']
+>[number]
+export type SelectionGroupRef = NonNullable<SelectionSummary['groups']>[number]
+export type SelectionVisit = NonNullable<SelectionSummary['visit']>
 
 export interface RunPlanResponse {
   plan: Record<string, unknown> | null
@@ -52,6 +61,24 @@ export interface RunDiagnostics {
   }>
   reservation_ids: string[]
 }
+
+export type CandidateState = SelectionCandidateEntry['state']
+
+export const CANDIDATE_STATE_LABELS: Record<string, string> = {
+  available: 'Ожидает выбора',
+  skipped: 'Пропущен',
+  consumed: 'Использован',
+  current: 'Текущий',
+  selected: 'Выбран',
+  succeeded: 'Выполнен',
+}
+
+export const MODEL_GROUP_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'model_group.candidate_selected',
+  'model_group.candidate_skipped',
+  'model_group.candidate_switched',
+  'model_group.exhausted',
+])
 
 export const runsApi = {
   replay(runId: string): Promise<EventBatchResponse> {

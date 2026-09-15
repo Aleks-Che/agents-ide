@@ -193,6 +193,9 @@ class Runner:
         )
 
     def _persist(self, run: Run) -> None:
+        from agents_ide.services.run_selection import save_node_selection
+
+        save_node_selection(self.runtime, run, self.snapshot)
         now = utc_now()
         active = self.runtime.get("active_since")
         if active is not None:
@@ -644,6 +647,7 @@ class Runner:
                             candidate_index=None,
                             candidate_history=[],
                             candidate_retries=0,
+                            selection_round=0,
                             next_candidate_index=0,
                             retry_at=None,
                             server_retries=0,
@@ -1239,6 +1243,7 @@ class Runner:
             "provider_connection_id": candidate.get("provider_connection_id"),
             "model_id": candidate["model_id"],
             "params": candidate.get("params", {}),
+            "selection_round": self.runtime.get("selection_round", 0),
         }
 
     def _availability(self, candidate: dict[str, Any]) -> str | None:
@@ -2042,6 +2047,10 @@ class Runner:
                 reason = self._availability(candidate)
                 if reason:
                     diagnostics.append({**metadata, "reason": reason})
+                    with self._write() as (session, run):
+                        self.runtime["candidate_history"].append(diagnostics[-1])
+                        self.runtime["next_candidate_index"] = candidate["member_index"] + 1
+                        self._persist(run)
                     break
                 try:
                     connection = (
@@ -2049,6 +2058,10 @@ class Runner:
                     )
                 except AppError:
                     diagnostics.append({**metadata, "reason": "secret_unavailable"})
+                    with self._write() as (session, run):
+                        self.runtime["candidate_history"].append(diagnostics[-1])
+                        self.runtime["next_candidate_index"] = candidate["member_index"] + 1
+                        self._persist(run)
                     break
                 with self._write() as (session, run):
                     attempt = visits.create_attempt(session, visit)

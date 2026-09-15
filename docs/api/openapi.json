@@ -50,6 +50,67 @@
         "title": "ActiveInterval",
         "type": "object"
       },
+      "ActualSelection": {
+        "properties": {
+          "attempt_id": {
+            "title": "Attempt Id",
+            "type": "string"
+          },
+          "harness_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Profile Id"
+          },
+          "member_index": {
+            "title": "Member Index",
+            "type": "integer"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "provider_connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Connection Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt_id",
+          "status",
+          "member_index",
+          "model_id"
+        ],
+        "title": "ActualSelection",
+        "type": "object"
+      },
       "ArtifactView": {
         "properties": {
           "body": {
@@ -134,6 +195,109 @@
           "truncation"
         ],
         "title": "ArtifactView",
+        "type": "object"
+      },
+      "CandidateEntry": {
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "harness_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Profile Id"
+          },
+          "last_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Reason"
+          },
+          "member_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Member Id"
+          },
+          "member_index": {
+            "title": "Member Index",
+            "type": "integer"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "parameter_sources": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Parameter Sources",
+            "type": "object"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "provider_connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Connection Id"
+          },
+          "state": {
+            "default": "available",
+            "enum": [
+              "available",
+              "skipped",
+              "consumed",
+              "current",
+              "selected",
+              "succeeded"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "member_index",
+          "model_id"
+        ],
+        "title": "CandidateEntry",
         "type": "object"
       },
       "Chat": {
@@ -917,6 +1081,44 @@
           }
         },
         "title": "GraphValidationRequest",
+        "type": "object"
+      },
+      "GroupRef": {
+        "properties": {
+          "enabled_count": {
+            "title": "Enabled Count",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "member_count": {
+            "title": "Member Count",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "revision",
+          "member_count",
+          "enabled_count"
+        ],
+        "title": "GroupRef",
         "type": "object"
       },
       "GroupSelection": {
@@ -1919,6 +2121,124 @@
           "updated_at"
         ],
         "title": "ModelGroupMember",
+        "type": "object"
+      },
+      "NodeSelection": {
+        "properties": {
+          "actual": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActualSelection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateEntry"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "direct_harness_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direct Harness Profile Id"
+          },
+          "direct_model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direct Model Id"
+          },
+          "direct_provider_connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direct Provider Connection Id"
+          },
+          "kind": {
+            "enum": [
+              "agent",
+              "llm"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "model_group_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Group Id"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "node_type": {
+            "title": "Node Type",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "selection_kind": {
+            "enum": [
+              "direct",
+              "group"
+            ],
+            "title": "Selection Kind",
+            "type": "string"
+          },
+          "visit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisitCandidateState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "node_id",
+          "node_type",
+          "kind",
+          "selection_kind"
+        ],
+        "title": "NodeSelection",
         "type": "object"
       },
       "PairRequest": {
@@ -3665,6 +3985,16 @@
           },
           "run": {
             "$ref": "#/components/schemas/Run"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectionSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3797,6 +4127,41 @@
         ],
         "title": "RunState",
         "type": "string"
+      },
+      "SelectionSummary": {
+        "properties": {
+          "group_changes_apply_only_to_new_runs": {
+            "default": true,
+            "title": "Group Changes Apply Only To New Runs",
+            "type": "boolean"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/GroupRef"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/NodeSelection"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "visit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisitCandidateState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SelectionSummary",
+        "type": "object"
       },
       "SettingsOverrides": {
         "additionalProperties": false,
@@ -4027,6 +4392,134 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VisitCandidateState": {
+        "properties": {
+          "current_member_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Member Id"
+          },
+          "current_member_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Member Index"
+          },
+          "current_model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Model Id"
+          },
+          "current_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Node Id"
+          },
+          "current_profile_or_connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Profile Or Connection Id"
+          },
+          "cycle_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cycle Id"
+          },
+          "execution_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Id"
+          },
+          "history": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "History",
+            "type": "array"
+          },
+          "history_complete": {
+            "default": true,
+            "title": "History Complete",
+            "type": "boolean"
+          },
+          "retries": {
+            "default": 0,
+            "title": "Retries",
+            "type": "integer"
+          },
+          "selection_round": {
+            "default": 0,
+            "title": "Selection Round",
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "visit_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visit Index"
+          }
+        },
+        "title": "VisitCandidateState",
         "type": "object"
       },
       "WaitingReason": {

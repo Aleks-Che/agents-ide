@@ -884,6 +884,85 @@ footer span {
   margin: 4px 0 0;
   color: #c5ddba;
 }
+.run-screen .event-summary {
+  font-size: 12px;
+  color: #cad7d3;
+}
+.candidate-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.group-candidates {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-group-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.run-group-summary .group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.run-group-summary .group-candidates {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.run-group-summary .candidate-table {
+  width: 100%;
+  min-width: 600px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.run-group-summary .candidate-table th,
+.run-group-summary .candidate-table td {
+  border: 1px solid #2c383c;
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.run-group-summary .candidate-table th {
+  background: #192225;
+  font-weight: 600;
+}
+.run-group-summary .candidate-state {
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.run-group-summary .candidate-state.state-current,
+.run-group-summary .candidate-state.state-succeeded {
+  background: #2f6b54;
+  color: #d0f1df;
+}
+.run-group-summary .candidate-state.state-skipped,
+.run-group-summary .candidate-state.state-consumed {
+  background: #3b2f2f;
+  color: #d8b9b3;
+}
+.run-group-summary .candidate-state.state-available,
+.run-group-summary .candidate-state.state-selected {
+  background: #243137;
+  color: #cad7d3;
+}
+.run-group-summary .candidate-history {
+  list-style: decimal;
+  margin: 6px 0 0 18px;
+  padding: 0;
+  font-size: 12px;
+}
+.run-group-summary .candidate-diagnostics {
+  margin-top: 10px;
+}
 .artifact-body {
   font-family: ui-monospace, monospace;
   font-size: 11px;

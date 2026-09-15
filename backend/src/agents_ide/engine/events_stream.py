@@ -17,6 +17,7 @@ from agents_ide.domain.schemas import Run as RunSchema
 from agents_ide.engine.events import EventEnvelope
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import Run, RunEvent
+from agents_ide.services.run_selection import SelectionSummary
 
 MAX_EVENTS_PER_BATCH = 200
 MAX_BUFFER_BYTES = 1024 * 1024
@@ -35,6 +36,7 @@ class RunSnapshot(BaseModel):
     run: RunSchema
     last_sequence: int
     min_retained_sequence: int
+    selection: SelectionSummary | None = None
 
 
 class ArtifactView(BaseModel):

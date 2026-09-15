@@ -54,7 +54,7 @@ def private_directory(path: Path) -> None:
 
 
 def prepare_data_dir(path: Path) -> None:
-    names = {"db", "artifacts", "logs", "secrets", "runtime", "temp"}
+    names = {"db", "artifacts", "logs", "secrets", "runtime", "temp", "simulated"}
     if path == Path(path.anchor) or (
         path.exists() and any(entry.name not in names for entry in path.iterdir())
     ):

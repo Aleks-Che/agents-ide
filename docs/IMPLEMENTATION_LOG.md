@@ -1,5 +1,180 @@
 # Журнал реализации
 
+### 2026-09-15 · Ревью этапа 9 · Группы и фактические исполнители Run
+
+**Статус:** исправлены ошибки сводки и добавлены проверки исполнения. Результаты
+первичной реализации ниже сохранены как история; актуальные ограничения и проверки
+перечислены в этой записи. Реальный gate MVP остаётся открытым.
+
+**Найдено и исправлено.**
+
+- Исходная сводка читала `runtime.current_node_id`, хотя движок хранит этот ID
+  в Run. Поэтому текущий кандидат не определялся. История причин индексировалась
+  только по позиции и ошибочно применялась к другим узлам. Теперь сводка использует
+  Run/StepExecution, изолирует посещения и различает выбранного кандидата,
+  зарегистрированную попытку, пропуск и завершённое исполнение. Последний отказавший
+  кандидат при исчерпании больше не показывается текущим; выключенный не «доступен».
+- [`run_selection.py`](../backend/src/agents_ide/services/run_selection.py) читает
+  immutable dependencies и попытки последнего посещения каждого AgentTask/LLMRequest.
+  Добавлены `actual` (модель, профиль/подключение, попытка, статус, исход), типизированные
+  состояния, корректный agent/llm и legacy direct из `config.model/connection_id`.
+  Ошибки построения сводки больше не маскируются безусловным `selection=null`.
+- [`runner.py`](../backend/src/agents_ide/engine/runner.py) сохраняет диагностический
+  checkpoint `runtime.node_selections` до очистки локальных полей следующего узла.
+  Поэтому причины и исполнитель остаются после End, закрытия браузера и retention
+  событий. Сохраняется только последнее посещение каждого узла, а не копия всех
+  визитов. Новый визит сбрасывает `selection_round`; resume после исчерпания сохраняет
+  прежние расходы и историю с номером раунда. Также сохраняется отказ доступности,
+  обнаруженный между выбором кандидата и созданием попытки.
+- [`GroupSummarySection.tsx`](../frontend/src/features/runs/GroupSummarySection.tsx)
+  показывает отдельную таблицу и историю каждого узла, номер посещения/цикла,
+  исполнителя последней попытки и причину каждой позиции при исчерпании. Подсказка
+  объясняет «Продолжить» после восстановления доступа к закреплённым ресурсам.
+  Изменение состава/модели требует нового Run; оно не обновляет текущий snapshot.
+- [`RunsPanel.tsx`](../frontend/src/features/runs/RunsPanel.tsx) больше не вставляет
+  model_id/reason/previous_member_id через `dangerouslySetInnerHTML`: события рендерятся
+  обычным текстом React. Ошибка загрузки selection видна и допускает повтор; события
+  выбора обновляют snapshot. Диагностика и selection берутся из одного ответа snapshot.
+  Таблица прокручивается внутри диалога на узком экране.
+- Полный браузерный прогон выявил предсуществующий сбой повторного запуска CLI:
+  Runner создавал `data_dir/simulated`, а `prepare_data_dir` отвергал его как чужой.
+  [`security/filesystem.py`](../backend/src/agents_ide/security/filesystem.py) теперь
+  создаёт и принимает этот штатный каталог с теми же ACL и запретом ссылок/junction.
+  Повторная инициализация после выполненного fake Run добавлена в регрессию;
+  ограничения для пользовательских каталогов остаются прежними.
+
+**Проверки.**
+
+- [`test_stage9_selection_summary.py`](../backend/tests/integration/test_stage9_selection_summary.py):
+  **10 passed**. Настоящие API/очередь/Runner с fake Agent/LLM: наблюдение текущей
+  попытки, disabled + fallback, два узла с одинаковыми индексами, исчерпание и resume,
+  сохранность hash/расходов, End + удаление событий + архивация live-группы, legacy direct,
+  отсутствие dependencies и повторное посещение в цикле.
+- **240 остальных смежных backend-тестов прошли**: stage9 single-agent, stage4 engine/review,
+  stage5 controls/review, stage6a review, stage7 review, stage8 Git/plan. Общий запуск
+  показал 248 passed (с первыми 8 тестами сводки), затем полный файл сводки — 10 passed.
+  Полный backend pytest в этом ревью не запускался.
+- Сводка + security/launcher после исправления `simulated` — **19 passed** (10 + 9),
+  всего в ревью **259 разных backend-тестов**. Тесты проверяют настоящие транзакции,
+  очередь и процессы на Windows; внешние ответы для выбора моделей имитируются.
+- [`group-summary.spec.ts`](../frontend/tests/e2e/group-summary.spec.ts) с настоящим
+  API и subprocess Runner: исчерпание, resume, текст с HTML-разметкой в model_id,
+  ошибка snapshot и повтор, reload после удаления событий, таблица на ширине 390 px.
+  Полный Playwright — **18 passed**; полный Vitest — **99 passed**.
+- Ruff check/format, mypy Windows/Linux (83 модуля), `generate_contracts.py --check`,
+  ESLint/Prettier и tsc/Vite build — без замечаний. JS 406,36 kB / gzip 112,25 kB.
+  Скриншот: `.local/stage9-group-summary-review.png`. Полный браузерный набор повторно
+  прошёл после исправления инициализации служебного каталога.
+
+**На что обратить внимание.**
+
+- `actual` — модель/ресурс из durable StepAttempt, не независимое подтверждение
+  идентичности модели со стороны внешнего провайдера. Статус `running` означает
+  зарегистрированное намерение вызова; неизвестный исход не превращается в успех.
+- Для старых Run без checkpoint известный исполнитель восстанавливается из попыток,
+  а неполная история пропусков отмечается `history_complete=false`. Потерянная история
+  не восполняется текущим каталогом. Более ранние визиты доступны через существующие
+  попытки/артефакты/события, секция показывает последнее посещение каждого узла.
+- Восстановление доступности проверено на scripted fake (первые вызовы — quota, новый
+  раунд — успех). Реальные credentials, платные модели, OpenCode/LLM heavy/flash и полный
+  gate не проверялись. Смена версии профиля/подключения может дать `resource_changed`;
+  такой ресурс не заменяется автоматически внутри старого Run.
+- Изменение runtime не требует миграции и не меняет execution_hash. Контракт описан в
+  [`RUNTIME_CONTRACTS.md`](architecture/RUNTIME_CONTRACTS.md), OpenAPI/TS перегенерированы.
+
+### 2026-09-15 · Этап 9 · Сводка выбранной группы в экране Run
+
+**Статус:** добавлен блок `selection` в ответ `/api/runs/{id}/snapshot` и
+секция «Группа и кандидаты» с таблицей приоритетов, состояниями кандидатов
+и текущим посещением. Пункт плана этапа 9 «показывать выбранную группу,
+фактическую модель/профиль/подключение, приоритет и причины переключений»
+закрыт вне зависимости от SSE-окна. Реальный gate MVP и редактор параметров
+кандидатов остаются открытыми.
+
+**Реализовано.**
+
+- [`backend/src/agents_ide/services/run_selection.py`](../backend/src/agents_ide/services/run_selection.py) —
+  `build_selection_summary(snapshot, runtime)` собирает типизированную
+  сводку из иммутабельного snapshot и runtime текущего посещения. Группы
+  возвращаются с включённым/общим числом кандидатов и ревизией, узлы —
+  с упорядоченными кандидатами и производным состоянием
+  `available | skipped | consumed | current`, посещение — с текущим
+  `member_index/id/model_id/profile_or_connection_id`, retries,
+  `selection_round` и историей переключений. Флаг
+  `group_changes_apply_only_to_new_runs` зафиксирован.
+- [`backend/src/agents_ide/engine/events_stream.py`](../backend/src/agents_ide/engine/events_stream.py) —
+  `RunSnapshot` принимает `selection: SelectionSummary | None`.
+- [`backend/src/agents_ide/api/domain.py`](../backend/src/agents_ide/api/domain.py) —
+  `/api/runs/{id}/snapshot` возвращает блок `selection` из snapshot и
+  runtime. При отсутствии `dependencies` поле равно `null`.
+- [`frontend/src/api/runs.ts`](../frontend/src/api/runs.ts) — типы
+  `SelectionSummary`, `SelectionNodeEntry`, `SelectionCandidateEntry`,
+  `SelectionGroupRef`, `SelectionVisit`; константы
+  `CANDIDATE_STATE_LABELS` и `MODEL_GROUP_EVENT_TYPES`.
+- [`frontend/src/api/generated.ts`](../frontend/src/api/generated.ts),
+  [`docs/api/openapi.json`](../docs/api/openapi.json) — сгенерированные
+  TS/OpenAPI контракты с типизированным блоком `selection`.
+- [`frontend/src/features/runs/GroupSummarySection.tsx`](../frontend/src/features/runs/GroupSummarySection.tsx) и
+  [`group_summary_helpers.ts`](../frontend/src/features/runs/group_summary_helpers.ts) —
+  рендер сводки: список закреплённых групп, таблица «позиция/модель/
+  ресурс/включён/состояние/последняя причина» по каждой группе узла,
+  отдельный список прямых выборов, блок «изменения группы применятся к
+  новым Run», диагностическая таблица при `model_group_exhausted`.
+- [`frontend/src/features/runs/RunsPanel.tsx`](../frontend/src/features/runs/RunsPanel.tsx) —
+  подключает `runsApi.snapshot`, отображает секцию под ожиданием, выделяет
+  события `model_group.candidate_selected | candidate_skipped |
+  candidate_switched | exhausted` компактной строкой (модель, позиция,
+  причина, предыдущий кандидат). Журнал и кнопки работают как раньше.
+- [`frontend/src/app/styles.css`](../frontend/src/app/styles.css) —
+  `.run-group-summary`, `.candidate-table`, `.candidate-state.state-*`,
+  `.candidate-history`.
+
+**Нюансы.**
+
+- Свобода от SSE-окна: кандидаты и состояние доступны по snapshot даже
+  если событийная лента ещё не подгрузилась или была обрезана retention.
+- В direct-узлах синтетический single-member список сохраняется, чтобы
+  UI мог показать модель/профиль/параметры согласованно с групповыми
+  узлами; задокументировано, что в single_agent direct остаётся
+  фиксированным.
+- При `model_group_exhausted` отдельная таблица диагностики берёт
+  `waiting.details.candidates` (контракт сохранён с этапа 4), а не
+  сводную строку JSON, чтобы пользователь видел позиции/причины без
+  просмотра событий.
+- Hint об изменениях группы действует также на README и резолюцию
+  резолюций через `Resolve+Resume`: resume выдерживает runtime, не
+  выбирает новых кандидатов и инкрементирует `selection_round`.
+
+**Проверки.**
+
+- Backend `tests/integration/test_stage9_selection_summary.py` —
+  **3 passed**: группы с недоступным кандидатом (state=`skipped`,
+  `last_reason` сохранён), прямой узел (selection_kind=`direct`,
+  единственный синтетический кандидат), отсутствие `dependencies`
+  возвращает `selection: null`. mypy Windows/Linux — 83 модуля без
+  ошибок. Ruff check/format чисто.
+- Команда существующих stage 9 интеграционных (`test_stage9_messages`,
+  `test_stage9_library`, `test_stage9_run_chat_filter`,
+  `test_stage9_selection_summary`) — **19 passed**.
+- Stage 2A/4/5/6A/8, 7 — **228 passed** суммарно (test_stage2a_*,
+  test_stage4_review, test_stage5_review, test_stage6a_review,
+  test_stage8_git_plan, test_stage7_review); ни одна из ранее
+  проверяемых регрессий не падает.
+- Frontend lint/format/build — зелёные, бандл 406,91 kB (gzip 112,37 kB).
+  Vitest — **99 passed** (включая новый `group-summary.test.ts` с
+  проверкой переэкспортированных лейблов и helpers). Существующий
+  `test_validate_endpoint_accepts_two_backward_edges` остаётся
+  предсуществующей неисправностью (`from tests.integration...`),
+  к данной итерации не относится.
+- `scripts/generate_contracts.py --check` — синхронизирован.
+- Wheel/sdist не пересобирался, Playwright не запускался: для сводки
+  группы хватает API+RSC цепочки без внешних кликов; проверки сценариев
+  реального выполнения остаются в gate MVP.
+
+**Границы следующей работы.** Реальный gate MVP с OpenCode/LLM/пресетом
+и группами heavy/flash (этап 9), редактор параметров кандидатов,
+этапы 9A (Council), 10 (визуальный конструктор), 11 (наблюдение UI).
+
 ### 2026-09-15 · Ревью этапа 9 · Одиночный агент direct/group
 
 **Статус:** замечания к одиночному запуску исправлены. Этап 9 остаётся

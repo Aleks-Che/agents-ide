@@ -644,16 +644,27 @@ def run_diagnostics_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]
 def run_snapshot_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]:
     from sqlalchemy import func, select
 
+    from agents_ide.persistence.models import Run as RunModel
     from agents_ide.persistence.models import RunEvent
+    from agents_ide.services.run_selection import build_selection_summary
 
     session.connection().exec_driver_sql("BEGIN")
+    run_row = session.get(RunModel, run_id)
+    if run_row is None:
+        raise AppError("run_not_found", "Run не найден", 404)
     run = runs.get_run(session, run_id)
     minimum, highest = session.execute(
         select(func.min(RunEvent.sequence), func.max(RunEvent.sequence)).where(
             RunEvent.run_id == run_id
         )
     ).one()
-    return {"run": run, "last_sequence": highest or 0, "min_retained_sequence": minimum or 0}
+    selection = build_selection_summary(session, run_row)
+    return {
+        "run": run,
+        "last_sequence": highest or 0,
+        "min_retained_sequence": minimum or 0,
+        "selection": selection,
+    }
 
 
 @router.get("/runs/{run_id}/artifacts", response_model=list[ArtifactView])

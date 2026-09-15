@@ -4,6 +4,7 @@ import { ApiError } from '../../api/client'
 import {
   runsApi,
   describeRunError,
+  MODEL_GROUP_EVENT_TYPES,
   type RunCommand,
   type RunRecord,
   type EventEnvelope,
@@ -14,6 +15,7 @@ import { formatDateTime, shortHash } from '../../app/format'
 import { useRunEventSource } from '../../app/useRunStream'
 import { Modal } from '../../app/Modal'
 import { allowedCommands, resolutionPayload } from './controls'
+import { GroupSummarySection } from './GroupSummarySection'
 
 export function RunScreen({
   runId,
@@ -49,6 +51,11 @@ export function RunScreen({
     queryFn: () => runsApi.commandJournal(runId),
     refetchInterval: 5000,
   })
+  const snapshot = useQuery({
+    queryKey: ['run_snapshot', runId],
+    queryFn: () => runsApi.snapshot(runId),
+    refetchInterval: 6000,
+  })
   const [events, setEvents] = useState<EventEnvelope[]>([])
   const [resetNotice, setResetNotice] = useState(false)
   const [resolutionOpen, setResolutionOpen] = useState(false)
@@ -59,6 +66,7 @@ export function RunScreen({
       ['run_artifacts', runId],
       ['run_diagnostics', runId],
       ['run_commands', runId],
+      ['run_snapshot', runId],
       ['runs_summary'],
     ]) {
       void client.invalidateQueries({ queryKey })
@@ -82,6 +90,8 @@ export function RunScreen({
         )
       )
         refresh()
+      if (MODEL_GROUP_EVENT_TYPES.has(event.type))
+        void client.invalidateQueries({ queryKey: ['run_snapshot', runId] })
     },
     onReset: () => {
       setResetNotice(true)
@@ -141,17 +151,26 @@ export function RunScreen({
             ×
           </button>
         </header>
-        {[run, plan, artifacts, diagnostics, journal].map((query, index) =>
-          query.error ? (
-            <p key={index} role="alert" className="error">
-              {
-                ['Run', 'План', 'Артефакты', 'Диагностика', 'Журнал команд'][
-                  index
-                ]
-              }
-              : {describeRunError(query.error)}
-            </p>
-          ) : null,
+        {[run, plan, artifacts, diagnostics, journal, snapshot].map(
+          (query, index) =>
+            query.error ? (
+              <p key={index} role="alert" className="error">
+                {
+                  [
+                    'Run',
+                    'План',
+                    'Артефакты',
+                    'Диагностика',
+                    'Журнал команд',
+                    'Группа и кандидаты',
+                  ][index]
+                }
+                : {describeRunError(query.error)}
+                <button type="button" onClick={() => void query.refetch()}>
+                  Повторить загрузку
+                </button>
+              </p>
+            ) : null,
         )}
         {run.isLoading ? <p role="status">Загружаем Run…</p> : null}
         {data ? (
@@ -222,6 +241,12 @@ export function RunScreen({
                 <pre>{JSON.stringify(waiting.details, null, 2)}</pre>
                 <p>Доступные действия: {waiting.allowed_actions.join(', ')}</p>
               </section>
+            ) : null}
+            {snapshot.data?.selection ? (
+              <GroupSummarySection
+                selection={snapshot.data.selection}
+                waiting={snapshot.data.run.waiting_reason}
+              />
             ) : null}
             <section className="run-controls" aria-label="Управление Run">
               {(['pause', 'stop', 'resume', 'cancel', 'resolve'] as const).map(
@@ -373,6 +398,11 @@ export function RunScreen({
               <li key={event.sequence}>
                 <strong>{event.type}</strong> · #{event.sequence}{' '}
                 {event.node_id ?? ''}
+                {MODEL_GROUP_EVENT_TYPES.has(event.type) &&
+                event.payload &&
+                typeof event.payload === 'object' ? (
+                  <ModelGroupEventSummary event={event} />
+                ) : null}
                 <pre>{JSON.stringify(event.payload, null, 2)}</pre>
               </li>
             ))}
@@ -529,7 +559,7 @@ function ResolutionForm({
       )}
       {error ? (
         <p role="alert" className="error">
-          {error}
+          {describeRunError(error)}
         </p>
       ) : null}
       <footer>
@@ -539,5 +569,43 @@ function ResolutionForm({
         <button type="submit">Сохранить решение</button>
       </footer>
     </form>
+  )
+}
+
+function ModelGroupEventSummary({ event }: { event: EventEnvelope }) {
+  const payload = event.payload as Record<string, unknown>
+  const modelId = typeof payload.model_id === 'string' ? payload.model_id : null
+  const reason = typeof payload.reason === 'string' ? payload.reason : null
+  const previous =
+    typeof payload.previous_member_id === 'string'
+      ? payload.previous_member_id
+      : null
+  const memberIndex =
+    typeof payload.member_index === 'number' ? payload.member_index : null
+  return (
+    <span className="event-summary">
+      {modelId ? (
+        <>
+          {' '}
+          · модель <code>{modelId}</code>
+        </>
+      ) : null}
+      {memberIndex !== null ? ` · позиция ${memberIndex + 1}` : ''}
+      {reason ? (
+        <>
+          {' '}
+          · причина <code>{reason}</code>
+        </>
+      ) : null}
+      {previous ? (
+        <>
+          {' '}
+          · предыдущий кандидат <code>{previous}</code>
+        </>
+      ) : null}
+      {typeof payload.history_length === 'number'
+        ? ` · диагностик ${payload.history_length}`
+        : ''}
+    </span>
   )
 }
