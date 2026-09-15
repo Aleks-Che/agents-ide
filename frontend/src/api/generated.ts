@@ -91,7 +91,7 @@ export interface ApiOperations {
   "GET /api/chats/{chat_id}": { body: never; parameters: { "path.chat_id": string }; responses: { "200": ApiSchemas["Chat"]; "422": ApiSchemas["HTTPValidationError"] } }
   "PATCH /api/chats/{chat_id}": { body: ApiSchemas["ChatUpdate"]; parameters: { "path.chat_id": string }; responses: { "200": ApiSchemas["Chat"]; "422": ApiSchemas["HTTPValidationError"] } }
   "POST /api/chats/{chat_id}/archive": { body: ApiSchemas["ChatArchive"]; parameters: { "path.chat_id": string }; responses: { "200": ApiSchemas["Chat"]; "422": ApiSchemas["HTTPValidationError"] } }
-  "GET /api/chats/{chat_id}/messages": { body: never; parameters: { "path.chat_id": string; "query.limit"?: number }; responses: { "200": Array<ApiSchemas["Message"]>; "422": ApiSchemas["HTTPValidationError"] } }
+  "GET /api/chats/{chat_id}/messages": { body: never; parameters: { "path.chat_id": string; "query.limit"?: number; "query.latest"?: boolean; "query.before_id"?: (string | null) }; responses: { "200": Array<ApiSchemas["Message"]>; "422": ApiSchemas["HTTPValidationError"] } }
   "POST /api/chats/{chat_id}/messages": { body: ApiSchemas["MessageCreate"]; parameters: { "path.chat_id": string }; responses: { "201": ApiSchemas["Message"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/connections": { body: never; parameters: { "query.include_archived"?: boolean }; responses: { "200": Array<ApiSchemas["ProviderConnection"]>; "422": ApiSchemas["HTTPValidationError"] } }
   "POST /api/connections": { body: ApiSchemas["ProviderConnectionCreate"]; parameters: Record<string, never>; responses: { "201": ApiSchemas["ProviderConnection"]; "422": ApiSchemas["HTTPValidationError"] } }

@@ -261,9 +261,13 @@ def archive_message_endpoint(
 
 @router.get("/chats/{chat_id}/messages", response_model=list[Message])
 def list_messages_endpoint(
-    session: SessionDep, chat_id: str, limit: int = Query(default=200, ge=1, le=1000)
+    session: SessionDep,
+    chat_id: str,
+    limit: int = Query(default=200, ge=1, le=1000),
+    latest: bool = False,
+    before_id: str | None = None,
 ) -> list[Message]:
-    return chats.list_messages(session, chat_id, limit=limit)
+    return chats.list_messages(session, chat_id, limit=limit, latest=latest, before_id=before_id)
 
 
 @router.post("/chats/{chat_id}/messages", response_model=Message, status_code=201)

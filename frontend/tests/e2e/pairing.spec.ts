@@ -9,7 +9,7 @@ test('pair, inspect real API state, reload and revoke session', async ({
     '../backend/.venv',
     process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
   )
-  const dataDir = path.resolve('../.local/e2e-data')
+  const dataDir = process.env.AGENTS_IDE_E2E_DATA_DIR!
   const code = execFileSync(
     python,
     [
@@ -23,7 +23,7 @@ test('pair, inspect real API state, reload and revoke session', async ({
       'pair-code',
       '--rotate',
     ],
-    { encoding: 'utf-8' },
+    { encoding: 'utf-8', windowsHide: true },
   ).trim()
   await page.goto('/')
   await expect(

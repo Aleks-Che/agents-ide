@@ -1,11 +1,15 @@
 import { defineConfig } from '@playwright/test'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 const python = path.resolve(
   '../backend/.venv',
   process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
 )
-const dataDir = path.resolve('../.local/e2e-data')
+const dataDir =
+  process.env.AGENTS_IDE_E2E_DATA_DIR ??
+  path.resolve(`../.local/e2e-${randomUUID()}`)
+process.env.AGENTS_IDE_E2E_DATA_DIR = dataDir
 
 export default defineConfig({
   testDir: './tests/e2e',

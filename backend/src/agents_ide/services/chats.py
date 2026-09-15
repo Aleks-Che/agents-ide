@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from agents_ide.domain.common import new_id, utc_now
@@ -112,15 +112,33 @@ def add_message(session: Session, chat_id: str, payload: MessageCreate) -> Messa
     return message_from_model(model)
 
 
-def list_messages(session: Session, chat_id: str, limit: int = 200) -> list[Message]:
+def list_messages(
+    session: Session,
+    chat_id: str,
+    limit: int = 200,
+    *,
+    latest: bool = False,
+    before_id: str | None = None,
+) -> list[Message]:
     if session.get(ChatModel, chat_id) is None:
         raise AppError("chat_not_found", "Чат не найден", 404)
-    stmt = (
-        select(MessageModel)
-        .where(MessageModel.chat_id == chat_id, MessageModel.archived_at.is_(None))
-        .order_by(MessageModel.created_at.asc())
-        .limit(limit)
+    stmt = select(MessageModel).where(
+        MessageModel.chat_id == chat_id, MessageModel.archived_at.is_(None)
     )
+    if before_id is not None:
+        cursor = session.get(MessageModel, before_id)
+        if cursor is None or cursor.chat_id != chat_id:
+            raise AppError("message_cursor_invalid", "Курсор сообщения не принадлежит чату", 400)
+        stmt = stmt.where(
+            or_(
+                MessageModel.created_at < cursor.created_at,
+                and_(MessageModel.created_at == cursor.created_at, MessageModel.id < cursor.id),
+            )
+        )
+    if latest or before_id is not None:
+        stmt = stmt.order_by(MessageModel.created_at.desc(), MessageModel.id.desc()).limit(limit)
+        return [message_from_model(row) for row in reversed(session.scalars(stmt).all())]
+    stmt = stmt.order_by(MessageModel.created_at.asc(), MessageModel.id.asc()).limit(limit)
     return [message_from_model(row) for row in session.scalars(stmt).all()]
 
 
