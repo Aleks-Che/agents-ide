@@ -73,7 +73,19 @@ def preflight(
             ValidationIssue(
                 "input_invalid",
                 "Обязательные входы отсутствуют или имеют неверный тип",
-                details={"path": list(error.path), "rule": error.validator},
+                details={
+                    "path": list(error.path),
+                    "rule": error.validator,
+                    **(
+                        {
+                            "missing": [
+                                key for key in error.validator_value if key not in error.instance
+                            ]
+                        }
+                        if error.validator == "required" and isinstance(error.instance, dict)
+                        else {}
+                    ),
+                },
             )
         )
     configuration, sources = resolve_configuration(binding, version, overrides)

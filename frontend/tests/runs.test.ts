@@ -21,8 +21,22 @@ describe('runsApi', () => {
   it('lists runs for a project', async () => {
     const fetch = captureFetch()
     fetch.mockResolvedValueOnce(stubJsonResponse(200, []))
-    await runsApi.list('p1')
+    await runsApi.list({ projectId: 'p1' })
     expect(fetch.mock.calls[0][0]).toBe('/api/runs?project_id=p1')
+  })
+
+  it('lists runs for a chat filter', async () => {
+    const fetch = captureFetch()
+    fetch.mockResolvedValueOnce(stubJsonResponse(200, []))
+    await runsApi.list({ projectId: 'p1', chatId: 'c1' })
+    expect(fetch.mock.calls[0][0]).toBe('/api/runs?project_id=p1&chat_id=c1')
+  })
+
+  it('lists runs using chat filter only', async () => {
+    const fetch = captureFetch()
+    fetch.mockResolvedValueOnce(stubJsonResponse(200, []))
+    await runsApi.list({ chatId: 'c1' })
+    expect(fetch.mock.calls[0][0]).toBe('/api/runs?chat_id=c1')
   })
 
   it('submits commands with expected_state_version and CSRF', async () => {

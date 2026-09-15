@@ -1108,3 +1108,198 @@ footer span {
     flex-wrap: wrap;
   }
 }
+
+.main-header .actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.main-header .actions button {
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+.main-header .actions button.primary {
+  background: #1f3a2e;
+  border-color: #2f6650;
+  color: #d8f0e1;
+}
+
+button.primary {
+  background: #1f3a2e;
+  border-color: #2f6650;
+  color: #d8f0e1;
+}
+
+.chat-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px solid #2c383c;
+  padding-top: 14px;
+}
+
+.launch-dialog pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.launch-dialog .hash-line,
+.launch-dialog .resolved-roles,
+.launch-dialog table {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.launch-dialog > header {
+  position: sticky;
+  top: -24px;
+  background: #101b22;
+  z-index: 2;
+}
+
+.launch-dialog .preflight-summary > header {
+  flex-wrap: wrap;
+}
+
+.launch-dialog .resolved-roles li {
+  display: list-item;
+}
+
+.chat-runs header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-runs header h3 {
+  font-size: 14px;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #a8c9b1;
+}
+
+.preflight-summary {
+  border: 1px solid #2c383c;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #14202a;
+}
+
+.preflight-summary > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  padding: 0;
+}
+
+.preflight-summary ul.errors {
+  list-style: disc;
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.preflight-summary code {
+  font-family: monospace;
+  font-size: 11px;
+  background: #0e1518;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.preflight-summary details summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #a8c9b1;
+}
+
+.dialog.wide fieldset.mode-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  border: 1px solid #2c383c;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 0;
+}
+
+.dialog.wide fieldset.mode-toggle legend {
+  padding: 0 6px;
+  font-size: 12px;
+  color: #a8c9b1;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+.dialog.wide fieldset.mode-toggle label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.errors {
+  color: #ffb6a8;
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.resolved-roles {
+  border: 1px solid #2c383c;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #14202a;
+}
+
+.resolved-roles > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  padding: 0;
+}
+
+.resolved-roles ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.resolved-roles li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.resolved-roles .role-tag {
+  font-family: monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  background: #0e1518;
+  border-radius: 4px;
+  color: #d8f0e1;
+}

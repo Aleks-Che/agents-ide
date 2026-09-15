@@ -57,9 +57,12 @@ export const runsApi = {
   replay(runId: string): Promise<EventBatchResponse> {
     return request<EventBatchResponse>(`/runs/${runId}/events/replay`)
   },
-  list(projectId?: string): Promise<RunRecord[]> {
+  list(
+    query: { projectId?: string; chatId?: string } = {},
+  ): Promise<RunRecord[]> {
     const params = new URLSearchParams()
-    if (projectId) params.set('project_id', projectId)
+    if (query.projectId) params.set('project_id', query.projectId)
+    if (query.chatId) params.set('chat_id', query.chatId)
     const search = params.toString()
     return request<RunRecord[]>(`/runs${search ? `?${search}` : ''}`)
   },

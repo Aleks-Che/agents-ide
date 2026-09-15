@@ -367,7 +367,7 @@ function SignedInShell({
           )}
         </main>
         <footer>
-          <span>Создание запуска из интерфейса ещё разрабатывается.</span>
+          <span>Запуск привязки доступен из диалога проекта.</span>
           <button
             type="button"
             className="quiet"

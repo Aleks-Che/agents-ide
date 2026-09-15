@@ -16,7 +16,7 @@ interface RunsViewProps {
 export function RunsView({ project }: RunsViewProps) {
   const runs = useQuery({
     queryKey: ['runs_summary', { projectId: project?.id ?? '' }],
-    queryFn: () => runsApi.list(project?.id),
+    queryFn: () => runsApi.list({ projectId: project?.id }),
     enabled: Boolean(project),
     refetchInterval: 5_000,
   })
@@ -56,8 +56,7 @@ export function RunsView({ project }: RunsViewProps) {
         <p className="error">{describeError(runs.error)}</p>
       ) : !runs.data?.length ? (
         <p className="panel-empty">
-          Запусков пока нет. Создание запуска из интерфейса ещё разрабатывается;
-          здесь доступна история запусков, созданных через API или CLI.
+          Запусков пока нет. Откройте диалог проекта и нажмите «Запустить».
         </p>
       ) : (
         <ul className="panel-list" aria-label="Все запуски проекта">

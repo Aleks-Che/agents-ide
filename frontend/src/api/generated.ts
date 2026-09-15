@@ -142,7 +142,7 @@ export interface ApiOperations {
   "GET /api/projects/{project_id}/chats": { body: never; parameters: { "path.project_id": string; "query.include_archived"?: boolean }; responses: { "200": Array<ApiSchemas["Chat"]>; "422": ApiSchemas["HTTPValidationError"] } }
   "POST /api/projects/{project_id}/chats": { body: ApiSchemas["ChatCreate"]; parameters: { "path.project_id": string }; responses: { "201": ApiSchemas["Chat"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/readiness": { body: never; parameters: Record<string, never>; responses: { "200": unknown } }
-  "GET /api/runs": { body: never; parameters: { "query.project_id"?: (string | null) }; responses: { "200": Array<ApiSchemas["Run"]>; "422": ApiSchemas["HTTPValidationError"] } }
+  "GET /api/runs": { body: never; parameters: { "query.project_id"?: (string | null); "query.chat_id"?: (string | null) }; responses: { "200": Array<ApiSchemas["Run"]>; "422": ApiSchemas["HTTPValidationError"] } }
   "POST /api/runs": { body: ApiSchemas["RunStart"]; parameters: Record<string, never>; responses: { "201": ApiSchemas["Run"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/runs/{run_id}": { body: never; parameters: { "path.run_id": string }; responses: { "200": ApiSchemas["Run"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/runs/{run_id}/artifacts": { body: never; parameters: { "path.run_id": string }; responses: { "200": Array<ApiSchemas["ArtifactView"]>; "422": ApiSchemas["HTTPValidationError"] } }

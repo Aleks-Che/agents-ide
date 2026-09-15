@@ -353,10 +353,16 @@ def start_run(session: Session, payload: RunStart) -> Run:
     return _run_from_model(model)
 
 
-def list_runs(session: Session, project_id: str | None = None) -> list[Run]:
+def list_runs(
+    session: Session,
+    project_id: str | None = None,
+    chat_id: str | None = None,
+) -> list[Run]:
     stmt = select(RunModel).order_by(RunModel.created_at.desc())
     if project_id is not None:
         stmt = stmt.where(RunModel.project_id == project_id)
+    if chat_id is not None:
+        stmt = stmt.where(RunModel.chat_id == chat_id)
     return [_run_from_model(row) for row in session.scalars(stmt).all()]
 
 

@@ -537,8 +537,9 @@ def harness_test_endpoint(session: SessionDep, harness_id: str) -> HarnessProbe:
 def list_runs_endpoint(
     session: SessionDep,
     project_id: str | None = Query(default=None),
+    chat_id: str | None = Query(default=None),
 ) -> list[Run]:
-    return runs.list_runs(session, project_id=project_id)
+    return runs.list_runs(session, project_id=project_id, chat_id=chat_id)
 
 
 @router.post("/runs", response_model=Run, status_code=201)

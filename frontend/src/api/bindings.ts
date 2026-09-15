@@ -23,6 +23,21 @@ export interface BindingQuery {
   includeArchived?: boolean
 }
 
+export interface PreflightIssue {
+  code: string
+  message: string
+  node_id?: string
+  details?: Record<string, unknown>
+}
+
+export interface PreflightReport {
+  ok: boolean
+  execution_hash: string | null
+  errors: PreflightIssue[]
+  warnings: PreflightIssue[]
+  preview: Record<string, unknown>
+}
+
 export const templatesApi = {
   list(query: TemplateQuery = {}): Promise<PipelineTemplate[]> {
     const params = new URLSearchParams()
@@ -109,25 +124,20 @@ export const templatesApi = {
 }
 
 export const bindingsApi = {
-  preflight(
+  async preflight(
     bindingId: string,
     csrf: string,
-  ): Promise<{
-    ok: boolean
-    errors: Array<{
-      code: string
-      message: string
-      node_id?: string
-      details?: Record<string, unknown>
-    }>
-    warnings: Array<{ code: string; message: string }>
-    preview: Record<string, unknown>
-  }> {
-    return request(
+    body: ApiSchemas['PreflightRequest'] = {},
+  ): Promise<PreflightReport> {
+    // ValidationReport serializes its preview fields at the response root.
+    const { ok, errors, warnings, execution_hash, ...preview } = await request<
+      Omit<PreflightReport, 'preview'> & Record<string, unknown>
+    >(
       `/bindings/${bindingId}/preflight`,
-      { method: 'POST', body: '{}' },
+      { method: 'POST', body: JSON.stringify(body) },
       csrf,
     )
+    return { ok, errors, warnings, execution_hash, preview }
   },
   list(query: BindingQuery = {}): Promise<PipelineBinding[]> {
     const params = new URLSearchParams()

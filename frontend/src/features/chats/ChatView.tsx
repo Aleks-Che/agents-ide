@@ -1,16 +1,23 @@
+import { useEffect, useRef, useState } from 'react'
 import {
   useInfiniteQuery,
   useMutation,
+  useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
+import { bindingsApi } from '../../api/bindings'
 import {
   chatsApi,
   describeError,
   messagesApi,
+  projectsApi,
   type Chat,
   type Message,
+  type Project,
 } from '../../api/projects'
+import { ChatRunsList, LaunchRunDialog } from '../runs/LaunchRunDialog'
+import { RunScreen } from '../runs/RunsPanel'
 import { formatDateTime } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
 
@@ -31,6 +38,9 @@ export function ChatView({
 }: ChatViewProps) {
   const client = useQueryClient()
   const csrf = useCsrfToken()
+  const [launchOpen, setLaunchOpen] = useState(false)
+  const [openRunId, setOpenRunId] = useState<string | null>(null)
+  const [lastLaunched, setLastLaunched] = useState<string | null>(null)
 
   const messages = useInfiniteQuery({
     queryKey: ['messages', { chatId: chat?.id ?? '' }],
@@ -44,6 +54,19 @@ export function ChatView({
       }),
     getNextPageParam: (page) => (page.length === 200 ? page[0].id : undefined),
     enabled: Boolean(chat),
+  })
+
+  const project = useQuery({
+    queryKey: ['project', { projectId: projectId ?? '' }],
+    queryFn: () => projectsApi.list({ includeArchived: true }),
+    enabled: Boolean(projectId),
+    select: (list) => list.find((item) => item.id === projectId) ?? null,
+  })
+
+  const bindings = useQuery({
+    queryKey: ['bindings', { projectId: projectId ?? '' }],
+    queryFn: () => bindingsApi.list({ projectId: projectId ?? undefined }),
+    enabled: Boolean(projectId),
   })
 
   const archiveChat = useMutation({
@@ -80,6 +103,8 @@ export function ChatView({
     },
   })
 
+  const projectValue: Project | null = project.data ?? null
+
   if (!chat) {
     return (
       <section className="main-pane">
@@ -104,16 +129,48 @@ export function ChatView({
             {formatDateTime(chat.updated_at)}
           </span>
         </div>
-        <button
-          type="button"
-          className="quiet danger"
-          onClick={() => archiveChat.mutate()}
-          disabled={archiveChat.isPending || createMessage.isPending || !csrf}
-          aria-label="Архивировать диалог"
-        >
-          {archiveChat.isPending ? 'Архивируем…' : 'Архивировать'}
-        </button>
+        <div className="actions">
+          <button
+            type="button"
+            className="quiet primary"
+            onClick={() => setLaunchOpen(true)}
+            disabled={
+              !csrf ||
+              archiveChat.isPending ||
+              createMessage.isPending ||
+              !projectValue ||
+              projectValue.archived ||
+              chat.archived
+            }
+            aria-label="Запустить задание"
+          >
+            Запустить
+          </button>
+          <button
+            type="button"
+            className="quiet danger"
+            onClick={() => archiveChat.mutate()}
+            disabled={archiveChat.isPending || createMessage.isPending || !csrf}
+            aria-label="Архивировать диалог"
+          >
+            {archiveChat.isPending ? 'Архивируем…' : 'Архивировать'}
+          </button>
+        </div>
       </header>
+      {project.error ? (
+        <p role="alert" className="error">
+          Не удалось загрузить проект: {describeError(project.error)}{' '}
+          <button type="button" onClick={() => void project.refetch()}>
+            Повторить загрузку проекта
+          </button>
+        </p>
+      ) : null}
+      {lastLaunched ? (
+        <p className="hint" role="status">
+          Запуск создан ({lastLaunched}). Следите за состоянием ниже и в разделе
+          «Запуски».
+        </p>
+      ) : null}
       {archiveChat.error ? (
         <p className="error" role="alert">
           {renderMessageError(archiveChat.error)}
@@ -161,8 +218,8 @@ export function ChatView({
         ) : null}
         <footer>
           <span className="muted">
-            Сообщения сохраняются отдельно от запусков. Запуск pipeline появится
-            в следующих этапах.
+            Сообщения и запуск сохраняются независимо. После запуска прогресс
+            будет виден в списке ниже.
           </span>
           <button
             type="submit"
@@ -177,6 +234,43 @@ export function ChatView({
           </button>
         </footer>
       </form>
+      <section className="chat-runs" aria-labelledby="chat-runs-title">
+        <header>
+          <h3 id="chat-runs-title">Запуски этого диалога</h3>
+          <span className="muted">
+            История запусков, созданных для выбранного диалога.
+          </span>
+        </header>
+        <ChatRunsList
+          projectId={projectId ?? ''}
+          chatId={chat.id}
+          onSelectRun={setOpenRunId}
+        />
+      </section>
+      {launchOpen && projectValue ? (
+        <LaunchRunDialog
+          project={projectValue}
+          chat={chat}
+          draft={draftText}
+          bindings={bindings.data ?? []}
+          bindingsLoading={bindings.isLoading}
+          bindingsError={bindings.error}
+          onRetryBindings={() => void bindings.refetch()}
+          onClose={() => setLaunchOpen(false)}
+          onLaunched={(run) => {
+            setLaunchOpen(false)
+            setLastLaunched(run.id)
+            setOpenRunId(run.id)
+          }}
+        />
+      ) : null}
+      {openRunId ? (
+        <RunScreen
+          key={openRunId}
+          runId={openRunId}
+          onClose={() => setOpenRunId(null)}
+        />
+      ) : null}
     </section>
   )
 }
@@ -245,4 +339,3 @@ function renderMessageError(error: unknown): string {
   if (error instanceof ApiError) return error.body.message
   return describeError(error)
 }
-import { useEffect, useRef } from 'react'
