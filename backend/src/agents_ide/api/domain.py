@@ -408,19 +408,12 @@ def archive_connection_endpoint(
 @router.post("/connections/{connection_id}/test", response_model=ProviderTest)
 def test_connection_endpoint(
     session: SessionDep,
+    secrets: SecretDep,
     connection_id: str,
-    settings: SettingsDep,
 ) -> ProviderTest:
-    """Run a smoke probe against the provider. Stage 7 expands it to real HTTP."""
+    """Run an explicit smoke probe: HTTP call plus optional catalog request."""
 
-    _ = settings
-    from agents_ide.persistence.models import ProviderConnection as ProviderConnectionModel
-    from agents_ide.services.mapping import get_or_404
-
-    model = get_or_404(session, ProviderConnectionModel, connection_id)
-    if model.archived_at is not None:
-        raise AppError("connection_archived", "Архивное подключение недоступно", 409)
-    raise AppError("not_implemented", "Проверка провайдера будет доступна на этапе 7", 501)
+    return connections.test_connection(session, secrets, connection_id)
 
 
 @router.get("/connections/{connection_id}/models")

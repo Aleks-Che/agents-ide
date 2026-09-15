@@ -163,8 +163,9 @@ def test_provider_test_must_not_claim_unperformed_success(authenticated):
         },
     ).json()
     result = client.post(f"/api/connections/{connection['id']}/test", headers=headers)
-    assert result.status_code == 501
-    assert client.get(f"/api/connections/{connection['id']}").json()["last_test_status"] is None
+    assert result.status_code == 200
+    assert result.json()["status"] == "failed"
+    assert client.get(f"/api/connections/{connection['id']}").json()["last_test_status"] == "failed"
 
 
 def test_parallel_start_is_atomic_and_idempotent(authenticated, tmp_path):

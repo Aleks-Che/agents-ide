@@ -4727,7 +4727,7 @@
     },
     "/api/connections/{connection_id}/test": {
       "post": {
-        "description": "Run a smoke probe against the provider. Stage 7 expands it to real HTTP.",
+        "description": "Run an explicit smoke probe: HTTP call plus optional catalog request.",
         "operationId": "test_connection_endpoint_api_connections__connection_id__test_post",
         "parameters": [
           {

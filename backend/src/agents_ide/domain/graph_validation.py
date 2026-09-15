@@ -381,13 +381,25 @@ def _validate_node_content(
         validate_parameters(config["params"])
     if node["type"] == "Command":
         commands = config["commands"]
+        selected = config.get("command_filter", [])
+        if isinstance(selected, dict):
+            ast = _check_ast(selected, nodes, names, schema)
+            if (
+                ast.op != Op.REF
+                or ast.value[0] != "steps"
+                or nodes[ast.value[1]]["type"] != "CollectContext"
+                or nodes[ast.value[1]].get("config", {}).get("mode") != "resolve_requests"
+                or ast.value[3:] != ("validated_result", "command_ids")
+            ):
+                raise ASTError("Command filter must reference resolved evidence IDs")
+            selected = []
         if isinstance(commands, dict):
             ast = _check_ast(commands, nodes, names, schema)
             if ast.op != Op.REF or ast.value[0] not in ("input", "inputs"):
                 raise ASTError("Commands must reference immutable inputs")
         else:
             ids = [command["id"] for command in commands]
-            if len(set(ids)) != len(ids) or set(config.get("command_filter", [])) - set(ids):
+            if len(set(ids)) != len(ids) or set(selected) - set(ids):
                 raise ASTError("Invalid command IDs")
             for command in commands:
                 check_relative_path(command.get("cwd", "."))
@@ -459,6 +471,9 @@ PARAM_SCHEMA = {
         "stop": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
         "frequency_penalty": {"type": "number", "minimum": -2, "maximum": 2},
         "presence_penalty": {"type": "number", "minimum": -2, "maximum": 2},
+        "stream": {"type": "boolean"},
+        "structured_output": {"type": "boolean"},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400},
     },
     "additionalProperties": False,
 }

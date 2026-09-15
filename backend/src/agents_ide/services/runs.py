@@ -246,6 +246,8 @@ def start_run(session: Session, payload: RunStart) -> Run:
     snapshot["resolved_settings"] = configuration
     snapshot["setting_sources"] = sources
     snapshot["dependencies"] = capture_dependencies(session, snapshot["graph"], configuration)
+    if report.preview.get("command_programs"):
+        snapshot["dependencies"]["command_programs"] = report.preview["command_programs"]
     snapshot["pipeline_execution_hash"] = version.execution_hash
     snapshot["execution_hash"] = execution_hash(
         version,

@@ -693,11 +693,27 @@
                   "additionalProperties": false,
                   "properties": {
                     "command_filter": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "maxItems": 50,
-                      "type": "array"
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "maxItems": 50,
+                          "type": "array"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "ref": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ref"
+                          ],
+                          "type": "object"
+                        }
+                      ]
                     },
                     "commands": {
                       "anyOf": [
@@ -1574,11 +1590,27 @@
           "additionalProperties": false,
           "properties": {
             "command_filter": {
-              "items": {
-                "type": "string"
-              },
-              "maxItems": 50,
-              "type": "array"
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 50,
+                  "type": "array"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ref": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref"
+                  ],
+                  "type": "object"
+                }
+              ]
             },
             "commands": {
               "anyOf": [
@@ -2190,9 +2222,11 @@
     "bounded_loops",
     "collect_context",
     "command",
+    "command_filter_ref",
     "conditions",
     "git",
     "git_commit",
+    "llm_http_options",
     "llmrequest",
     "model_groups",
     "plan_control",

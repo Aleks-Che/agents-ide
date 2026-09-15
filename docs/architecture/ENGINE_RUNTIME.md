@@ -1,10 +1,17 @@
-# Движок этапа 4 после ревью
+# Движок графов после этапов 4, 5 и 7
 
-Статус: серверный fake/demo-сценарий работает через API и независимый worker. Реальные адаптеры и восстановление прерванного Run не включены. Основания: [план](../IMPLEMENTATION_PLAN.md), [состояния](STATE_MACHINES.md), [runtime](RUNTIME_CONTRACTS.md), [графы](GRAPH_VALIDATION.md).
+Статус: независимый worker выполняет графы, поддерживает управление/recovery этапа 5
+и [HTTP, Command, CollectContext этапа 7](LLM_COMMAND_EVIDENCE.md). Native harness,
+GitCommit и PlanControl ожидают этапов 6/8. Основания: [план](../IMPLEMENTATION_PLAN.md),
+[состояния](STATE_MACHINES.md), [runtime](RUNTIME_CONTRACTS.md), [графы](GRAPH_VALIDATION.md).
 
 ## Явное исполнение и границы
 
-`POST /api/runs` принимает `execution_mode=real|simulated`, по умолчанию real. Обычный Run с внешними узлами ожидает `configuration_invalid(real_adapters_unimplemented)`; fake не подставляется автоматически. Start/Condition/End могут исполняться без адаптера. Для simulated поддержаны AgentTask/LLMRequest и эти серверные узлы. Command, CollectContext, GitCommit, PlanControl требуют этапов 7–8 и не считаются выполненными пустыми заглушками.
+`POST /api/runs` принимает `execution_mode=real|simulated`, по умолчанию real.
+В real работают Start/Condition/End, LLMRequest, Command и CollectContext. Не реализованные
+AgentTask/GitCommit/PlanControl дают configuration_invalid с конкретной причиной ожидания.
+В simulated поддержаны fake AgentTask/LLMRequest и Start/Condition/End; реальные процессы
+и HTTP не подставляются в simulation. Подробности — в [контракте этапа 7](LLM_COMMAND_EVIDENCE.md).
 
 В simulated-режиме можно передать `fake_scenario.responses`. Ключ ответа — node_id, необязательный visit_index и attempt_index (нумерация от 1). Ответ задаёт raw_text, verdict через JSON либо decision, outcome, retry_safety/no_effect, delay_seconds, deltas, files и optional телеметрию. Сценарий ограничен 200 ответами и 1 MiB; повторные ключи, некорректные пути и неизвестные исполнители отклоняются. Пример фрагмента:
 

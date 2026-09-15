@@ -44,6 +44,8 @@ SUPPORTED_FEATURES = frozenset(
         "agenttask",
         "llmrequest",
         "command",
+        "command_filter_ref",
+        "llm_http_options",
         "collect_context",
         "git_commit",
         "git",
@@ -162,9 +164,15 @@ def _command_config() -> dict[str, Any]:
             "failure_policy": {"enum": ["collect_all", "stop_on_failure"]},
             "result_output": {"type": "string"},
             "command_filter": {
-                "type": "array",
-                "items": {"type": "string"},
-                "maxItems": 50,
+                "anyOf": [
+                    {"type": "array", "items": {"type": "string"}, "maxItems": 50},
+                    {
+                        "type": "object",
+                        "required": ["ref"],
+                        "properties": {"ref": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                ],
             },
         },
         "additionalProperties": False,
@@ -453,6 +461,13 @@ def required_features_for(graph: Mapping[str, Any]) -> list[str]:
             features.add("collect_context")
         if node_type == "Command":
             features.add("command")
+            if isinstance(node.get("config", {}).get("command_filter"), Mapping):
+                features.add("command_filter_ref")
+        if node_type == "LLMRequest" and any(
+            key in node.get("config", {}).get("params", {})
+            for key in ("stream", "structured_output", "timeout_seconds")
+        ):
+            features.add("llm_http_options")
         if node_type == "Condition":
             features.add("conditions")
         if node.get("config", {}).get("model_selection", {}).get("kind") == "group":

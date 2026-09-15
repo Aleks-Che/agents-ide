@@ -53,21 +53,38 @@ class ProcessGroup:
             )
 
     def popen_stdio(
-        self, argv: list[str], cwd: Path, env: dict[str, str] | None = None
+        self,
+        argv: list[str],
+        cwd: Path,
+        env: dict[str, str] | None = None,
+        before_resume: Callable[[psutil.Process], None] | None = None,
+        *,
+        stdin: int = subprocess.PIPE,
+        stderr: int = subprocess.PIPE,
     ) -> subprocess.Popen[str]:
         """Stdio transport with the same suspended-start ownership invariant."""
         flags = 0
         if sys.platform == "win32":
             flags = subprocess.CREATE_NO_WINDOW | 0x00000004  # CREATE_SUSPENDED
+        command = argv
+        if sys.platform != "win32" and before_resume:
+            command = [
+                sys.executable,
+                "-c",
+                "import os,signal,sys; os.kill(os.getpid(),signal.SIGSTOP); "
+                "os.execvpe(sys.argv[1],sys.argv[1:],os.environ)",
+                *argv,
+            ]
         child = subprocess.Popen(
-            argv,
+            command,
             env=env,
             cwd=cwd,
-            stdin=subprocess.PIPE,
+            stdin=stdin,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=stderr,
             text=True,
             encoding="utf-8",
+            errors="replace",
             creationflags=flags,
             start_new_session=sys.platform != "win32",
         )
@@ -82,6 +99,8 @@ class ProcessGroup:
             )
             try:
                 win32job.AssignProcessToJobObject(self.job, handle)
+                if before_resume:
+                    before_resume(psutil.Process(child.pid))
                 primary = psutil.Process(child.pid).threads()[0].id
                 thread = win32api.OpenThread(win32con.THREAD_SUSPEND_RESUME, False, primary)
                 try:
@@ -96,6 +115,22 @@ class ProcessGroup:
                 win32api.CloseHandle(handle)
         else:
             self.children.append(child)
+            if before_resume:
+                import signal
+
+                process = psutil.Process(child.pid)
+                try:
+                    deadline = time.monotonic() + 5
+                    while process.status() != psutil.STATUS_STOPPED:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Child did not stop before registration")
+                        time.sleep(0.01)
+                    before_resume(process)
+                    os.kill(child.pid, signal.SIGCONT)
+                except BaseException:
+                    child.kill()
+                    child.wait(timeout=5)
+                    raise
         return child
 
     def start(
@@ -561,6 +596,75 @@ class ProcessSupervisor:
         self.factory, self.registry = factory, registry
         self.run_id, self.worker_id, self.generation = run_id, worker_id, generation
 
+    def _register_callback(
+        self,
+        group: ProcessGroup,
+        holder: dict[str, ProcessRegistryEntry],
+        *,
+        role: str,
+        kind: str,
+        attempt_id: str | None,
+        transport: str,
+        port: int | None,
+    ) -> Callable[[psutil.Process], None]:
+        def register(process: psutil.Process) -> None:
+            entry = self.registry.register(
+                process=process,
+                kind=kind,
+                role=role,
+                owner_generation=self.generation,
+                run_id=self.run_id,
+                step_attempt_id=attempt_id,
+            )
+            entry.group = group
+            holder["entry"] = entry
+            with self.factory() as session:
+                begin_write(session)
+                owned_job(session, self.run_id, self.worker_id, self.generation)
+                run = session.get(Run, self.run_id)
+                assert run is not None
+                if kind == "command":
+                    from agents_ide.security.filesystem import directory_identity
+
+                    workspace = json.loads(run.snapshot_json)["workspace"]
+                    root = Path(workspace["workspace_path"])
+                    identity = directory_identity(root)
+                    if identity != (workspace["identity_dev"], workspace["identity_ino"]):
+                        raise AppError(
+                            "workspace_conflict", "Workspace changed before dispatch", 409
+                        )
+                continuing_step = (
+                    kind == "command"
+                    and attempt_id is not None
+                    and run.current_attempt_id == attempt_id
+                    and run.state == "pause_requested"
+                )
+                if run.state not in {"running", "queued"} and not continuing_step:
+                    raise AppError("dispatch_blocked", "Управление запретило запуск процесса", 409)
+                session.add(
+                    ProcessSupervision(
+                        id=new_id(),
+                        run_id=self.run_id,
+                        step_attempt_id=attempt_id,
+                        role=role,
+                        kind=kind,
+                        owner_generation=self.generation,
+                        pid=entry.pid,
+                        create_time=entry.create_time,
+                        parent_pid=entry.parent_pid,
+                        executable=entry.executable,
+                        started_at=entry.started_at,
+                        state="started",
+                        tree_json=to_json({"job_owned": sys.platform == "win32", "pids": {}}),
+                        workspace_json=to_json(json.loads(run.snapshot_json)["workspace"]),
+                        transport=transport,
+                        port=port,
+                    )
+                )
+                session.commit()
+
+        return register
+
     def start(
         self,
         argv: list[str],
@@ -586,57 +690,64 @@ class ProcessSupervisor:
                     409,
                 ) from None
         group = ProcessGroup()
-        entry: ProcessRegistryEntry | None = None
-
-        def register(process: psutil.Process) -> None:
-            nonlocal entry
-            entry = self.registry.register(
-                process=process,
-                kind=kind,
-                role=role,
-                owner_generation=self.generation,
-                run_id=self.run_id,
-                step_attempt_id=attempt_id,
-            )
-            entry.group = group
-            with self.factory() as session:
-                begin_write(session)
-                owned_job(session, self.run_id, self.worker_id, self.generation)
-                run = session.get(Run, self.run_id)
-                assert run is not None
-                if run.state not in {"running", "queued"}:
-                    raise AppError("dispatch_blocked", "Управление запретило запуск процесса", 409)
-                session.add(
-                    ProcessSupervision(
-                        id=new_id(),
-                        run_id=self.run_id,
-                        step_attempt_id=attempt_id,
-                        role=role,
-                        kind=kind,
-                        owner_generation=self.generation,
-                        pid=entry.pid,
-                        create_time=entry.create_time,
-                        parent_pid=entry.parent_pid,
-                        executable=entry.executable,
-                        started_at=entry.started_at,
-                        state="started",
-                        tree_json=to_json({"job_owned": sys.platform == "win32", "pids": {}}),
-                        workspace_json=to_json(json.loads(run.snapshot_json)["workspace"]),
-                        transport=transport,
-                        port=port,
-                    )
-                )
-                session.commit()
-
+        holder: dict[str, ProcessRegistryEntry] = {}
+        callback = self._register_callback(
+            group,
+            holder,
+            role=role,
+            kind=kind,
+            attempt_id=attempt_id,
+            transport=transport,
+            port=port,
+        )
         try:
-            group.start(argv, cwd, env, before_resume=register)
+            group.start(argv, cwd, env, before_resume=callback)
         except BaseException:
             group.close()
+            entry = holder.get("entry")
             if entry:
                 self.registry.mark_finished(entry.pid, self.generation)
             raise
+        entry = holder.get("entry")
         assert entry is not None
         return entry
+
+    def start_stdio(
+        self,
+        argv: list[str],
+        cwd: Path,
+        env: dict[str, str],
+        *,
+        role: str = "command",
+        kind: str = "command",
+        attempt_id: str | None = None,
+    ) -> tuple[ProcessRegistryEntry, subprocess.Popen[str]]:
+        """Start an owned process with captured stdio; used by Command nodes."""
+
+        group = ProcessGroup()
+        holder: dict[str, ProcessRegistryEntry] = {}
+        callback = self._register_callback(
+            group,
+            holder,
+            role=role,
+            kind=kind,
+            attempt_id=attempt_id,
+            transport="process",
+            port=None,
+        )
+        try:
+            child = group.popen_stdio(
+                argv, cwd, env, before_resume=callback, stdin=subprocess.DEVNULL
+            )
+        except BaseException:
+            group.close()
+            entry = holder.get("entry")
+            if entry:
+                self.registry.mark_finished(entry.pid, self.generation)
+            raise
+        entry = holder.get("entry")
+        assert entry is not None
+        return entry, child
 
     def refresh_health(self, *, external_event: bool = False) -> None:
         entries = self.registry.by_run(self.run_id)

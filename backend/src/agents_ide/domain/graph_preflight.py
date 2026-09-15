@@ -185,6 +185,7 @@ def preflight(
     except AppError as exc:
         report.add_error(ValidationIssue(exc.code, exc.message))
     all_command_ids: set[str] = set()
+    pinned_programs: dict[str, dict[str, str]] = {}
     for node in graph["nodes"]:
         node_id = node["id"]
         config = dependencies["nodes"][node_id]
@@ -216,7 +217,20 @@ def preflight(
             all_command_ids.update(c["id"] for c in commands)
             for command in commands:
                 program = command["program"]
-                resolved = shutil.which(program)
+                from agents_ide.engine.commands import (
+                    command_environment,
+                    parse_command_list,
+                    resolve_program,
+                )
+
+                try:
+                    parse_command_list([command])
+                    environment = command_environment(command.get("env"))
+                    resolved = resolve_program(program, workspace, environment.get("PATH"))
+                except AppError:
+                    resolved = None
+                if resolved is not None:
+                    pinned_programs.setdefault(node_id, {})[command["id"]] = resolved
                 if resolved is None:
                     report.add_error(
                         ValidationIssue(
@@ -299,6 +313,23 @@ def preflight(
         report.add_error(
             ValidationIssue("simulation_mode_required", "Сценарий требует явного simulated-режима")
         )
+    if pinned_programs:
+        dependencies["command_programs"] = pinned_programs
+        report.preview["command_programs"] = pinned_programs
+        report.execution_hash = execution_hash(
+            version,
+            configuration,
+            dependencies,
+            values,
+            execution_mode=execution_mode,
+            fake_scenario=fake_scenario,
+        )
+    if execution_mode == "real" and all(
+        n["type"] in {"Start", "End", "Condition", "Command", "CollectContext", "LLMRequest"}
+        for n in graph["nodes"]
+    ):
+        report.warnings = [w for w in report.warnings if w.code != "runtime_unimplemented"]
+        report.preview["dispatch_ready"] = report.ok
     return report
 
 

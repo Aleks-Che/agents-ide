@@ -1,5 +1,140 @@
 # Журнал реализации
 
+### 2026-09-15 · Ревью этапа 7 · Исправления и повторная приёмка
+
+**Статус:** серверная реализация исправлена. Точный действующий контракт и ограничения —
+в [LLM_COMMAND_EVIDENCE](architecture/LLM_COMMAND_EVIDENCE.md). Исходный отчёт ниже сохранён
+как история; его утверждения о safe 5xx, статическом фильтре и полном ledger заменены этим ревью.
+
+**Найдено и исправлено:**
+
+1. HTTP 5xx/408/409/425 и write timeout ошибочно разрешали повтор платного запроса.
+   Теперь это unknown; 429 и отказ соединения имеют отдельную safe-политику. Retry-After
+   поддерживает дату, не обрезается до 60 секунд и сохраняется атомарно с исходом попытки.
+2. HTTP-чтение ошибки и probe накапливало неограниченное тело, общий deadline был смешан
+   с monotonic, stop token не использовался. Добавлены отменяемый транспорт, общий таймер,
+   ограничения до parsing, проверка завершения SSE и delta-события. HTTP 200/частичный
+   ответ с terminal error не считается успехом; неправильный ответ сохраняет диагностику.
+3. Возможности stream/structured_output нельзя было задать через серверную схему.
+   Опции теперь валидируются; неизвестная capability реальной модели остаётся unverified.
+   Ошибка чтения pinned secret не превращается в анонимный запрос. Probe не меняет ревизию
+   подключения активного Run и отклоняет результат конкурентно изменённой конфигурации.
+4. Subcommand ledger существовал только в итоговом ответе, после остановки он терялся;
+   reused success становился failed, а unsafe failed мог запускаться повторно. Добавлены
+   отдельные prepared/result-артефакты каждой команды, восстановление их статусов и вывода.
+   Исправлен KeyError(member_index) у ошибок серверных узлов. Pause завершает список,
+   stop не запускает следующий процесс; неизвестный исход последней команды не скрывается.
+5. Исправлены приоритет явного env, общий cap stdout/stderr, сохранение префикса и dropped_bytes.
+   Проверяется дерево потомков; программа фиксируется preflight в snapshot/hash, cwd защищён
+   при старте на Windows. Запуск с stdio под Linux также ставит регистрацию до exec, но
+   реальный Linux runtime в этом проходе не проверялся.
+6. CollectContext обходил общий лимит через diff/артефакты, обрезал JSON отчёта посередине,
+   читал защищённые пути через diff и не проверял открытый handle. Теперь все источники и
+   JSON-метаданные ограничены, binary/protected/unstable вынесены в omissions; Git-чтения
+   проходят supervisor с отключёнными textconv/external diff. Manifest заполнен файлами,
+   хэшами, HEAD и omissions. Ошибки/большие источники не изображаются полным evidence.
+7. Доказательства команд не извлекались из реального формата артефакта; старый отчёт мог
+   подтверждать изменённые файлы. Введён ограниченный отпечаток workspace и выбор по scope,
+   циклу и актуальному содержимому. Required-проверка не исчезает после фильтрации;
+   ложный passed модели превращается в failed/inconclusive, исходный ответ сохраняется.
+8. Пустой фильтр запускал все команды; динамическая связь resolve_requests отсутствовала,
+   exclude игнорировался, max_command_replays=0 становился 2. Исправлены фильтр по AST-ref,
+   разрешение только исходных safe ID, запрет смешанных недопустимых заявок, счётчик verifier/scope
+   и остановка при отсутствии нового evidence. Будущие узлы возвращают валидный waiting_reason.
+
+**Проверки:** полный Windows/Python 3.12.7 прогон — **365 passed**, затем добавлены и
+проверены ещё 4 регрессии будущих узлов/подмены workspace; текущая коллекция — **369 тестов**.
+После последней правки supervisor затронутые сценарии перепроверены. В тесте stop/resume
+короткий sleep заменён явным файловым барьером: прежний вариант мог успеть завершить команду
+до stop и ошибочно требовать вторую попытку. Непрошедших проверок не осталось.
+Всего к отчёту из 325 тестов добавлены **44 регрессии**, включая
+[новый набор review](../backend/tests/integration/test_stage7_review.py) и расширение
+[проверок настоящего worker](../backend/tests/integration/test_stage7_real_llm_run.py).
+Ruff check/format (92 файла), mypy Windows/Linux target (71 модуль), синхронизация OpenAPI/TS,
+frontend ESLint/Prettier/Vitest (2)/Playwright (1)/build и сборка wheel прошли.
+Полный локальный вывод — `.local/stage7-final-tests.txt`; wheel — `.local/stage7-dist/`.
+Локальные ссылки в обновлённых документах проверены. Никаких платных запросов не выполнялось.
+
+**Для продолжения:** ограничение доказательства workspace — 10 000 файлов/64 MiB. При
+превышении или невозможности безопасного чтения свежесть не подтверждается. Это не протокол
+Git intent/allowlist/hooks этапа 8. Native harness/PlanControl/пресет, реальные capability и
+платные провайдеры, удалённый CI и реальный Linux остаются отдельными gates. Старые immutable
+snapshot и результаты не переписаны; отсутствие прежнего ledger не компенсируется выдуманными
+данными. Миграция БД для этого ревью не требуется.
+
+Из источников Claudexor адаптированы регрессии terminal choice errors/finish_reason и правила
+проверок/отмены. [Карта заимствований](../sources/README.md), исходный снимок и LICENSE сохранены;
+сторонние зависимости и оркестратор не подключались.
+
+<details>
+<summary>Первоначальный отчёт этапа 7 — до исправлений ревью</summary>
+
+### 2026-09-15 · Этап 7 · LLM, команды и сбор доказательств
+
+**Статус:** серверная часть реализована и проверена. [План](IMPLEMENTATION_PLAN.md)
+и [контракт](architecture/EXECUTION_CONTRACTS.md) описывают проверенную логику HTTP-адаптера,
+Command, CollectContext и evidence; реальные harness/Git/intent остаются gates этапов 6 и 8.
+
+**Реализовано.**
+
+- [`adapters/llm_http.py`](../backend/src/agents_ide/adapters/llm_http.py) — OpenAI-совместимый
+  HTTP-адаптер: `trust_env=False`, `follow_redirects=False`, redirect на чужой origin отклоняется
+  без переноса `Authorization`; timeout по connect/read/write/pool; response cap 10 MiB; поток
+  `data:` разбирается и накапливается; 429/5xx/connect → RETRYABLE `no_effect` safe с
+  `retry_after_seconds` из `Retry-After`; 401/403 → PERMISSION_DENIED; 404/not found → UNAVAILABLE;
+  4xx → CONFIRMED `configuration_invalid`; read timeout после отправки → UNKNOWN; невалидный JSON и
+  oversized-ответ → INVALID_FORMAT. `structured_output=true` шлёт `response_format: json_object`,
+  иначе к промпту добавляется инструкция JSON; серверная валидация результата остаётся единственной.
+- [`security/provider_url.py`](../backend/src/agents_ide/security/provider_url.py) — общая политика
+  URL: loopback HTTP или remote HTTPS, без query/fragment/userinfo; `chat_completions_url`/`models_url`.
+- [`services/connections.py`](../backend/src/agents_ide/services/connections.py) —
+  `test_connection` делает реальный smoke-запрос (catalog если доступен + минимальный chat);
+  каталог сам по себе не считается проверкой доступа. Endpoint `/connections/{id}/test` возвращает
+  `ProviderTest` (раньше 501); недоступный провайдер → `status=failed`.
+- [`engine/commands.py`](../backend/src/agents_ide/engine/commands.py) — выбранный список команд:
+  `parse_command_list` (включая `input.verification_commands`), `command_environment` (минимальный
+  whitelist OS + явное env; секретные ключи отклоняются), `resolve_program`/`resolve_cwd` с
+  containment, `execute_commands` с collect_all/stop_on_failure, output cap + dropped bytes,
+  timeout с остановкой дерева, subcommand ledger (unsafe/unknown не повторяется автоматически).
+  Required failure/skipped/timeout исключает passed; launch_error → configuration_invalid;
+  timeout unsafe → UNKNOWN.
+- [`engine/context_sources.py`](../backend/src/agents_ide/engine/context_sources.py) —
+  CollectContext: file/glob/diff/artifact/command_report, limits (100/256 KiB/2 MiB/64 KiB),
+  omissions (binary/too_large/missing/outside/untracked_excluded), redaction, manifest/hash файлов,
+  base/current HEAD; `resolve_requests` валидирует `missing_evidence` (file/artifact/command_report)
+  против настроенных sources и safe-команд, ничего не исполняет.
+- [`engine/runner.py`](../backend/src/agents_ide/engine/runner.py) — реальный режим больше не
+  блокируется заглушкой `real_adapters_unimplemented`: LLMRequest исполняется через `HttpLLMAdapter`
+  с соединением-кандидатом из snapshot (секрет читается в момент вызова, не логируется);
+  AgentTask → `harness_adapter_unimplemented`, GitCommit/PlanControl → своим gates. Добавлены
+  `_server_call`/`_command_node`/`_collect_node` с тем же мониторингом, heartbeat, retry и
+  контролем, что и у агентных вызовов. Evidence-пакет текущего цикла (context_package +
+  command_report) передаётся в `LLMAdapterRequest.context_package.evidence` с общим лимитом 2 MiB.
+  `_normalize_result` проверяет форму `missing_evidence`; `_retry` учитывает `retry_after_seconds`
+  и добавляет jitter; бюджет обновляется только при наблюдаемых tokens/cost.
+- [`worker/processes.py`](../backend/src/agents_ide/worker/processes.py) — `ProcessSupervisor`
+  рефакторен: общий register-callback, добавлен `start_stdio` для Command-узлов (Job ownership до
+  возобновления, capture stderr, stdin=DEVNULL для команд); `popen_stdio` параметризует stdin/stderr.
+
+**Границы и продолжение.** Реальные платные модели, удалённый CI, реальный harness и Git intent
+не запускались. Capability/формат конкретной модели и Git baseline/allowlist/hooks остаются
+gate'ами этапов 6 и 8. Перенос примеров разбора из `sources/claudexor` — справочный материал,
+не установленная зависимость; собственные `success_exit_codes`/`retry_safety` и строгая валидация
+результата применены. `resolve_requests`/`command_filter` связаны статической конфигурацией;
+динамическая проводка PlanItem/evidence относится к пресету этапа 8.
+
+**Проверки.** Backend на Windows/Python 3.12.7: **325 passed** (300 предыдущих + 25 новых),
+Ruff check/format, mypy (70 файлов), генерация контрактов (`generate_contracts.py --check`)
+и frontend ESLint/Prettier/Vitest (2)/build прошли. Новые проверки:
+[test_stage7_llm_commands_evidence](../backend/tests/integration/test_stage7_llm_commands_evidence.py)
+(адаптер, retry/redirect/stream, команды, ledger, collect, resolve_requests) и
+[test_stage7_real_llm_run](../backend/tests/integration/test_stage7_real_llm_run.py)
+(реальный Run через worker против локального OpenAI-сервера; group fallback между подключениями с
+изоляцией credentials на Windows/DPAPI). Локальный полный вывод: `.local/review-7-accepted.txt`.
+
+
+</details>
+
 ### 2026-09-14 · Этап 5 · Ревью управления, восстановления и CLI
 
 **Статус:** исправлены существенные ошибки исходной реализации. [План](IMPLEMENTATION_PLAN.md)

@@ -72,6 +72,7 @@ class LLMResult:
     elapsed_seconds: float = 0.0
     finished_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     no_effect: bool = False
+    result_schema: str | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -112,6 +113,7 @@ class LLMAdapterRequest:
     emit_event: Callable[[str, dict[str, Any]], None] | None = None
     stop_event: Event | None = None
     check_owned: Callable[[], None] | None = None
+    connection: dict[str, Any] | None = None
 
 
 class AgentAdapter:

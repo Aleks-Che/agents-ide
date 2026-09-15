@@ -27,6 +27,7 @@ class ArtifactPayload:
     files: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     body: Any = None
     redaction: tuple[str, ...] = field(default_factory=tuple)
+    omissions: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
 def sanitize(value: Any) -> Any:
@@ -110,7 +111,7 @@ def record_artifact(
         truncation_json=encode({"truncated": True, "original_bytes": original_size})
         if truncated
         else None,
-        omissions_json=None,
+        omissions_json=encode(sanitize(list(payload.omissions))) if payload.omissions else None,
         created_at=utc_now(),
     )
     session.add(manifest)

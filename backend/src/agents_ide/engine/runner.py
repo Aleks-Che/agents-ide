@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
+import subprocess
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from jsonschema import Draft202012Validator
 from sqlalchemy import select
@@ -33,6 +35,7 @@ from agents_ide.adapters.base import (
     LLMResult,
 )
 from agents_ide.adapters.fake import FakeAgentAdapter, FakeLLMAdapter, parse_fake_scenario
+from agents_ide.adapters.llm_http import HttpLLMAdapter
 from agents_ide.domain.common import new_id, to_json, utc_now
 from agents_ide.domain.contracts import RunState
 from agents_ide.domain.graph_ast import (
@@ -41,13 +44,15 @@ from agents_ide.domain.graph_ast import (
     EvaluationContext,
     Value,
     apply_assignments,
+    evaluate,
     evaluate_truth,
     substitute,
 )
 from agents_ide.domain.graph_validation import check_version_features, validate_graph
 from agents_ide.domain.schemas import WaitingReason
 from agents_ide.domain.workspace import collect_workspace, workspace_scope
-from agents_ide.engine import artifacts, events, visits
+from agents_ide.engine import artifacts, context_sources, events, visits
+from agents_ide.engine import commands as command_engine
 from agents_ide.engine.queue import owned_job
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
@@ -122,6 +127,8 @@ class Runner:
         self.runtime: dict[str, Any] = {}
         self.nodes: dict[str, Any] = {}
         self.simulated = False
+        self._attempt_id: str | None = None
+        self._current_evidence: dict[str, Any] = {}
 
     @contextmanager
     def _write(self) -> Iterator[tuple[Session, Run]]:
@@ -523,10 +530,6 @@ class Runner:
             return self._waiting(
                 "schema_unsupported", {"errors": [e.to_dict() for e in report.errors]}
             )
-        if not self.simulated and any(
-            n["type"] not in {"Start", "End", "Condition"} for n in self.nodes.values()
-        ):
-            return self._waiting("configuration_invalid", {"reason": "real_adapters_unimplemented"})
         try:
             self._workspace_check()
             agent, llm = self._build_adapters(self.snapshot)
@@ -594,6 +597,8 @@ class Runner:
                             candidate_retries=0,
                             next_candidate_index=0,
                             retry_at=None,
+                            server_retries=0,
+                            logical_evidence_hash=None,
                         )
                         run.current_node_id, run.current_execution_id, run.current_attempt_id = (
                             node["id"],
@@ -609,6 +614,12 @@ class Runner:
                     self._persist(run)
                 result: AgentResult | LLMResult | None = None
                 if node["type"] in {"AgentTask", "LLMRequest"}:
+                    if not self.simulated and node["type"] == "AgentTask":
+                        return self._waiting(
+                            "configuration_invalid",
+                            {"node_id": node["id"], "reason": "harness_adapter_unimplemented"},
+                            visit,
+                        )
                     result = self._saved_result(visit) if reuse else None
                     if result is None:
                         external = self._external(
@@ -617,9 +628,53 @@ class Runner:
                         if isinstance(external, RunnerResult):
                             return external
                         result = external
-                elif node["type"] not in {"Start", "End", "Condition"}:
+                elif node["type"] == "Command":
+                    if self.simulated:
+                        return self._waiting(
+                            "configuration_invalid",
+                            {"reason": "simulated_command_unsupported", "node_id": node["id"]},
+                            visit,
+                        )
+                    result = self._saved_result(visit) if reuse else None
+                    if result is None:
+                        external = self._command_node(node, visit)
+                        if isinstance(external, RunnerResult):
+                            return external
+                        result = external
+                elif node["type"] == "CollectContext":
+                    if self.simulated:
+                        return self._waiting(
+                            "configuration_invalid",
+                            {"reason": "simulated_collect_unsupported", "node_id": node["id"]},
+                            visit,
+                        )
+                    result = self._saved_result(visit) if reuse else None
+                    if result is None:
+                        external = self._collect_node(node, visit)
+                        if isinstance(external, RunnerResult):
+                            return external
+                        result = external
+                elif node["type"] == "GitCommit":
                     return self._waiting(
-                        "configuration_invalid", {"reason": "node_executor_unimplemented"}, visit
+                        "configuration_invalid",
+                        {
+                            "reason": "git_commit_unimplemented"
+                            if not self.simulated
+                            else "simulated_commit_unsupported",
+                            "node_id": node["id"],
+                        },
+                        visit,
+                    )
+                elif node["type"] == "PlanControl":
+                    return self._waiting(
+                        "configuration_invalid",
+                        {
+                            "reason": "plan_control_unimplemented"
+                            if not self.simulated
+                            else "simulated_plan_unsupported",
+                            "node_id": node["id"],
+                        },
+                        visit,
                     )
                 if finished := self._finish_visit(node, visit, result):
                     return finished
@@ -697,8 +752,9 @@ class Runner:
 
     def _build_adapters(self, snapshot: dict[str, Any]) -> tuple[AgentAdapter, LLMAdapter]:
         if not self.simulated:
-            # Pure server graphs never call these; there is no implicit simulation.
-            return AgentAdapter(), LLMAdapter()
+            # Real LLM calls use the pinned connection per candidate; the base
+            # agent adapter stays unimplemented until the harness stage.
+            return AgentAdapter(), HttpLLMAdapter()
         root = self.data_dir.resolve() / "simulated"
         workspace = root / self.run_id
         workspace.mkdir(parents=True, exist_ok=True)
@@ -832,22 +888,23 @@ class Runner:
 
     def _call_monitored(
         self,
-        adapter: AgentAdapter | LLMAdapter,
-        request: AgentAdapterRequest | LLMAdapterRequest,
+        fn: Callable[[], AgentResult | LLMResult],
         attempt_id: str,
+        *,
+        deadline_at: float | None,
+        stop_event: threading.Event,
     ) -> AgentResult | LLMResult:
         import time
 
         from agents_ide.worker.processes import ProcessSupervisor
 
         done = threading.Event()
-        stop = request.stop_event
-        assert stop is not None
+        stop = stop_event
         results: list[AgentResult | LLMResult] = []
 
         def invoke() -> None:
             try:
-                results.append(call_adapter(adapter, request))
+                results.append(fn())
             except Exception:
                 results.append(
                     LLMResult(
@@ -886,9 +943,7 @@ class Runner:
                             self.generation,
                         ).refresh_health()
                     last_heartbeat = now
-                    if requested or (
-                        request.deadline_at is not None and utc_now() >= request.deadline_at
-                    ):
+                    if requested or (deadline_at is not None and utc_now() >= deadline_at):
                         stop.set()
                         stop_started = stop_started or now
                 if stop_started is not None and now - stop_started >= INTERRUPT_SECONDS:
@@ -1092,6 +1147,637 @@ class Runner:
             ]
         return []
 
+    def _connection_for(
+        self, node: dict[str, Any], candidate: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        ref = candidate.get("provider_connection_id") or candidate.get("harness_profile_id")
+        if not isinstance(ref, str):
+            return None
+        connection = self.snapshot["dependencies"].get("provider_connections", {}).get(ref)
+        if not isinstance(connection, dict):
+            return None
+        secret_value: str | None = None
+        if connection.get("secret_reference") and self.secret_store is not None:
+            try:
+                secret_value = self.secret_store.get(connection["secret_reference"])
+            except AppError:
+                raise AppError("secret_unavailable", "Pinned secret unavailable", 409) from None
+        if connection.get("secret_reference") and secret_value is None:
+            raise AppError("secret_unavailable", "Pinned secret unavailable", 409)
+        return {
+            "id": ref,
+            "base_url": connection.get("base_url"),
+            "protocol": connection.get("protocol"),
+            "provider_kind": connection.get("provider_kind"),
+            "secret_value": secret_value,
+        }
+
+    def _evidence_package(self, session: Session) -> dict[str, Any]:
+        """Latest bounded context/command artifacts of the current cycle."""
+
+        cap = 1024 * 1024
+        workspace = Path(self.snapshot["workspace"]["workspace_path"])
+        current_hash = context_sources.workspace_hash(workspace) if not self.simulated else None
+        evidence: dict[str, Any] = {
+            "context": None,
+            "command_reports": [],
+            "omissions": [],
+            "truncated": False,
+            "required_failed": [],
+            "required_incomplete": [],
+            "workspace_hash": current_hash,
+        }
+        seen_nodes: set[str] = set()
+        seen_commands: set[str] = set()
+        rows = session.scalars(
+            select(ArtifactManifest)
+            .where(
+                ArtifactManifest.run_id == self.run_id,
+                ArtifactManifest.schema_type.in_(("context_package", "command_ledger")),
+            )
+            .order_by(ArtifactManifest.created_at.desc())
+            .limit(500)
+        )
+        for row in rows:
+            execution = (
+                session.get(StepExecution, row.step_execution_id) if row.step_execution_id else None
+            )
+            if execution is None or execution.scope != self.runtime["work"].get("scope"):
+                continue
+            body = context_sources.artifact_body(row)
+            stale = (
+                row.cycle_id != self.runtime["cycle_id"]
+                or current_hash is None
+                or body.get("workspace_hash") != current_hash
+                or bool(row.truncation_json)
+            )
+            if row.schema_type == "context_package":
+                if execution.node_id in seen_nodes:
+                    continue
+                seen_nodes.add(execution.node_id)
+                if stale:
+                    evidence["omissions"].append({"artifact_id": row.id, "reason": "stale_context"})
+                elif evidence["context"] is None:
+                    evidence["context"] = body
+                    evidence["omissions"].extend(body.get("omissions", [])[:50])
+                    evidence["truncated"] = evidence["truncated"] or bool(body.get("truncated"))
+            else:
+                for report in body.get("commands", []):
+                    key = str(report.get("id"))
+                    if key in seen_commands:
+                        continue
+                    seen_commands.add(key)
+                    if report.get("required"):
+                        if (
+                            stale
+                            or report.get("output_truncated")
+                            or report.get("status") in {"unknown", "prepared"}
+                        ):
+                            evidence["required_incomplete"].append(key)
+                        elif report.get("status") != "completed":
+                            evidence["required_failed"].append(key)
+                    if not stale:
+                        evidence["command_reports"].append({"artifact_id": row.id, **report})
+            if len(artifacts.encode(evidence).encode()) > cap:
+                evidence["context"] = None
+                evidence["command_reports"] = [
+                    {k: v for k, v in report.items() if k not in {"stdout", "stderr"}}
+                    for report in evidence["command_reports"]
+                ]
+                evidence["truncated"] = True
+        self._current_evidence = evidence
+        return evidence
+
+    def _server_call(
+        self,
+        node: dict[str, Any],
+        visit: visits.VisitState,
+        fn: Callable[[threading.Event, float], AgentResult | LLMResult],
+        *,
+        input_body: dict[str, Any],
+        metadata: dict[str, Any],
+        count_external: bool = False,
+        allow_retry: bool = True,
+    ) -> AgentResult | LLMResult | RunnerResult:
+        config = self.snapshot["dependencies"]["nodes"][node["id"]]
+        if self.runtime.get("retry_at") and (
+            waiting := self._wait_retry(visit, self.runtime["retry_at"])
+        ):
+            return waiting
+        retries = int(self.runtime.get("server_retries", 0))
+        while True:
+            if control := self._controls():
+                return control
+            if limit := self._limit("external_calls" if count_external else "duration"):
+                return self._waiting("limit_exceeded", {"limit": limit}, visit)
+            self._workspace_check()
+            remaining = min(
+                node.get("timeout_seconds", 86400),
+                max(
+                    0,
+                    self._limits()["max_duration_seconds"] - self.runtime["duration_seconds"],
+                ),
+            )
+            deadline = utc_now() + remaining
+            import time as time_module
+
+            monotonic_deadline = time_module.monotonic() + remaining
+            with self._write() as (session, run):
+                attempt = visits.create_attempt(session, visit)
+                attempt.operation_id = new_id()
+                attempt.selection_json = to_json({**metadata, "retry_index": retries})
+                attempt.status = "running"
+                attempt_id = attempt.id
+                self._attempt_id = attempt_id
+                artifact = self._artifact(session, visit, "attempt_input", input_body, attempt_id)
+                attempt.request_artifact_id = artifact.id
+                run.current_attempt_id = attempt_id
+                if count_external:
+                    self.runtime["external_calls"] += 1
+                import psutil
+
+                self.runtime["active_call_owner"] = {
+                    "pid": psutil.Process().pid,
+                    "create_time": psutil.Process().create_time(),
+                    "attempt_id": attempt_id,
+                }
+                self.runtime["retry_at"] = None
+                self._persist(run)
+                self._event(
+                    session,
+                    "attempt.started",
+                    {
+                        **metadata,
+                        "attempt_index": visit.attempt_index,
+                        "operation_id": attempt.operation_id,
+                        "input_artifact_id": artifact.id,
+                    },
+                    visit,
+                    attempt_id,
+                )
+            stop_event = threading.Event()
+
+            def invoke(
+                stop: threading.Event = stop_event, limit: float = monotonic_deadline
+            ) -> AgentResult | LLMResult:
+                return fn(stop, limit)
+
+            result = self._call_monitored(
+                invoke,
+                attempt_id,
+                deadline_at=deadline,
+                stop_event=stop_event,
+            )
+            self._attempt_id = None
+            validation_error = self._normalize_result(config, result)
+            self._save_attempt(visit, attempt_id, result, validation_error)
+            if (
+                result.outcome != ExternalOutcome.SUCCEEDED
+                and result.no_effect
+                and (control := self._controls())
+            ):
+                return control
+            if result.outcome == ExternalOutcome.SUCCEEDED and validation_error is None:
+                return result
+            if validation_error or result.outcome == ExternalOutcome.INVALID_FORMAT:
+                return self._waiting(
+                    "invalid_response_format",
+                    {
+                        "node_id": node["id"],
+                        "attempt_id": attempt_id,
+                        "reason": validation_error or "adapter_invalid_format",
+                    },
+                    visit,
+                )
+            if result.outcome == ExternalOutcome.PERMISSION_DENIED:
+                return self._waiting(
+                    "permission_required",
+                    {"node_id": node["id"], "attempt_id": attempt_id},
+                    visit,
+                )
+            safe = bool(result.no_effect and result.error and result.error.retry_safety == "safe")
+            retryable = result.outcome == ExternalOutcome.RETRYABLE_FAILURE and safe and allow_retry
+            if retryable and retries < node.get("max_retries", 2):
+                retries += 1
+                self.runtime["server_retries"] = retries
+                if wait := self._retry(visit, retries):
+                    return wait
+                continue
+            if result.outcome == ExternalOutcome.CONFIRMED_FAILURE and safe:
+                return self._waiting(
+                    "configuration_invalid",
+                    {
+                        "node_id": node["id"],
+                        "error": result.error.code if result.error else "confirmed_failure",
+                    },
+                    visit,
+                )
+            return self._waiting(
+                "process_not_responding"
+                if result.error and result.error.code == "process_not_responding"
+                else "unknown_external_result",
+                {
+                    "node_id": node["id"],
+                    "attempt_id": attempt_id,
+                    "outcome": result.outcome.value,
+                },
+                visit,
+            )
+
+    def _command_launcher(self) -> Callable[..., command_engine.StartedProcess]:
+        def launch(
+            spec: command_engine.CommandSpec,
+            cwd: Path,
+            env: dict[str, str],
+            argv: list[str],
+        ) -> command_engine.StartedProcess:
+            if self.registry is None:
+                from agents_ide.worker.processes import ProcessRegistry
+
+                self.registry = ProcessRegistry()
+            if self.registry is not None:
+                from agents_ide.worker.processes import ProcessSupervisor
+
+                entry, child = ProcessSupervisor(
+                    self.session_factory,
+                    self.registry,
+                    self.run_id,
+                    self.worker_id,
+                    self.generation,
+                ).start_stdio(
+                    argv,
+                    cwd,
+                    env,
+                    role=spec.id,
+                    kind="command",
+                    attempt_id=self._attempt_id,
+                )
+                return command_engine.StartedProcess(child, group=entry.group, entry=entry)
+            from agents_ide.worker.processes import ProcessGroup
+
+            group = ProcessGroup()
+            child = group.popen_stdio(argv, cwd, env, stdin=subprocess.DEVNULL)
+            return command_engine.StartedProcess(child, group=group)
+
+        return launch
+
+    def _previous_command_reports(self, visit: visits.VisitState) -> dict[str, dict[str, Any]]:
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(ArtifactManifest)
+                .where(
+                    ArtifactManifest.step_execution_id == visit.execution_id,
+                    ArtifactManifest.schema_type == "command_ledger",
+                )
+                .order_by(ArtifactManifest.created_at.desc())
+            )
+            reports: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                try:
+                    body = json.loads(row.body_json or "{}")
+                except ValueError:
+                    continue
+                parsed = body
+                for item in parsed.get("commands", []) if isinstance(parsed, dict) else []:
+                    if (
+                        isinstance(item, dict)
+                        and isinstance(item.get("id"), str)
+                        and item["id"] not in reports
+                    ):
+                        reports[item["id"]] = item
+            return reports
+
+    def _command_node(
+        self, node: dict[str, Any], visit: visits.VisitState
+    ) -> AgentResult | LLMResult | RunnerResult:
+        config = self.snapshot["dependencies"]["nodes"][node["id"]]
+        try:
+            specs = command_engine.parse_command_list(
+                config.get("commands"), self.snapshot["input"]["values"]
+            )
+        except AppError as exc:
+            return self._waiting("configuration_invalid", {"reason": exc.code}, visit)
+        pinned = self.snapshot["dependencies"].get("command_programs", {}).get(node["id"], {})
+        if pinned:
+            specs = [replace(spec, program=pinned[spec.id]) for spec in specs]
+        filter_value = config.get("command_filter")
+        if (
+            "command_filter" not in config
+            and self.snapshot.get("setting_sources", {}).get("command_filter") != "default"
+        ):
+            filter_value = self.snapshot["resolved_settings"].get("command_filter")
+        dynamic_filter = isinstance(filter_value, dict)
+        if dynamic_filter:
+            with self.session_factory() as session:
+                filter_value = evaluate(ASTNode.from_json(filter_value), self._context(session)).raw
+        if filter_value is not None and (
+            not isinstance(filter_value, list)
+            or any(not isinstance(item, str) for item in filter_value)
+        ):
+            return self._waiting(
+                "configuration_invalid", {"reason": "invalid_command_filter"}, visit
+            )
+        filter_ids = filter_value if isinstance(filter_value, list) else []
+        if filter_value is not None:
+            known = {spec.id for spec in specs}
+            unknown = sorted(set(filter_ids) - known)
+            if unknown:
+                return self._waiting(
+                    "configuration_invalid",
+                    {"reason": "unknown_command_filter", "command_ids": unknown},
+                    visit,
+                )
+            specs = [spec for spec in specs if spec.id in set(filter_ids)]
+            if dynamic_filter and any(spec.retry_safety != "safe" for spec in specs):
+                return self._waiting(
+                    "configuration_invalid", {"reason": "unsafe_evidence_replay"}, visit
+                )
+        workspace = Path(self.snapshot["workspace"]["workspace_path"])
+        policy = config.get("failure_policy", "collect_all")
+        if policy not in {"collect_all", "stop_on_failure"}:
+            policy = "collect_all"
+        launcher = self._command_launcher()
+
+        def run(stop_event: threading.Event, deadline: float) -> LLMResult:
+            result = command_engine.execute_commands(
+                specs,
+                workspace=workspace,
+                launcher=launcher,
+                failure_policy=policy,
+                completed=self._previous_command_reports(visit),
+                stop_event=stop_event,
+                deadline_at=deadline,
+                on_report=lambda report: self._command_finished(visit, report),
+                on_start=lambda spec: self._command_started(visit, spec),
+            )
+            body = json.loads(result.raw_text or "{}")
+            body["workspace_hash"] = context_sources.workspace_hash(workspace)
+            object.__setattr__(result, "raw_text", artifacts.encode(body))
+            return result
+
+        return self._server_call(
+            node,
+            visit,
+            run,
+            input_body={
+                "mode": "commands",
+                "commands": [spec.id for spec in specs],
+                "failure_policy": policy,
+                "filter": filter_ids,
+            },
+            metadata={"kind": "command"},
+            count_external=bool(specs),
+        )
+
+    def _command_started(self, visit: visits.VisitState, spec: command_engine.CommandSpec) -> None:
+        with self._write() as (session, run):
+            self._artifact(
+                session,
+                visit,
+                "command_ledger",
+                {
+                    "commands": [
+                        {
+                            "id": spec.id,
+                            "status": "prepared",
+                            "required": spec.required,
+                            "retry_safety": spec.retry_safety,
+                        }
+                    ]
+                },
+                self._attempt_id,
+            )
+            self._persist(run)
+
+    def _command_finished(
+        self, visit: visits.VisitState, report: command_engine.CommandReport
+    ) -> None:
+        workspace = Path(self.snapshot["workspace"]["workspace_path"])
+        proof = context_sources.workspace_hash(workspace)
+        if self.registry is not None:
+            from agents_ide.worker.processes import ProcessSupervisor
+
+            ProcessSupervisor(
+                self.session_factory, self.registry, self.run_id, self.worker_id, self.generation
+            ).refresh_health()
+        with self._write() as (session, run):
+            self._artifact(
+                session,
+                visit,
+                "command_ledger",
+                {
+                    "commands": [report.full()],
+                    "workspace_hash": proof,
+                },
+                self._attempt_id,
+            )
+            self._event(session, "command.finished", report.summary(), visit, self._attempt_id)
+            self._persist(run)
+
+    def _collect_node(
+        self, node: dict[str, Any], visit: visits.VisitState
+    ) -> AgentResult | LLMResult | RunnerResult:
+        config = {
+            "context_paths": self.snapshot["resolved_settings"].get("context_paths", []),
+            **self.snapshot["dependencies"]["nodes"][node["id"]],
+        }
+        if config.get("mode") == "resolve_requests":
+            return self._resolve_requests_node(node, visit, config)
+        workspace = Path(self.snapshot["workspace"]["workspace_path"])
+        base_head = self.snapshot["workspace"].get("git_head_sha")
+
+        def run(stop_event: threading.Event, deadline: float) -> LLMResult:
+            context_sources.ensure_workspace_readable(workspace)
+            with self.session_factory() as session:
+                collection = context_sources.collect_context(
+                    config,
+                    workspace=workspace,
+                    session=session,
+                    run_id=self.run_id,
+                    base_head_sha=base_head,
+                    cycle_id=visit.cycle_id,
+                    scope=self.runtime["work"].get("scope"),
+                    launcher=self._command_launcher(),
+                    stop_event=stop_event,
+                    deadline_at=deadline,
+                )
+            with self._write() as (session, run_row):
+                self._event(
+                    session,
+                    "evidence.collected",
+                    {
+                        "mode": "collect",
+                        "files": len(collection.files),
+                        "omissions": len(collection.omissions),
+                        "schema_type": context_sources.CONTEXT_SCHEMA,
+                    },
+                    visit,
+                    self._attempt_id,
+                )
+                self._persist(run_row)
+            return LLMResult(
+                ExternalOutcome.SUCCEEDED,
+                artifacts.encode(collection.package),
+                collection.summary,
+                None,
+                result_schema=context_sources.CONTEXT_SCHEMA,
+            )
+
+        return self._server_call(
+            node,
+            visit,
+            run,
+            input_body={
+                "mode": "collect",
+                "strategy": config.get("strategy", "truncate"),
+                "sources": config.get("sources", []),
+                "base_head_sha": base_head,
+            },
+            metadata={"kind": "collect_context"},
+            count_external=False,
+            allow_retry=False,
+        )
+
+    def _resolve_requests_node(
+        self, node: dict[str, Any], visit: visits.VisitState, config: dict[str, Any]
+    ) -> AgentResult | LLMResult | RunnerResult:
+        limit = int(config.get("max_command_replays", 2))
+        missing = self._latest_missing_evidence()
+        scope = (
+            str(self.runtime["work"].get("scope") or "__default__")
+            + ":"
+            + str(self.runtime.get("evidence_verifier", "unknown"))
+        )
+        returns = self.runtime.setdefault("evidence_returns", {})
+        if int(returns.get(scope, 0)) >= limit:
+            return self._waiting(
+                "missing_data",
+                {"reason": "evidence_limit_exceeded", "scope": scope, "limit": limit},
+                visit,
+            )
+        if not missing:
+            return self._waiting("missing_data", {"reason": "no_missing_evidence"}, visit)
+        commands_by_id = self._configured_commands()
+        with self.session_factory() as session:
+            run_id = self.run_id
+
+            def artifact_exists(artifact_id: str) -> bool:
+                row = session.get(ArtifactManifest, artifact_id)
+                if row is None or row.run_id != run_id or row.cycle_id != visit.cycle_id:
+                    return False
+                execution = (
+                    session.get(StepExecution, row.step_execution_id)
+                    if row.step_execution_id
+                    else None
+                )
+                return execution is not None and execution.scope == self.runtime["work"].get(
+                    "scope"
+                )
+
+            resolved = context_sources.resolve_requests(
+                config,
+                missing=missing,
+                artifact_exists=artifact_exists,
+                commands=commands_by_id,
+            )
+
+        if resolved["denied_requests"] or not resolved["allowed_requests"]:
+            with self._write() as (session, run_row):
+                self._artifact(session, visit, "evidence_requests", resolved)
+                self._persist(run_row)
+            return self._waiting(
+                "missing_data",
+                {
+                    "reason": "evidence_requests_denied",
+                    "denied": resolved["denied_requests"][:20],
+                },
+                visit,
+            )
+
+        with self.session_factory() as session:
+            evidence_hash = artifacts.compute_hash(
+                artifacts.encode(self._evidence_package(session))
+            )
+        previous_hashes = self.runtime.setdefault("evidence_return_hashes", {})
+        if previous_hashes.get(scope) == evidence_hash:
+            return self._waiting("missing_data", {"reason": "no_new_evidence"}, visit)
+
+        def run(stop_event: threading.Event, deadline: float) -> LLMResult:
+            previous_hashes[scope] = evidence_hash
+            returns[scope] = int(returns.get(scope, 0)) + 1
+            with self._write() as (session, run_row):
+                self._event(
+                    session,
+                    "evidence.collected",
+                    {
+                        "mode": "resolve_requests",
+                        "allowed": len(resolved["allowed_requests"]),
+                        "denied": len(resolved["denied_requests"]),
+                    },
+                    visit,
+                )
+                self._persist(run_row)
+            return LLMResult(
+                ExternalOutcome.SUCCEEDED,
+                artifacts.encode(resolved),
+                resolved,
+                None,
+                result_schema="evidence_requests",
+            )
+
+        outcome = self._server_call(
+            node,
+            visit,
+            run,
+            input_body={"mode": "resolve_requests", "missing": missing},
+            metadata={"kind": "resolve_requests"},
+            count_external=False,
+            allow_retry=False,
+        )
+        if isinstance(outcome, RunnerResult):
+            return outcome
+        return outcome
+
+    def _latest_missing_evidence(self) -> list[dict[str, Any]]:
+        scope = self.runtime["work"].get("scope")
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(StepExecution)
+                .where(
+                    StepExecution.run_id == self.run_id,
+                    StepExecution.cycle_id == self.runtime["cycle_id"],
+                    StepExecution.status == "succeeded",
+                )
+                .order_by(StepExecution.finished_at.desc())
+            )
+            for row in rows:
+                if scope is not None and row.scope != scope:
+                    continue
+                try:
+                    body = json.loads(row.validated_result_json or "{}")
+                except ValueError:
+                    continue
+                if isinstance(body, dict) and isinstance(body.get("missing_evidence"), list):
+                    self.runtime["evidence_verifier"] = row.node_id
+                    return [
+                        dict(item) for item in body["missing_evidence"] if isinstance(item, dict)
+                    ]
+        return []
+
+    def _configured_commands(self) -> dict[str, command_engine.CommandSpec]:
+        result: dict[str, command_engine.CommandSpec] = {}
+        inputs = self.snapshot["input"]["values"]
+        for node in self.nodes.values():
+            if node.get("type") != "Command":
+                continue
+            config = self.snapshot["dependencies"]["nodes"].get(node["id"], {})
+            try:
+                for spec in command_engine.parse_command_list(config.get("commands"), inputs):
+                    result.setdefault(spec.id, spec)
+            except AppError:
+                continue
+        return result
+
     def _external(
         self, node: dict[str, Any], visit: visits.VisitState, adapter: AgentAdapter | LLMAdapter
     ) -> AgentResult | LLMResult | RunnerResult:
@@ -1157,9 +1843,26 @@ class Runner:
                 if limit := self._limit("external_calls"):
                     return self._waiting("limit_exceeded", {"limit": limit}, visit)
                 self._workspace_check()
+                with self.session_factory() as evidence_session:
+                    evidence_package = self._evidence_package(evidence_session)
+                evidence_hash = artifacts.compute_hash(artifacts.encode(evidence_package))
+                if self.runtime.get("logical_evidence_hash") not in (None, evidence_hash):
+                    return self._waiting(
+                        "external_change_detected",
+                        {"reason": "evidence_changed_between_candidates"},
+                        visit,
+                    )
+                self.runtime["logical_evidence_hash"] = evidence_hash
                 reason = self._availability(candidate)
                 if reason:
                     diagnostics.append({**metadata, "reason": reason})
+                    break
+                try:
+                    connection = (
+                        self._connection_for(node, candidate) if not self.simulated else None
+                    )
+                except AppError:
+                    diagnostics.append({**metadata, "reason": "secret_unavailable"})
                     break
                 with self._write() as (session, run):
                     attempt = visits.create_attempt(session, visit)
@@ -1178,6 +1881,7 @@ class Runner:
                         "input": self.snapshot["input"],
                         "work": self.runtime["work"],
                         "resolution_artifact_ids": self.runtime.get("resolution_artifact_ids", []),
+                        "evidence": evidence_package,
                     }
                     artifact = self._artifact(
                         session,
@@ -1293,8 +1997,21 @@ class Runner:
                         **common,
                         response_format=config.get("response_format", "text"),
                         output_schema=config.get("output_schema"),
+                        connection=connection,
                     )
-                result = self._call_monitored(adapter, request, attempt_id)
+
+                def invoke_adapter(
+                    bound_adapter: AgentAdapter | LLMAdapter = adapter,
+                    bound_request: AgentAdapterRequest | LLMAdapterRequest = request,
+                ) -> AgentResult | LLMResult:
+                    return call_adapter(bound_adapter, bound_request)
+
+                result = self._call_monitored(
+                    invoke_adapter,
+                    attempt_id,
+                    deadline_at=request.deadline_at,
+                    stop_event=cast(threading.Event, request.stop_event),
+                )
                 if self.simulated:
                     from agents_ide.engine.workspace_checkpoint import fingerprint
 
@@ -1410,9 +2127,11 @@ class Runner:
         )
 
     def _retry(self, visit: visits.VisitState, retries: int) -> RunnerResult | None:
-        retry_at = utc_now() + min(0.25 * 2 ** (retries - 1), 5)
-        self.runtime["retry_at"] = retry_at
-        self.runtime["candidate_retries"] = retries
+        retry_at = self.runtime.get("retry_at")
+        if not isinstance(retry_at, (int, float)):
+            delay = min(0.25 * 2 ** (retries - 1), 5)
+            retry_at = utc_now() + delay + random.uniform(0, delay * 0.1)
+            self.runtime["retry_at"] = retry_at
         with self._write() as (session, run):
             execution = session.get(StepExecution, visit.execution_id)
             assert execution is not None
@@ -1468,6 +2187,10 @@ class Runner:
                     return "object_required"
             except (ValueError, RecursionError):
                 return "invalid_json"
+        if isinstance(body, dict) and "missing_evidence" in body:
+            invalid = self._missing_evidence_error(body["missing_evidence"])
+            if invalid:
+                return invalid
         verdict = (
             body.get("verdict", result.decision) if isinstance(body, dict) else result.decision
         )
@@ -1481,9 +2204,62 @@ class Runner:
                 return "response_too_large"
         except (ValueError, TypeError, RecursionError):
             return "invalid_result"
+        if verdict == "passed" and config.get("prompt"):
+            evidence = self._current_evidence
+            if (
+                not self.simulated
+                and evidence.get("workspace_hash")
+                and context_sources.workspace_hash(
+                    Path(self.snapshot["workspace"]["workspace_path"])
+                )
+                != evidence["workspace_hash"]
+            ):
+                evidence.setdefault("omissions", []).append(
+                    {"reason": "changed_during_verification"}
+                )
+            override = (
+                "failed"
+                if evidence.get("required_failed")
+                else "inconclusive"
+                if (
+                    evidence.get("required_incomplete")
+                    or evidence.get("truncated")
+                    or evidence.get("omissions")
+                )
+                else None
+            )
+            if override:
+                body = {
+                    **(body or {}),
+                    "model_verdict": verdict,
+                    "verdict": override,
+                    "server_evidence": {
+                        key: evidence.get(key)
+                        for key in ("required_failed", "required_incomplete", "omissions")
+                    },
+                }
+                verdict = override
         # Result envelopes are frozen: only the server-created normalized copy is persisted.
         object.__setattr__(result, "validated_result", artifacts.sanitize(body))
         object.__setattr__(result, "decision", verdict)
+        return None
+
+    @staticmethod
+    def _missing_evidence_error(value: Any) -> str | None:
+        if not isinstance(value, list) or len(value) > 50:
+            return "invalid_missing_evidence"
+        for item in value:
+            if not isinstance(item, dict):
+                return "invalid_missing_evidence"
+            kind = item.get("kind")
+            reason = item.get("reason")
+            if kind not in {"file", "artifact", "command_report"}:
+                return "invalid_missing_evidence"
+            if not isinstance(reason, str) or not reason:
+                return "invalid_missing_evidence"
+            key = {"file": "path", "artifact": "artifact_id", "command_report": "command_id"}[kind]
+            if not isinstance(item.get(key), str) or not item[key]:
+                return "invalid_missing_evidence"
         return None
 
     def _artifact(
@@ -1494,10 +2270,30 @@ class Runner:
         body: Any,
         attempt_id: str | None = None,
     ) -> Any:
+        package = body
+        if kind == "context_package" and isinstance(body, dict):
+            try:
+                package = json.loads(body.get("raw_text", "{}"))
+            except ValueError:
+                package = {}
+        context = package if kind == "context_package" and isinstance(package, dict) else {}
         manifest = artifacts.record_artifact(
             session,
             self.run_id,
-            artifacts.ArtifactPayload(kind, body=body),
+            artifacts.ArtifactPayload(
+                kind,
+                body=body,
+                files=tuple(
+                    {k: v for k, v in item.items() if k != "content"}
+                    for item in context.get("files", [])
+                ),
+                omissions=tuple(context.get("omissions", [])),
+                redaction=("credentials",)
+                if any(item.get("redacted") for item in context.get("files", []))
+                else (),
+            ),
+            base_head_sha=context.get("base_head_sha"),
+            current_head_sha=context.get("current_head_sha"),
             step_execution_id=visit.execution_id,
             step_attempt_id=attempt_id,
             cycle_id=visit.cycle_id,
@@ -1557,16 +2353,25 @@ class Runner:
                 and result.error.retry_safety == "safe"
                 and result.error.code != "interrupted"
             ):
-                index = selection["member_index"]
-                if result.outcome == ExternalOutcome.UNAVAILABLE:
+                index = selection.get("member_index")
+                if result.outcome == ExternalOutcome.UNAVAILABLE and index is not None:
                     self.runtime["next_candidate_index"] = index + 1
                 elif result.outcome == ExternalOutcome.RETRYABLE_FAILURE:
                     retries = selection.get("retry_index", 0) + 1
                     if retries > self.nodes[visit.node_id].get("max_retries", 2):
-                        self.runtime["next_candidate_index"] = index + 1
+                        if index is not None:
+                            self.runtime["next_candidate_index"] = index + 1
                     else:
-                        self.runtime["candidate_retries"] = retries
-                        self.runtime["retry_at"] = utc_now() + min(0.25 * 2 ** (retries - 1), 5)
+                        self.runtime[
+                            "candidate_retries" if index is not None else "server_retries"
+                        ] = retries
+                        delay = min(0.25 * 2 ** (retries - 1), 5)
+                        retry_after = result.error.details.get("retry_after_seconds")
+                        if isinstance(retry_after, (int, float)) and retry_after >= 0:
+                            delay = max(delay, float(retry_after))
+                        self.runtime["retry_at"] = (
+                            utc_now() + delay + random.uniform(0, min(delay * 0.1, 1))
+                        )
             attempt.finished_at = None if unconfirmed_stop else utc_now()
             attempt.external_outcome = result.outcome.value
             attempt.retry_safety = result.error.retry_safety if result.error else "unsafe"
@@ -1590,23 +2395,33 @@ class Runner:
                     result.cost_estimated,
                     result.budget_quality or "unknown",
                 )
-                self.runtime["tokens_used"] += result.tokens_used or 0
-                self.runtime["cost_estimated"] += result.cost_estimated or 0
-                self.runtime["budget_quality"] = (
-                    "unknown"
-                    if result.tokens_used is None or result.budget_quality in {None, "unknown"}
-                    else result.budget_quality
-                    if self.runtime["external_calls"] == 1
-                    else "unknown"
-                    if self.runtime["budget_quality"] == "unknown"
-                    else "estimated"
-                    if "estimated" in {self.runtime["budget_quality"], result.budget_quality}
-                    else "observed"
-                )
+                if self.nodes[visit.node_id]["type"] == "LLMRequest":
+                    self.runtime["tokens_used"] += result.tokens_used or 0
+                    self.runtime["cost_estimated"] += result.cost_estimated or 0
+                    self.runtime["budget_quality"] = (
+                        "unknown"
+                        if result.tokens_used is None or result.budget_quality in {None, "unknown"}
+                        else result.budget_quality
+                        if self.runtime["external_calls"] == 1
+                        else "unknown"
+                        if self.runtime["budget_quality"] == "unknown"
+                        else "estimated"
+                        if "estimated" in {self.runtime["budget_quality"], result.budget_quality}
+                        else "observed"
+                    )
+                if result.error and isinstance(
+                    result.error.details.get("retry_after_seconds"), (int, float)
+                ):
+                    self.runtime["retry_after_seconds"] = float(
+                        result.error.details["retry_after_seconds"]
+                    )
+            result_schema = getattr(result, "result_schema", None) or (
+                "agent_response" if isinstance(result, AgentResult) else "llm_response"
+            )
             artifact = self._artifact(
                 session,
                 visit,
-                "agent_response" if isinstance(result, AgentResult) else "llm_response",
+                result_schema,
                 {
                     "raw_text": result.raw_text,
                     "validated": result.validated_result if validation_error is None else None,
@@ -1668,6 +2483,11 @@ class Runner:
                 attempt = session.get(StepAttempt, run.current_attempt_id)
                 assert attempt is not None
                 execution.raw_result_ref = attempt.result_artifact_id
+                execution.evidence_manifest_id = (
+                    attempt.result_artifact_id
+                    if node["type"] == "CollectContext"
+                    else attempt.request_artifact_id
+                )
             session.flush()
             context = self._context(session)
             edges = [

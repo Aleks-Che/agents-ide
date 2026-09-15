@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -9,6 +10,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from agents_ide.adapters.llm_http import probe_connection
 from agents_ide.domain.common import assert_safe_name, new_id, to_json, utc_now
 from agents_ide.domain.schemas import (
     ProviderConnection,
@@ -18,6 +20,7 @@ from agents_ide.domain.schemas import (
 )
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import ProviderConnection as ProviderConnectionModel
+from agents_ide.security.provider_url import validate_provider_url
 from agents_ide.security.secrets import SecretStore
 from agents_ide.services.mapping import (
     ensure_unique,
@@ -162,7 +165,7 @@ def record_test_result(
     if status == "ok" and models is not None:
         model.catalog_models_json = to_json(models)
         model.catalog_fetched_at = utc_now()
-    model.version += 1
+    # Diagnostics do not change the configuration revision pinned by active Runs.
     model.updated_at = utc_now()
     session.flush()
     return provider_from_model(model)
@@ -177,32 +180,7 @@ def combined_catalog(model: ProviderConnectionModel) -> list[str]:
 
 
 def _validate_url(value: str) -> None:
-    try:
-        parts = urlsplit(value)
-        port = parts.port
-    except ValueError:
-        raise AppError("connection_url_invalid", "Неверный адрес подключения", 400) from None
-    if (
-        not parts.hostname
-        or parts.query
-        or parts.fragment
-        or "\\" in value
-        or any(char.isspace() for char in value)
-        or (port is not None and port < 1)
-    ):
-        raise AppError(
-            "connection_url_invalid", "URL должен содержать host без query/fragment", 400
-        )
-    if parts.scheme not in {"http", "https"}:
-        raise AppError("connection_url_invalid", "Допустимы только http и https", 400)
-    if parts.username or parts.password:
-        raise AppError("connection_url_invalid", "URL не должен содержать учётные данные", 400)
-    if parts.scheme == "https":
-        return
-    # Plain HTTP is allowed only for loopback providers.
-    host = (parts.hostname or "").lower()
-    if host not in {"127.0.0.1", "localhost", "::1"}:
-        raise AppError("connection_url_invalid", "Удалённый провайдер требует HTTPS", 400)
+    validate_provider_url(value)
 
 
 def _protocol_of(value: str) -> str:
@@ -253,6 +231,40 @@ def failed_test(
 ) -> ProviderTest:
     record_test_result(session, connection_id, "failed", None, detail)
     return ProviderTest(status="failed", models=[], detail=detail, tested_at=datetime.now(tz=UTC))
+
+
+def test_connection(
+    session: Session,
+    secrets: SecretStore,
+    connection_id: str,
+) -> ProviderTest:
+    """Explicit smoke probe: a catalog alone is never reported as access."""
+
+    model = get_or_404(session, ProviderConnectionModel, connection_id)
+    if model.archived_at is not None:
+        raise AppError("connection_archived", "Архивное подключение недоступно", 409)
+    secret_value: str | None = None
+    if model.secret_reference:
+        try:
+            secret_value = secrets.get(model.secret_reference)
+        except AppError as exc:
+            return failed_test(session, connection_id, f"secret_unavailable: {exc.code}")
+    manual = json.loads(model.manual_models_json or "[]")
+    probe_model = str(manual[0]) if manual else None
+    expected_version = model.version
+    probe = probe_connection(
+        {"base_url": model.base_url, "secret_value": secret_value},
+        model_id=probe_model,
+    )
+    begin_write(session)
+    session.refresh(model)
+    if model.version != expected_version or model.archived_at is not None:
+        raise AppError("version_conflict", "Подключение изменилось во время проверки", 409)
+    if probe.ok:
+        catalog = [*probe.models] or [str(item) for item in manual]
+        detail = f"{probe.detail} ({probe.elapsed_seconds:.2f}s)"
+        return build_test_result(session, connection_id, catalog, detail)
+    return failed_test(session, connection_id, probe.detail)
 
 
 def connection_payload_for_export(

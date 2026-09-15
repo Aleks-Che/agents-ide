@@ -562,11 +562,13 @@ def test_ordinary_run_never_silently_uses_fake(authenticated, tmp_path, settings
 
         row = session.get(Run, run["id"])
         assert row.state == "waiting_input"
-        assert (
-            json.loads(row.waiting_reason_json)["details"]["reason"]
-            == "real_adapters_unimplemented"
-        )
-        assert list(session.scalars(select(StepAttempt))) == []
+        # Stage 7: a real LLM call reaches the provider instead of silently
+        # simulating. The loopback connection is unreachable, so the run waits
+        # for the model to become available; no attempt claims success.
+        assert json.loads(row.waiting_reason_json)["code"] == "model_unavailable"
+        attempts = list(session.scalars(select(StepAttempt)))
+        assert attempts
+        assert all(a.status != "succeeded" for a in attempts)
 
 
 def test_scenario_edits_are_confined_and_snapshot_is_immutable(authenticated, tmp_path, settings):
