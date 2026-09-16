@@ -340,8 +340,12 @@ def _capture_dependencies(
                     config["connection_id"] = selection.provider_connection_id
         else:
             # Original direct configuration remains a direct execution without fallback.
-            profile_id = configuration["role_assignments"].get(role)
+            profile_id = configuration["role_assignments"].get(role) or config.get(
+                "harness_profile_id"
+            )
             if profile_id:
+                if not isinstance(profile_id, str):
+                    raise AppError("configuration_invalid", "Invalid harness profile ID", 422)
                 data = resource("agent", profile_id)
                 config = {
                     **data["settings"],

@@ -47,7 +47,11 @@ def make_run(
     profile = client.post(
         "/api/harness_profiles",
         headers=headers,
-        json={"name": f"h{suffix}", "harness_kind": "codex", "settings": {}},
+        json={
+            "name": f"h{suffix}",
+            "harness_kind": "codex",
+            "settings": {"permission_mode": "read_only"},
+        },
     ).json()
     if graph is None:
         graph = {

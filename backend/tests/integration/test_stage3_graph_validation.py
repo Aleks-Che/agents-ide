@@ -337,7 +337,11 @@ def test_preflight_endpoint_succeeds_for_valid_binding(authenticated, tmp_path):
     profile = client.post(
         "/api/harness_profiles",
         headers=headers,
-        json={"name": "profile", "harness_kind": "codex", "settings": {}},
+        json={
+            "name": "profile",
+            "harness_kind": "codex",
+            "settings": {"permission_mode": "read_only"},
+        },
     ).json()
     template = client.post("/api/templates", headers=headers, json={"name": "t"}).json()
     version = client.post(
@@ -393,12 +397,20 @@ def test_preflight_warns_when_group_candidate_is_archived(authenticated, tmp_pat
     profile = client.post(
         "/api/harness_profiles",
         headers=headers,
-        json={"name": "profile", "harness_kind": "codex", "settings": {}},
+        json={
+            "name": "profile",
+            "harness_kind": "codex",
+            "settings": {"permission_mode": "read_only"},
+        },
     ).json()
     profile_2 = client.post(
         "/api/harness_profiles",
         headers=headers,
-        json={"name": "second", "harness_kind": "codex", "settings": {}},
+        json={
+            "name": "second",
+            "harness_kind": "codex",
+            "settings": {"permission_mode": "read_only"},
+        },
     ).json()
     group = client.post(
         "/api/model_groups/agent",

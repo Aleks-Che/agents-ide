@@ -350,6 +350,20 @@ function ReviewForm({
   const [editing, setEditing] = useState(false)
   const [acknowledgeUnknown, setAcknowledgeUnknown] = useState(false)
   const [confirmDegraded, setConfirmDegraded] = useState(false)
+  const [refreshCredentials, setRefreshCredentials] = useState(true)
+  const [selectedRetryIndices, setSelectedRetryIndices] = useState<Set<number>>(
+    () =>
+      new Set(
+        (job.members ?? [])
+          .filter(
+            (m) =>
+              m.role === 'participant' &&
+              ['failed', 'unknown', 'skipped', 'running'].includes(m.status),
+          )
+          .map((m) => m.slot_index),
+      ),
+  )
+  const [retrySelectionTouched, setRetrySelectionTouched] = useState(false)
   const [body, setBody] = useState(() =>
     JSON.stringify(
       {
@@ -365,6 +379,39 @@ function ReviewForm({
       2,
     ),
   )
+  const terminal = ['confirmed', 'cancelled', 'failed'].includes(job.state)
+  const revisable = ['ready_for_confirmation', 'needs_answers'].includes(
+    job.state,
+  )
+  const retryable =
+    job.state === 'failed' &&
+    ![
+      'legacy_planning_unverifiable',
+      'context_changed',
+      'planning_budget_exhausted',
+      'planning_deadline_exceeded',
+    ].includes(String(job.last_error?.code))
+  const quorumLost =
+    job.state === 'failed' &&
+    String(job.last_error?.code) === 'council_quorum_missing'
+  const singleAccepted = quorumLost && job.n_participants_actual === 1
+  const promoteable =
+    singleAccepted &&
+    job.drafts?.some(
+      (d) => d.accepted && !d.body_truncated && d.parse_status === 'found',
+    )
+  const unknownResult = job.members?.some((m) =>
+    ['unknown', 'running'].includes(m.status),
+  )
+  const resetEligible = (job.members ?? []).filter(
+    (m) =>
+      m.role === 'participant' &&
+      ['failed', 'unknown', 'skipped', 'running'].includes(m.status),
+  )
+  const resetEligibleIndices = resetEligible.map((m) => m.slot_index)
+  const allEligibleSelected =
+    resetEligibleIndices.length > 0 &&
+    resetEligibleIndices.every((i) => selectedRetryIndices.has(i))
   const refresh = () => {
     void client.invalidateQueries({ queryKey: ['planning-job', job.id] })
     void client.invalidateQueries({ queryKey: ['planning-jobs'] })
@@ -404,17 +451,24 @@ function ReviewForm({
     onSuccess: refresh,
   })
   const retry = useMutation({
-    mutationFn: () =>
-      planningApi.retry(
+    mutationFn: () => {
+      const useAll = !retrySelectionTouched || allEligibleSelected
+      return planningApi.retry(
         job.id,
         {
           expected_state_version: job.state_version,
-          reset_all_failed: true,
-          refresh_credentials: true,
+          reset_all_failed: useAll,
+          ...(useAll
+            ? {}
+            : {
+                reset_member_indices: Array.from(selectedRetryIndices).sort(),
+              }),
+          refresh_credentials: refreshCredentials,
           acknowledge_unknown_result: acknowledgeUnknown,
         },
         csrf,
-      ),
+      )
+    },
     onSettled: refresh,
   })
   const promoteSingle = useMutation({
@@ -429,30 +483,6 @@ function ReviewForm({
       ),
     onSettled: refresh,
   })
-  const terminal = ['confirmed', 'cancelled', 'failed'].includes(job.state)
-  const revisable = ['ready_for_confirmation', 'needs_answers'].includes(
-    job.state,
-  )
-  const retryable =
-    job.state === 'failed' &&
-    ![
-      'legacy_planning_unverifiable',
-      'context_changed',
-      'planning_budget_exhausted',
-      'planning_deadline_exceeded',
-    ].includes(String(job.last_error?.code))
-  const quorumLost =
-    job.state === 'failed' &&
-    String(job.last_error?.code) === 'council_quorum_missing'
-  const singleAccepted = quorumLost && job.n_participants_actual === 1
-  const promoteable =
-    singleAccepted &&
-    job.drafts?.some(
-      (d) => d.accepted && !d.body_truncated && d.parse_status === 'found',
-    )
-  const unknownResult = job.members?.some((m) =>
-    ['unknown', 'running'].includes(m.status),
-  )
   const questions = revision?.questions ?? []
   const answered = questions.every((q) => {
     const a = answers[q.id]
@@ -650,6 +680,87 @@ function ReviewForm({
               вызовов. Используется текущий ключ того же подключения; адрес,
               модели и состав группы сохраняются.
             </p>
+            {resetEligible.length ? (
+              <fieldset className="council-retry-selection" disabled={busy}>
+                <legend>Каких участников повторить</legend>
+                <ul>
+                  {resetEligible.map((m) => {
+                    const checked = selectedRetryIndices.has(m.slot_index)
+                    const label =
+                      m.selected_model_id ||
+                      (m.selection.kind === 'group'
+                        ? `группа ${String(
+                            (m.selection as { group_name?: string })
+                              .group_name ??
+                              (m.selection as { group_id?: string }).group_id ??
+                              '',
+                          )}`
+                        : 'модель не выбрана')
+                    return (
+                      <li key={m.id}>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={busy}
+                            onChange={(e) => {
+                              setRetrySelectionTouched(true)
+                              setSelectedRetryIndices((prev) => {
+                                const next = new Set(prev)
+                                if (e.target.checked) {
+                                  next.add(m.slot_index)
+                                } else {
+                                  next.delete(m.slot_index)
+                                }
+                                return next
+                              })
+                            }}
+                          />
+                          Участник {m.slot_index + 1} · {label} · статус{' '}
+                          {m.status}
+                        </label>
+                      </li>
+                    )
+                  })}
+                </ul>
+                <button
+                  type="button"
+                  className="quiet"
+                  disabled={busy || allEligibleSelected}
+                  onClick={() => {
+                    setRetrySelectionTouched(true)
+                    setSelectedRetryIndices(new Set(resetEligibleIndices))
+                  }}
+                >
+                  Выбрать всех неуспешных
+                </button>
+                <button
+                  type="button"
+                  className="quiet"
+                  disabled={busy || selectedRetryIndices.size === 0}
+                  onClick={() => {
+                    setRetrySelectionTouched(true)
+                    setSelectedRetryIndices(new Set())
+                  }}
+                >
+                  Снять выбор
+                </button>
+                <p className="hint">
+                  {retrySelectionTouched && !allEligibleSelected
+                    ? `Выбрано ${selectedRetryIndices.size} из ${resetEligibleIndices.length}. Будет отправлен повтор только выбранным участникам; остальные остаются в текущем состоянии.`
+                    : 'По умолчанию повторяются все неуспешные участники.'}
+                </p>
+              </fieldset>
+            ) : null}
+            <label>
+              <input
+                type="checkbox"
+                checked={refreshCredentials}
+                disabled={busy}
+                onChange={(e) => setRefreshCredentials(e.target.checked)}
+              />
+              Обновить ключ доступа до повтора (адрес и модели сохраняются).
+            </label>
             {unknownResult ? (
               <label>
                 <input
@@ -710,10 +821,17 @@ function ReviewForm({
           {retryable ? (
             <button
               className="quiet"
-              disabled={!csrf || busy || (unknownResult && !acknowledgeUnknown)}
+              disabled={
+                !csrf ||
+                busy ||
+                (unknownResult && !acknowledgeUnknown) ||
+                (resetEligible.length > 0 && selectedRetryIndices.size === 0)
+              }
               onClick={() => retry.mutate()}
             >
-              Повторить после восстановления доступа
+              {retrySelectionTouched && !allEligibleSelected
+                ? `Повторить выбранных (${selectedRetryIndices.size})`
+                : 'Повторить после восстановления доступа'}
             </button>
           ) : null}
           {promoteable ? (

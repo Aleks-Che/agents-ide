@@ -337,7 +337,7 @@ def test_snapshot_pins_settings_and_secret_revision(authenticated, tmp_path):
         json={
             "name": "profile",
             "harness_kind": "codex",
-            "settings": {"model": "profile-model"},
+            "settings": {"model": "profile-model", "permission_mode": "read_only"},
         },
     ).json()
     graph = {

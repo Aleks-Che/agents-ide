@@ -710,12 +710,13 @@ function EditGroupForm({
     setExpandedParams((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
-  function isOpenCodeProfile(profileId: string): boolean {
+  function isUnverifiedHarnessProfile(profileId: string): boolean {
     return (
       kind === 'agent' &&
       (harnesses.data ?? []).some(
         (profile) =>
-          profile.id === profileId && profile.harness_kind === 'opencode',
+          profile.id === profileId &&
+          ['opencode', 'codex'].includes(profile.harness_kind),
       )
     )
   }
@@ -898,9 +899,9 @@ function EditGroupForm({
                       memberKey={member.key}
                       params={member.params}
                       drafts={paramDrafts}
-                      openCodeHint={
+                      harnessHint={
                         Object.keys(member.params).length > 0 &&
-                        isOpenCodeProfile(member.profileId)
+                        isUnverifiedHarnessProfile(member.profileId)
                       }
                       onParams={(next, removed) => {
                         updateMember(index, { params: next })

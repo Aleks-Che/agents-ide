@@ -122,7 +122,7 @@ def version_binding(
     return version, binding
 
 
-def start(client, headers, project, binding, key="run", overrides=None, execution_mode="real"):
+def start(client, headers, project, binding, key="run", overrides=None, execution_mode="simulated"):
     return post(
         client,
         headers,
@@ -527,9 +527,14 @@ def test_group_and_profile_changes_invalidate_execution_hash(authenticated, tmp_
     )
     first = start(client, headers, project, binding)
     before = snapshot(client, first)
-    preview = client.get(f"/api/bindings/{binding['id']}/resolved").json()
+    preview = client.post(
+        f"/api/bindings/{binding['id']}/preflight",
+        headers=headers,
+        json={"execution_mode": "simulated"},
+    ).json()
     assert preview["execution_hash"] == first["execution_hash"]
-    assert preview["policy_hash"] == first["policy_hash"]
+    resolved = client.get(f"/api/bindings/{binding['id']}/resolved").json()
+    assert resolved["policy_hash"] == first["policy_hash"]
     assert (
         client.patch(
             f"/api/harness_profiles/{resource['id']}",

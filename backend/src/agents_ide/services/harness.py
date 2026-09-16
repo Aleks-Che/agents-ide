@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -160,11 +161,10 @@ def probe_harness(
     session: Session,
     harness_id: str,
 ) -> HarnessProbe:
-    """Probe an OpenCode server attached to a harness profile.
+    """Probe a harness server attached to a profile.
 
-    Stage 6A only knows OpenCode. Codex probes return ``failed`` until the
-    6B adapter lands. The probe is an explicit user action; the catalog is
-    never accepted as proof of access.
+    OpenCode 6A and Codex 6B are probeable. The probe is an explicit user
+    action; the catalog is never accepted as proof of access.
     """
 
     from datetime import UTC, datetime
@@ -172,7 +172,7 @@ def probe_harness(
     model = get_or_404(session, HarnessProfileModel, harness_id)
     if model.archived_at is not None:
         raise AppError("harness_archived", "Архивный профиль недоступен", 409)
-    if model.harness_kind != "opencode":
+    if model.harness_kind not in {"opencode", "codex"}:
         detail = f"Harness kind {model.harness_kind} is not probeable yet"
         record_probe_result(session, model, "failed", None, detail)
         return HarnessProbe(
@@ -192,17 +192,30 @@ def probe_harness(
             tested_at=datetime.now(tz=UTC),
         )
     expected_version = model.version
+    harness_kind = model.harness_kind
     settings = json.loads(model.settings_json)
     session.rollback()  # No DB lock or read snapshot while a process starts.
     try:
-        from agents_ide.engine.opencode_runtime import probe_executable
+        if harness_kind == "opencode":
+            from agents_ide.engine import opencode_runtime
 
-        version, models = probe_executable(executable, settings)
+            version, models = opencode_runtime.probe_executable(executable, settings)
+        else:
+            import tempfile
+
+            from agents_ide.engine import codex_runtime
+
+            with tempfile.TemporaryDirectory(
+                prefix=f"agents-ide-codex-probe-{harness_id[:8]}-"
+            ) as probe_dir:
+                version, models = codex_runtime.probe_executable(
+                    executable, Path(probe_dir), settings
+                )
         detail = f"{len(models)} models discovered; model execution and write isolation unverified"
     except (AppError, OSError, ValueError, RuntimeError, httpx.HTTPError) as exc:
         version, models = None, ()
         code = exc.code if isinstance(exc, AppError) else type(exc).__name__
-        detail = f"OpenCode probe failed: {code}"
+        detail = f"{harness_kind} probe failed: {code}"
     begin_write(session)
     model = get_or_404(session, HarnessProfileModel, harness_id)
     session.refresh(model)

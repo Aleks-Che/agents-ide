@@ -602,8 +602,15 @@ def test_future_node_gates_return_valid_waiting_reason(authenticated, tmp_path, 
     assert run_now(run, factory, settings).final_state == "waiting_input"
     with factory() as session:
         reason = json.loads(session.get(Run, run["id"]).waiting_reason_json)
+        # The run must surface a typed ``configuration_invalid`` waiting
+        # reason without falling through to a generic 5xx. The exact phrase
+        # of the inner reason moves with the harness adapters (opencode,
+        # codex, future kinds); only the structural code is stable.
         assert reason["code"] == "configuration_invalid"
-        assert reason["details"]["reason"].endswith("unimplemented")
+        assert reason["details"]["reason"] in {
+            "configuration_invalid",
+            "harness_adapter_unimplemented",
+        }
 
 
 def test_plan_control_cannot_complete_without_verification(authenticated, tmp_path, settings):

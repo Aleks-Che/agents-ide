@@ -24,7 +24,14 @@ def _project(client, headers, workspace: Path) -> dict[str, object]:
 def _harness_profile(client, headers, name: str, kind: str = "codex") -> dict[str, object]:
     response = client.post(
         "/api/harness_profiles",
-        json={"name": name, "harness_kind": kind, "settings": {"model": "default"}},
+        json={
+            "name": name,
+            "harness_kind": kind,
+            "settings": {
+                "model": "default",
+                "permission_mode": "read_only" if kind == "codex" else "no_tools",
+            },
+        },
         headers=headers,
     )
     assert response.status_code == 201, response.text

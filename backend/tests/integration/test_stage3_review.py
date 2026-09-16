@@ -275,7 +275,12 @@ def binding_fixture(authenticated, tmp_path, *, graph=None, origin="local", sett
 
 def test_preflight_inputs_overrides_and_run_hash(authenticated, tmp_path):
     client, headers = authenticated
-    profile = post(client, headers, "/api/harness_profiles", {"name": "h", "harness_kind": "codex"})
+    profile = post(
+        client,
+        headers,
+        "/api/harness_profiles",
+        {"name": "h", "harness_kind": "codex", "settings": {"permission_mode": "read_only"}},
+    )
     graph = linear(
         {"id": "a", "type": "AgentTask", "config": {"role": "dev", "prompt": "{{ input.task }}"}}
     )
@@ -369,7 +374,16 @@ def test_import_roundtrip_trust_and_settings(authenticated, tmp_path):
 def test_group_preview_all_candidates_and_exhaustion(authenticated, tmp_path):
     client, headers = authenticated
     profiles = [
-        post(client, headers, "/api/harness_profiles", {"name": f"h{i}", "harness_kind": "codex"})
+        post(
+            client,
+            headers,
+            "/api/harness_profiles",
+            {
+                "name": f"h{i}",
+                "harness_kind": "codex",
+                "settings": {"permission_mode": "read_only"},
+            },
+        )
         for i in range(2)
     ]
     group = post(

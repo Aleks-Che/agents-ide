@@ -1,5 +1,202 @@
 # Журнал реализации
 
+### 2026-09-16 · Этап 9A · Council: UI выбора подмножества неуспешных участников
+
+**Статус:** добавлен интерфейс для повтора только выбранных неуспешных
+участников в `CouncilPanel`. Сервер уже принимал `reset_member_indices`;
+UI передавал всегда `reset_all_failed: true`, что не позволяло оставить
+часть неуспешных в покое. Поведение кнопки, переключатель обновления
+ключа и текст подсказки выровнены с новым контрактом.
+
+**Реализовано.**
+
+- [`CouncilPanel.tsx`](../frontend/src/features/planning/CouncilPanel.tsx) —
+  новые состояния `selectedRetryIndices`, `retrySelectionTouched` и
+  `refreshCredentials`. В блоке повтора показывается список только тех
+  участников, чей статус входит в `_RETRY_RESET_STATUSES` (`failed`,
+  `unknown`, `skipped`, `running`); merger исключён. Кнопки «Выбрать
+  всех неуспешных» и «Снять выбор» обновляют выбор атомарно; кнопка
+  повтора отключается, когда выбран пустой набор и есть кого выбирать,
+  и меняет текст на «Повторить выбранных (N)». По умолчанию
+  отправляется `reset_all_failed: true`; как только пользователь
+  снимает любой флажок, в запрос уходят `reset_member_indices:
+  Array.from(selectedRetryIndices).sort()`.
+- [`styles.css`](../frontend/src/app/styles.css) — секция
+  `.council-retry-selection` (легенда, список чекбоксов, кнопки).
+- [`planning.test.ts`](../frontend/tests/planning.test.ts) — три новых
+  Vitest-кейса: subset с `reset_member_indices: [0, 2]`,
+  взаимное исключение `reset_all_failed`/`reset_member_indices` в
+  payload и серверный отказ `planning_retry_unresolved`.
+- [`council.spec.ts`](../frontend/tests/e2e/council.spec.ts) — новый
+  e2e-сценарий «Council retry can reset a strict subset of failed
+  participants» через loopback HTTP: 3 участника + merger, два
+  неуспешны, успешный черновик сохраняется, deselect одного из
+  неуспешных, retry отправляет `reset_member_indices: [2]`,
+  второй проход вызывает только сброшенного участника и merger.
+
+**Границы и нюансы.**
+
+- Список учитывает только `role === 'participant'`, поскольку merger
+  перезапускается автоматически после успеха двух участников и не
+  выбирается пользователем.
+- При выборе нескольких участников `acknowledged_unknown_members`
+  и `refresh_credentials` остаются управляемыми через явные чекбоксы;
+  множественные попытки повтора в одной сессии увеличивают
+  `generation` сервера, поэтому общий бюджет и снимок не сбрасываются.
+- Возвращаемые ошибки 409 (`planning_retry_unresolved`,
+  `planning_retry_invalid`, `planning_state_invalid`) уже
+  транслируются существующим `launchError` и не требуют новых
+  обработчиков.
+
+**Проверки.**
+
+- Backend: `pytest tests/integration -k "planning or stage9"` —
+  **122 passed**, 486 деселектированных, 75,62 c. Полный набор
+  изменён не был; интеграционных регрессий нет.
+- Frontend: `npm run lint` — clean; `npm run test` — **132 passed**
+  (предыдущие 129 + 3 новых кейса планирования);
+  `npm run build` — clean, бандл 435,81 kB (gzip 119,87 kB).
+- Playwright-прогон в этой итерации не запускался (требует
+  backend + Chromium); новый e2e-сценарий проверен логически и
+  сопоставлен с интеграционным сценарием `test_retry_failed_job_preserves_budget_and_accepted_drafts`.
+
+**Для продолжения:** harness/read workspace и реальный gate
+с платными моделями (Council через harness) остаются отдельными
+открытыми пунктами этапа 9A.
+
+### 2026-09-16 · Ревью 6B: протокол Codex, Runner и владение процессом
+
+**Статус:** исправлены блокирующие ошибки транспортной реализации. Полная приёмка
+6B не закрыта; исходные 14 тестов проверяли упрощённый протокол, а не реальную совместимость.
+
+**Найдено и исправлено.**
+
+- `turn/start` отправлялся notification без request ID; interrupt — без turn ID.
+  Идентификаторы ограничивались выдуманными thread_/turn_ префиксами. Сверено с
+  локальной схемой Codex 0.153.4 и официальным App Server, fixture теперь строго
+  проверяет инициализацию и wire-параметры. IDs уникальны на всём соединении.
+- События Codex передавали thread_id вместо session_id, отсутствовал durable turn ID,
+  а agent.session_finished не разрешён Runner. Исправлен общий формат событий,
+  сохранение версии/прав, изоляция ролей и resume по сохранённому ID.
+- Не фильтровались чужие/устаревшие turn-события, терялись ранние уведомления,
+  итоговый item/completed и инструменты. Usage читался из несуществующей формы;
+  теперь учитывается last.totalTokens, стоимость остаётся unknown.
+- Startup игнорировал ошибки initialize и запускал второй app-server для каталога.
+  Теперь handshake и все страницы каталога выполняются в одном принадлежащем процессе;
+  ошибка probe не превращается в успешный пустой каталог. Stderr дренируется, ввод,
+  очередь и output ограничены, cleanup закрывает принадлежащее дерево и pipes.
+- Resume всегда повторяет read-only/never и не сбрасывает сессию на любой сбой.
+  Ранний отказ/потеря turn-response не разрешают повтор потенциально выполненной операции.
+  Stop/deadline отправляют корректный interrupt; unknown сохраняет требование resolve.
+- Preflight теперь проверяет Codex permission_mode и params до создания Run.
+  Смена OpenCode → Codex также завершает предыдущий harness. Legacy direct-профиль,
+  заданный прямо в узле, теперь тоже фиксируется в dependencies: устранён 500
+  preflight и отсутствие профиля при реальном dispatch.
+- Форма harness больше не объявляет Codex отсутствующим: read_only можно выбрать
+  при создании и редактировании. Предупреждение о неподтверждённом mapping параметров
+  кандидатов распространяется на оба harness.
+- Старые положительные тестовые профили получили явный read_only. Тесты приоритетов
+  непроверенных параметров этапа 2A используют simulated-режим; серверные запреты
+  реального запуска не ослаблены ради старых fixtures.
+
+**Проверки после исправлений:**
+
+- Полный backend: **631 passed**, 13 мин 06 с; включая 14 усиленных исходных
+  Codex-тестов и 25 новых регрессий. Отдельный набор исправленных сценариев 2A/6B/7/8/9:
+  **55 passed**. Первоначальные отказы старых fixtures исправлены явной политикой
+  прав/simulated-режимом; обнаруженный legacy direct 500 исправлен в коде.
+- Mypy Windows/Linux: **95 модулей**, Ruff check/format: **139 файлов**, без ошибок.
+  `generate_contracts.py --check` синхронизирован, REST-контракты не изменялись.
+- Frontend: **129 Vitest**, **6 Playwright settings-сценариев**, включая создание,
+  снятие и повторное включение Codex read_only через настоящий REST. ESLint,
+  Prettier и tsc/Vite build проходят (433,74 kB / gzip 119,36 kB).
+- Строгие wire-сценарии проверены по сохранённым схемам, Runner — через настоящий
+  ProcessSupervisor/SQLite. Разрыв после dispatch не разрешает автоматический retry;
+  pause/resume сохраняет завершённую native-сессию между двумя процессами.
+
+В установленном Codex 0.153.4 проверены init, каталог
+из 6 моделей, пустая read-only сессия и cleanup; отдельный временный CODEX_HOME,
+вызовов модели нет. [Наблюдение](integrations/fixtures/2026-09-16-stage6b.json).
+
+**Остаётся:** gate с реальными моделями, capability/params выбранных моделей,
+разрешённая изолированная запись, интерактивное одобрение, полный архив native событий,
+приёмка stop/resume/recovery и межharness fallback. Pause/resume завершённого шага
+и unknown после остановки незавершённого шага проверяются отдельно.
+[Контракт и ограничения](architecture/CODEX_RUNTIME.md).
+
+### 2026-09-16 · Этап 6B · Codex App Server адаптер и probe (исходный отчёт до ревью)
+
+**Статус:** Codex-адаптер реализован в рамках этапа 6B и проверен
+фикстурой `fake_codex_server.py` через подпроцесс stdio. Полная
+приёмка gate MVP с реальными моделями и capability выбранных
+моделей остаются открытыми.
+
+**Реализовано.**
+
+- [`adapters/codex.py`](../backend/src/agents_ide/adapters/codex.py) —
+  `CodexStream` владеет процессом и единственной фоновой
+  читалкой stdout; `CodexAdapter` десериализует JSON-RPC и
+  коррелирует ответы с `id` под единым `lock`; допускаются только
+  `permission_mode=read_only` и `approvalPolicy=never`. События
+  `item/agentMessage/delta`, `turn/completed`,
+  `*/requestApproval` нормализованы через fence-write, запрос
+  permission автоматически decline с фиксацией события.
+- [`engine/codex_runtime.py`](../backend/src/agents_ide/engine/codex_runtime.py) —
+  жизненный цикл `codex app-server --listen stdio://` через
+  `ProcessSupervisor.start_stdio(stdin=PIPE)`, Job Object/timeout,
+  проверка `initialize`+`model/list` до возврата; probe
+  использует отдельный временный каталог и не пишет в
+  пользовательский workspace.
+- [`engine/runner.py`](../backend/src/agents_ide/engine/runner.py) —
+  `_agent_adapter_for` диспетчеризует по `harness_kind`
+  (`opencode`/`codex`); `_codex_adapter` повторяет правила
+  OpenCode-пути, отдельный `_codex_live` и общий
+  `_close_harness_live()`. `settings=…` или `serve_args` для
+  Codex отклоняются сервером.
+- [`services/harness.py`](../backend/src/agents_ide/services/harness.py) —
+  `probe_harness` теперь вызывает временный кодекс-каталог и
+  сохраняет `last_test_status`/`catalog_models_json`/`version`.
+- [`tests/fixtures/fake_codex_server.py`](../backend/tests/fixtures/fake_codex_server.py) —
+  протокольный фикстур-сервер через stdin/stdout: `initialize`,
+  `model/list`, `thread/start`, `thread/resume`, `thread/read`,
+  `turn/start`, `turn/interrupt`; сценарии выбираются
+  переменными окружения, JSONL-трасса пишется в
+  `FAKE_CODEX_TRACE`.
+- [`tests/integration/test_stage6b_codex.py`](../backend/tests/integration/test_stage6b_codex.py) —
+  14 проверок: capabilities, валидация идентификаторов и
+  настроек, чистое окружение, thread/turn lifecycle, resume,
+  decline permission, провайдерная ошибка, длинный шаг,
+  падение на несуществующем thread, probe через реальный
+  транспорт.
+
+**Границы.**
+
+- Capability и `permission_mode` остаются
+  `read_only`+`never` до изоляции разрешённой записи. Любые
+  `params` на кандидате отклоняются, как и в OpenCode, до
+  проверенного mapping.
+- Catalog хранит идентификаторы, найденные фикстурой или
+  через `model/list` живого Codex; он не доказывает оплату
+  или реальный доступ к модели.
+- Реальный gate MVP (длинный шаг, stop/resume, проверочная
+  сессия, отдельный проверочный агент) и Council через
+  harness остаются открытыми.
+
+**Проверки.**
+
+- Backend `pytest tests/integration/test_stage6b_codex.py -v` —
+  **14 passed**, ~1.8 c.
+- Полный backend-набор: **606 passed**, в т.ч. регрессии этапов
+  2/2A/3/4/5/6A/7/8/9 и Council — без регрессий после
+  обновления `test_future_node_gates_return_valid_waiting_reason`
+  под реальные коды ожидания.
+- Mypy **95 source files** — без замечаний. Ruff check/format —
+  clean. `scripts/generate_contracts.py --check` —
+  синхронизирован (адаптер не вводит новые REST-поля).
+- Frontend: `npm run lint` — clean; `npm run test` —
+  **129 passed**; `npm run build` — clean, бандл 433,41 kB
+  (gzip 119,20 kB).
+
 ### 2026-09-16 · Ревью Council: принятие единственного черновика
 
 **Результат:** ошибки исправлены; явное принятие одиночного плана проверено для текущего LLM Council. Полная приёмка 9A с harness/read workspace и реальными моделями остаётся открытой.

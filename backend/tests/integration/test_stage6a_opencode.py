@@ -273,7 +273,7 @@ def test_harness_profile_update_invalidates_catalog(client, authenticated):
     assert updated["version"] == profile["version"] + 1
 
 
-def test_codex_profile_cannot_be_probed_yet(client, authenticated):
+def test_codex_profile_probe_rejects_missing_executable(client, authenticated):
     _, headers = authenticated
     profile = client.post(
         "/api/harness_profiles",

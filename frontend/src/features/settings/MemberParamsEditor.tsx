@@ -18,7 +18,7 @@ interface MemberParamsEditorProps {
   memberKey: string
   params: Record<string, unknown>
   drafts: Record<string, ParamDraft>
-  openCodeHint: boolean
+  harnessHint: boolean
   onParams: (next: Record<string, unknown>, removed?: string) => void
   onDraft: (key: string, draft: ParamDraft | null) => void
 }
@@ -27,7 +27,7 @@ export function MemberParamsEditor({
   memberKey,
   params,
   drafts,
-  openCodeHint,
+  harnessHint,
   onParams,
   onDraft,
 }: MemberParamsEditorProps) {
@@ -198,11 +198,11 @@ export function MemberParamsEditor({
           </button>
         </div>
       ) : null}
-      {openCodeHint ? (
+      {harnessHint ? (
         <p className="hint">
-          Если кандидат включён, реальный запуск OpenCode с его параметрами пока
-          отклоняется предстартовой проверкой: подтверждённого сопоставления
-          параметров нет. Simulated-режим допускает их.
+          Если кандидат включён, реальный запуск OpenCode/Codex с его
+          параметрами пока отклоняется предстартовой проверкой: подтверждённого
+          сопоставления параметров нет. Simulated-режим допускает их.
         </p>
       ) : null}
     </div>

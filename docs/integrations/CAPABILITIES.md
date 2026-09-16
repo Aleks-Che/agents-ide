@@ -62,3 +62,18 @@ resume по native ID и directory с кириллицей. Модель зам�
 платных вызовов нет. [Наблюдение](fixtures/2026-09-15-stage6a.json) и
 [границы реализации](../architecture/OPENCODE_RUNTIME.md). Предыдущий no-go разрешённой
 автономной записи сохраняется; no_tools и успешный транспорт не закрывают этот gate.
+
+
+## Ревью интеграции 6B — 2026-09-16
+
+Codex App Server адаптер сверён с JSON Schema установленного **0.153.4**.
+В отдельном временном CODEX_HOME и workspace реально проверены initialize,
+пагинированный model/list (6 моделей), создание пустой read-only сессии и остановка
+процесса. **Вызовов модели — 0**, пользовательский CODEX_HOME не подключался.
+[Наблюдение](fixtures/2026-09-16-stage6b.json),
+[контракт и ограничения](../architecture/CODEX_RUNTIME.md).
+
+Strict fixture проверяет остальные transport/Runner сценарии: durable IDs,
+разделение ролей, pause/resume, decline approvals, unknown после stop/обрыва и
+cleanup принадлежащей группы. Эти проверки не подтверждают реальную модель,
+изолированную запись или межharness fallback. Полная приёмка 6B остаётся открытой.

@@ -96,8 +96,7 @@ function ProfileList({
   if (profiles.length === 0) {
     return (
       <p className="panel-empty">
-        Harness-профилей нет. Добавьте профиль OpenCode. Поддержка Codex ещё не
-        реализована.
+        Harness-профилей нет. Добавьте профиль OpenCode или Codex.
       </p>
     )
   }
@@ -159,7 +158,8 @@ function CreateProfileDialog({ onClose, onCreated }: CreateProfileDialogProps) {
   const [name, setName] = useState('')
   const [kind, setKind] = useState<'opencode' | 'codex'>('opencode')
   const [executablePath, setExecutablePath] = useState('')
-  const [noTools, setNoTools] = useState(false)
+  const [restrictedMode, setRestrictedMode] = useState(false)
+  const permissionMode = kind === 'codex' ? 'read_only' : 'no_tools'
   const create = useMutation({
     mutationFn: () =>
       harnessApi.create(
@@ -167,10 +167,7 @@ function CreateProfileDialog({ onClose, onCreated }: CreateProfileDialogProps) {
           name: name.trim(),
           harness_kind: kind,
           executable_path: executablePath.trim() || null,
-          settings:
-            kind === 'opencode' && noTools
-              ? { permission_mode: 'no_tools' }
-              : {},
+          settings: restrictedMode ? { permission_mode: permissionMode } : {},
         },
         csrf,
       ),
@@ -208,12 +205,13 @@ function CreateProfileDialog({ onClose, onCreated }: CreateProfileDialogProps) {
         <select
           id="harness-kind"
           value={kind}
-          onChange={(event) =>
+          onChange={(event) => {
             setKind(event.target.value === 'codex' ? 'codex' : 'opencode')
-          }
+            setRestrictedMode(false)
+          }}
         >
           <option value="opencode">OpenCode</option>
-          <option value="codex">Codex (запуск пока недоступен)</option>
+          <option value="codex">Codex (только чтение)</option>
         </select>
         <label htmlFor="harness-path">Путь к исполняемому файлу</label>
         <input
@@ -227,19 +225,20 @@ function CreateProfileDialog({ onClose, onCreated }: CreateProfileDialogProps) {
           Для теста и запуска нужен полный путь к нативному исполняемому файлу.
           Скрипты .cmd, .bat и .ps1 не поддерживаются.
         </p>
-        {kind === 'opencode' ? (
-          <label className="enabled-toggle">
-            <input
-              type="checkbox"
-              checked={noTools}
-              onChange={(event) => setNoTools(event.target.checked)}
-            />
-            Только ответы модели, без инструментов (no_tools)
-          </label>
-        ) : null}
+        <label className="enabled-toggle">
+          <input
+            type="checkbox"
+            checked={restrictedMode}
+            onChange={(event) => setRestrictedMode(event.target.checked)}
+          />
+          {kind === 'codex'
+            ? 'Только чтение (read_only)'
+            : 'Только ответы модели, без инструментов (no_tools)'}
+        </label>
         <p className="hint">
-          OpenCode пока можно запускать только в режиме no_tools. Запись в
-          проект и доступ к инструментам ещё не прошли приёмку.
+          {kind === 'codex'
+            ? 'Codex запускается только в режиме чтения без одобрения расширенных прав. Запись в проект ещё не прошла приёмку.'
+            : 'OpenCode пока можно запускать только в режиме no_tools. Запись в проект и доступ к инструментам ещё не прошли приёмку.'}
         </p>
         {create.error ? (
           <p className="error" role="alert">
@@ -342,8 +341,10 @@ function EditProfileForm({
   const [catalogTtl, setCatalogTtl] = useState(
     String(initial.catalog_ttl_seconds),
   )
-  const [noTools, setNoTools] = useState(
-    initial.settings.permission_mode === 'no_tools',
+  const permissionMode =
+    initial.harness_kind === 'codex' ? 'read_only' : 'no_tools'
+  const [restrictedMode, setRestrictedMode] = useState(
+    initial.settings.permission_mode === permissionMode,
   )
   const catalog = useQuery({
     queryKey: ['harness_catalog', profile.id],
@@ -353,7 +354,7 @@ function EditProfileForm({
     name.trim() !== profile.name ||
     executablePath.trim() !== (profile.executable_path ?? '') ||
     Number(catalogTtl) !== profile.catalog_ttl_seconds ||
-    noTools !== (profile.settings.permission_mode === 'no_tools')
+    restrictedMode !== (profile.settings.permission_mode === permissionMode)
   function accept(updated: HarnessProfile) {
     setProfile(updated)
     client.setQueryData(['harness_profile', updated.id], updated)
@@ -373,11 +374,12 @@ function EditProfileForm({
           ...(Number(catalogTtl) !== profile.catalog_ttl_seconds
             ? { catalog_ttl_seconds: Number(catalogTtl) }
             : {}),
-          ...(noTools !== (profile.settings.permission_mode === 'no_tools')
+          ...(restrictedMode !==
+          (profile.settings.permission_mode === permissionMode)
             ? {
                 settings: {
                   ...profile.settings,
-                  permission_mode: noTools ? 'no_tools' : null,
+                  permission_mode: restrictedMode ? permissionMode : null,
                 },
               }
             : {}),
@@ -407,7 +409,7 @@ function EditProfileForm({
       setName(updated.name)
       setExecutablePath(updated.executable_path ?? '')
       setCatalogTtl(String(updated.catalog_ttl_seconds))
-      setNoTools(updated.settings.permission_mode === 'no_tools')
+      setRestrictedMode(updated.settings.permission_mode === permissionMode)
     },
   })
   const busy = save.isPending || archive.isPending || probe.isPending
@@ -462,20 +464,21 @@ function EditProfileForm({
           value={catalogTtl}
           onChange={(event) => setCatalogTtl(event.target.value)}
         />
-        {profile.harness_kind === 'opencode' ? (
-          <label className="enabled-toggle">
-            <input
-              type="checkbox"
-              checked={noTools}
-              onChange={(event) => setNoTools(event.target.checked)}
-            />
-            Только ответы модели, без инструментов (no_tools)
-          </label>
-        ) : (
-          <p className="hint">Запуск Codex ещё не реализован.</p>
-        )}
+        <label className="enabled-toggle">
+          <input
+            type="checkbox"
+            checked={restrictedMode}
+            onChange={(event) => setRestrictedMode(event.target.checked)}
+          />
+          {profile.harness_kind === 'codex'
+            ? 'Только чтение (read_only)'
+            : 'Только ответы модели, без инструментов (no_tools)'}
+        </label>
+
         <p className="hint">
-          OpenCode пока выполняет только запросы без инструментов (no_tools).
+          {profile.harness_kind === 'codex'
+            ? 'Codex выполняет запросы в режиме read_only без одобрения расширенных прав.'
+            : 'OpenCode пока выполняет только запросы без инструментов (no_tools).'}{' '}
           Каталог не подтверждает доступ к модели. Тест проверяет сохранённый
           профиль; сначала сохраните правки.
         </p>

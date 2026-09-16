@@ -335,3 +335,40 @@ test('small viewport keeps navigation, modal controls and keyboard focus usable'
     fullPage: true,
   })
 })
+
+test('Codex profile can opt into read_only in creation and editing', async ({
+  page,
+}) => {
+  await pair(page)
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  const panel = page.getByRole('region', { name: 'Профили harness' })
+  await panel.getByRole('button', { name: '+ Новый', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  const name = `Codex ${randomUUID()}`
+  await dialog.getByLabel('Название').fill(name)
+  await dialog.getByLabel('Тип', { exact: true }).selectOption('codex')
+  await dialog
+    .getByRole('checkbox', { name: 'Только чтение (read_only)' })
+    .check()
+  await dialog.getByRole('button', { name: 'Создать', exact: true }).click()
+  const item = panel.getByRole('listitem').filter({ hasText: name })
+  await item.getByRole('button', { name: 'Параметры…' }).click()
+  await expect(dialog.getByRole('checkbox')).toBeChecked()
+  let profiles = await api(page, 'GET', '/harness_profiles')
+  expect(
+    profiles.find((p: { name: string }) => p.name === name).settings
+      .permission_mode,
+  ).toBe('read_only')
+  await dialog.getByRole('checkbox').uncheck()
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await item.getByRole('button', { name: 'Параметры…' }).click()
+  await expect(dialog.getByRole('checkbox')).not.toBeChecked()
+  await dialog.getByRole('checkbox').check()
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  profiles = await api(page, 'GET', '/harness_profiles')
+  expect(
+    profiles.find((p: { name: string }) => p.name === name).settings
+      .permission_mode,
+  ).toBe('read_only')
+})

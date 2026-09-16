@@ -102,6 +102,37 @@ describe('Council transport', () => {
     expect(JSON.parse(init.body)).toEqual(body)
     expect(init.headers.get('X-CSRF-Token')).toBe('csrf-retry')
   })
+  it('sends an explicit subset of failed members when reset_all_failed is omitted', async () => {
+    const fetch = capture()
+    const body = {
+      expected_state_version: 5,
+      reset_all_failed: false,
+      reset_member_indices: [0, 2],
+      refresh_credentials: false,
+      acknowledge_unknown_result: true,
+    }
+    await planningApi.retry('job', body, 'csrf-subset')
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('/api/planning_jobs/job/retry')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual(body)
+    expect(init.headers.get('X-CSRF-Token')).toBe('csrf-subset')
+  })
+  it('does not mix reset_all_failed with reset_member_indices on the wire', async () => {
+    const fetch = capture()
+    await planningApi.retry(
+      'job',
+      {
+        expected_state_version: 1,
+        reset_all_failed: false,
+        reset_member_indices: [1],
+      },
+      'csrf-mix',
+    )
+    const body = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(body).not.toHaveProperty('reset_all_failed', true)
+    expect(body.reset_member_indices).toEqual([1])
+  })
   it('does not silently repeat a retry after a conflict', async () => {
     const fetch = capture(409, {
       code: 'planning_state_version_invalid',
@@ -111,6 +142,20 @@ describe('Council transport', () => {
       planningApi.retry(
         'job',
         { expected_state_version: 1, reset_all_failed: true },
+        'csrf',
+      ),
+    ).rejects.toBeInstanceOf(ApiError)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+  it('surfaces a server-side rejection of an incomplete failed-members list', async () => {
+    const fetch = capture(409, {
+      code: 'planning_retry_unresolved',
+      message: 'List all unsuccessful members',
+    })
+    await expect(
+      planningApi.retry(
+        'job',
+        { expected_state_version: 3, reset_member_indices: [0] },
         'csrf',
       ),
     ).rejects.toBeInstanceOf(ApiError)

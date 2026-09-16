@@ -137,6 +137,7 @@ class Runner:
         self._attempt_id: str | None = None
         self._current_evidence: dict[str, Any] = {}
         self._opencode_live: dict[str, Any] = {}
+        self._codex_live: dict[str, Any] = {}
 
     @contextmanager
     def _write(self) -> Iterator[tuple[Session, Run]]:
@@ -279,7 +280,7 @@ class Runner:
     def _waiting(
         self, code: str, details: dict[str, Any], visit: visits.VisitState | None = None
     ) -> RunnerResult:
-        self._close_opencode()
+        self._close_harness_live()
         reason = WaitingReason.model_validate(
             {
                 "code": code,
@@ -315,7 +316,7 @@ class Runner:
         try:
             return self._execute(run_id)
         finally:
-            self._close_opencode()
+            self._close_harness_live()
 
     def _execute(self, run_id: str) -> RunnerResult:
         self.run_id = run_id
@@ -826,32 +827,51 @@ class Runner:
     def _agent_adapter_for(
         self, candidate: dict[str, Any], request: AgentAdapterRequest
     ) -> AgentAdapter:
-        from agents_ide.adapters.opencode import OpenCodeAdapter
-        from agents_ide.engine.opencode_runtime import OpenCodeRuntime, validate_settings
-        from agents_ide.worker.processes import ProcessRegistry, ProcessSupervisor
-
         profile_id = str(candidate.get("harness_profile_id") or "")
         profile = self.snapshot["dependencies"]["harness_profiles"].get(profile_id, {})
-        if profile.get("harness_kind") != "opencode":
-            raise AppError("configuration_invalid", "harness_adapter_unimplemented", 409)
-        validate_settings(profile.get("settings", {}))
-        if request.params:
-            raise AppError("configuration_invalid", "OpenCode model parameters are unverified", 409)
+        harness_kind = profile.get("harness_kind")
+        if harness_kind == "opencode":
+            return self._opencode_adapter(profile_id, profile, request)
+        if harness_kind == "codex":
+            return self._codex_adapter(profile_id, profile, request)
+        raise AppError("configuration_invalid", "harness_adapter_unimplemented", 409)
+
+    def _ensure_supervisor(self) -> Any:
+        from agents_ide.worker.processes import ProcessRegistry, ProcessSupervisor
+
         if self.registry is None:
             self.registry = ProcessRegistry()
+        return ProcessSupervisor(
+            self.session_factory,
+            self.registry,
+            self.run_id,
+            self.worker_id,
+            self.generation,
+        )
+
+    def _opencode_adapter(
+        self,
+        profile_id: str,
+        profile: dict[str, Any],
+        request: AgentAdapterRequest,
+    ) -> AgentAdapter:
+        from agents_ide.adapters.opencode import OpenCodeAdapter
+        from agents_ide.engine.opencode_runtime import OpenCodeRuntime, validate_settings
+
+        validate_settings(profile.get("settings", {}))
+        if request.params:
+            raise AppError(
+                "configuration_invalid",
+                "OpenCode model parameters are unverified",
+                409,
+            )
         runtime = self._opencode_live.get(profile_id)
         if runtime is None:
             # There is at most one OpenCode listener per Run. A completed
             # candidate cannot leave another server alive during profile fallback.
-            self._close_opencode()
+            self._close_harness_live()
             runtime = OpenCodeRuntime.start(
-                supervisor=ProcessSupervisor(
-                    self.session_factory,
-                    self.registry,
-                    self.run_id,
-                    self.worker_id,
-                    self.generation,
-                ),
+                supervisor=self._ensure_supervisor(),
                 executable=str(profile.get("executable_path") or ""),
                 workspace_path=Path(request.workspace_path),
                 attempt_id=self._attempt_id,
@@ -862,10 +882,57 @@ class Runner:
             with self._write() as (session, run):
                 self.runtime.setdefault("opencode_runtimes", {})[profile_id] = runtime.to_dict()
                 self._event(
-                    session, "agent.server_started", runtime.to_dict(), attempt_id=self._attempt_id
+                    session,
+                    "agent.server_started",
+                    runtime.to_dict(),
+                    attempt_id=self._attempt_id,
                 )
                 self._persist(run)
         return OpenCodeAdapter(session=runtime.session())
+
+    def _codex_adapter(
+        self,
+        profile_id: str,
+        profile: dict[str, Any],
+        request: AgentAdapterRequest,
+    ) -> AgentAdapter:
+        from agents_ide.adapters.codex import CodexAdapter
+        from agents_ide.engine.codex_runtime import CodexRuntime, validate_settings
+
+        validate_settings(profile.get("settings", {}))
+        # Model parameters for Codex need an explicit per-model capability
+        # mapping that is not yet established; refuse until that gate opens.
+        if request.params:
+            raise AppError(
+                "configuration_invalid",
+                "Codex model parameters are unverified",
+                409,
+            )
+        runtime = self._codex_live.get(profile_id)
+        if runtime is None or not runtime.stream.is_alive():
+            self._close_harness_live()
+            runtime = CodexRuntime.start(
+                supervisor=self._ensure_supervisor(),
+                executable=str(profile.get("executable_path") or ""),
+                workspace_path=Path(request.workspace_path),
+                attempt_id=self._attempt_id,
+                check_owned=self._check_owned,
+                stop_event=request.stop_event,
+            )
+            self._codex_live[profile_id] = runtime
+            with self._write() as (session, run):
+                self.runtime.setdefault("codex_runtimes", {})[profile_id] = runtime.to_dict()
+                self._event(
+                    session,
+                    "agent.server_started",
+                    runtime.to_dict(),
+                    attempt_id=self._attempt_id,
+                )
+                self._persist(run)
+        return CodexAdapter(
+            stream=runtime.stream,
+            session=runtime.session(),
+        )
 
     def _agent_session_key(self, candidate: dict[str, Any], role: str) -> str:
         from hashlib import sha256
@@ -885,6 +952,15 @@ class Runner:
         for runtime in self._opencode_live.values():
             runtime.close()
         self._opencode_live.clear()
+
+    def _close_codex(self) -> None:
+        for runtime in self._codex_live.values():
+            runtime.close()
+        self._codex_live.clear()
+
+    def _close_harness_live(self) -> None:
+        self._close_opencode()
+        self._close_codex()
 
     def _context(self, session: Session) -> EvaluationContext:
         work = {key: Value.of(value) for key, value in self.runtime["work"].items()}
@@ -936,7 +1012,7 @@ class Runner:
             )
             paused = run is not None and run.state == "pause_requested"
         if terminal or requested or paused:
-            self._close_opencode()
+            self._close_harness_live()
         if terminal or requested:
             from agents_ide.worker.processes import ProcessSupervisor
 
@@ -2196,7 +2272,7 @@ class Runner:
                                 caps = json.loads(agent_session.capabilities_json)
                                 caps.update(
                                     server_version=payload.get("server_version"),
-                                    permission_mode="no_tools",
+                                    permission_mode=payload.get("permission_mode", "no_tools"),
                                 )
                                 agent_session.capabilities_json = to_json(caps)
                                 key = self._agent_session_key(
@@ -2824,7 +2900,7 @@ class Runner:
         self, node: dict[str, Any], visit: visits.VisitState, result: AgentResult | LLMResult | None
     ) -> RunnerResult | None:
         if node["type"] == "End":
-            self._close_opencode()
+            self._close_harness_live()
         if not self._stop_processes_if_requested(terminal=node["type"] == "End"):
             return self._waiting("process_not_responding", {"reason": "local_tree_alive"}, visit)
         if node["type"] == "End" and self.snapshot.get("plan"):

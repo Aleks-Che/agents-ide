@@ -545,10 +545,16 @@ def _candidates(
                 "ttl_seconds": resource.catalog_ttl_seconds,
                 "availability": "unverified",
             }
-            if resource.harness_kind == "opencode":
-                from agents_ide.engine.opencode_runtime import validate_settings
+            if resource.harness_kind in {"opencode", "codex"}:
+                from agents_ide.engine import codex_runtime, opencode_runtime
 
-                settings = dependencies["harness_profiles"][resource.id]["settings"]
+                validate_settings = (
+                    codex_runtime.validate_settings
+                    if resource.harness_kind == "codex"
+                    else opencode_runtime.validate_settings
+                )
+
+                settings = json.loads(resource.settings_json)
                 row["capabilities"]["permissions"] = settings.get("permission_mode", "unverified")
                 if candidate["enabled"] and report.preview.get("execution_mode") == "real":
                     try:
@@ -556,7 +562,7 @@ def _candidates(
                         if candidate["params"]:
                             raise AppError(
                                 "configuration_invalid",
-                                "OpenCode parameters require verified mapping",
+                                f"{resource.harness_kind} parameters require verified mapping",
                                 422,
                             )
                     except AppError as exc:

@@ -1,0 +1,10 @@
+{
+  "version": "codex-cli 0.153.4",
+  "initialize": true,
+  "catalog_count": 6,
+  "thread_start_read_only": true,
+  "native_id_validated": true,
+  "model_calls": 0,
+  "isolated_home": true,
+  "process_stopped": true
+}

@@ -698,3 +698,162 @@ test('Council with a single accepted draft can be promoted to a degraded plan', 
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 })
+
+test('Council retry can reset a strict subset of failed participants', async ({
+  page,
+}) => {
+  test.setTimeout(60_000)
+  page.setDefaultTimeout(10_000)
+  const calls: { model: string; messages: unknown[] }[] = []
+  let phase = 'first'
+  const server = createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    const body = JSON.parse(raw)
+    calls.push({ model: body.model, messages: body.messages })
+    if (phase === 'first') {
+      if (body.model === 'y' || body.model === 'z') {
+        res.writeHead(401, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'Denied' } }))
+        return
+      }
+      const content = document('Draft accepted by ' + body.model)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: { role: 'assistant', content: JSON.stringify(content) },
+            },
+          ],
+          usage: { total_tokens: 4 },
+        }),
+      )
+      return
+    }
+    if (phase === 'subset' && body.model === 'y') {
+      res.writeHead(401, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'Still denied' } }))
+      return
+    }
+    const content = document('Recovered ' + body.model)
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        choices: [
+          {
+            message: { role: 'assistant', content: JSON.stringify(content) },
+          },
+        ],
+        usage: { total_tokens: 4 },
+      }),
+    )
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    await pair(page)
+    const address = server.address() as { port: number }
+    const project = await api(page, 'POST', '/projects', {
+      name: 'Council subset retry',
+      workspace_path: workspace(),
+    })
+    const chat = await api(page, 'POST', `/projects/${project.id}/chats`, {
+      title: 'Subset retry',
+    })
+    const connection = await api(page, 'POST', '/connections', {
+      name: 'Subset retry provider',
+      base_url: `http://127.0.0.1:${address.port}/v1`,
+    })
+    const job = await api(page, 'POST', '/planning_jobs', {
+      project_id: project.id,
+      chat_id: chat.id,
+      task_text: 'Retry only a subset',
+      idempotency_key: crypto.randomUUID(),
+      participants: ['x', 'y', 'z', 'merge'].map((model_id, i) => ({
+        role: i === 3 ? 'merger' : 'participant',
+        selection: {
+          kind: 'direct',
+          model_id,
+          provider_connection_id: connection.id,
+        },
+      })),
+    })
+    const python = path.resolve(
+      '../backend/.venv',
+      process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
+    )
+    await promisify(execFile)(
+      python,
+      [
+        path.resolve('tests/e2e/dispatch_council.py'),
+        process.env.AGENTS_IDE_E2E_DATA_DIR!,
+        job.id,
+      ],
+      { windowsHide: true, timeout: 20_000 },
+    )
+    const before = await api(page, 'GET', `/planning_jobs/${job.id}`)
+    expect(before.state).toBe('failed')
+    expect(before.last_error.code).toBe('council_quorum_missing')
+    const acceptedBefore = before.drafts.filter(
+      (d: { accepted: boolean }) => d.accepted,
+    )
+    await page.reload()
+    await page.getByRole('option', { name: 'Council subset retry' }).click()
+    await page
+      .getByRole('region', { name: 'Планы этого диалога' })
+      .getByRole('button')
+      .click()
+    const dialog = page.getByRole('dialog')
+    const selection = dialog.getByRole('group', {
+      name: 'Каких участников повторить',
+    })
+    await expect(selection).toBeVisible()
+    // Both failed participants are pre-selected. Deselect the first one
+    // (slot_index=1, "Участник 2") so that only slot_index=2 ("Участник 3") is reset.
+    await selection.getByRole('checkbox', { name: /Участник 2 · / }).uncheck()
+    await expect(
+      dialog.getByRole('button', { name: 'Повторить выбранных (1)' }),
+    ).toBeEnabled()
+    phase = 'subset'
+    const request = page.waitForRequest((r) =>
+      r.url().endsWith(`/planning_jobs/${job.id}/retry`),
+    )
+    await dialog
+      .getByRole('button', { name: 'Повторить выбранных (1)' })
+      .click()
+    const body = (await request).postDataJSON()
+    expect(body.reset_all_failed).toBe(false)
+    expect(body.reset_member_indices).toEqual([2])
+    expect(body.refresh_credentials).toBe(true)
+    await expect(dialog).toContainText('drafting')
+    await promisify(execFile)(
+      python,
+      [
+        path.resolve('tests/e2e/dispatch_council.py'),
+        process.env.AGENTS_IDE_E2E_DATA_DIR!,
+        job.id,
+      ],
+      { windowsHide: true, timeout: 20_000 },
+    )
+    const after = await api(page, 'GET', `/planning_jobs/${job.id}`)
+    expect(after.state).toBe('ready_for_confirmation')
+    expect(after.usage.external_calls).toBe(before.usage.external_calls + 2)
+    expect(after.drafts).toEqual(expect.arrayContaining(acceptedBefore))
+    // Only participant slot_index=2 was retried; slot_index=1 stays failed.
+    const slot1Draft = after.drafts.find(
+      (d: { slot_index: number; role: string }) =>
+        d.role === 'participant' && d.slot_index === 1,
+    )
+    expect(slot1Draft?.accepted).toBe(false)
+    const callsAfter = calls.slice(before.usage.external_calls)
+    expect(callsAfter.map((c) => c.model)).toEqual(['z', 'merge'])
+    const retryEvent = after.events.find(
+      (e: { type: string }) => e.type === 'planning.retried',
+    )
+    expect(retryEvent?.payload.reset_members).toHaveLength(1)
+    expect(JSON.stringify(after)).not.toContain('synthetic')
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})

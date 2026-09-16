@@ -171,7 +171,11 @@ def start_preset(authenticated, repository, provider, *, inputs=None, roles=True
     profile = client.post(
         "/api/harness_profiles",
         headers=headers,
-        json={"name": "fake", "harness_kind": "codex", "settings": {}},
+        json={
+            "name": "fake",
+            "harness_kind": "codex",
+            "settings": {"permission_mode": "read_only"},
+        },
     ).json()
     selections = {
         r: {"kind": "direct", "model_id": "test", "harness_profile_id": profile["id"]}
@@ -333,7 +337,11 @@ def test_preset_update_keeps_user_copy_and_validates_group_resources(authenticat
     profile = client.post(
         "/api/harness_profiles",
         headers=headers,
-        json={"name": "profile", "harness_kind": "codex", "settings": {}},
+        json={
+            "name": "profile",
+            "harness_kind": "codex",
+            "settings": {"permission_mode": "read_only"},
+        },
     ).json()
     group = client.post(
         "/api/model_groups/agent",
