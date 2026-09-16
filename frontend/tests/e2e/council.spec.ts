@@ -246,7 +246,7 @@ test('Council recovers creation, reviews complete plan, confirms revision and su
     })
     await dialog.getByRole('button', { name: 'Подтвердить план' }).click()
     await expect(
-      dialog.getByRole('heading', { name: /Ревизия 3 · подтверждена/ }),
+      dialog.getByRole('heading', { name: /Ревизия 3 .*подтверждена/ }),
     ).toBeVisible()
     await dialog.getByRole('button', { name: 'Закрыть', exact: true }).click()
     await page.reload()
@@ -449,10 +449,10 @@ for (const unknown of [false, true]) {
         await page.route(
           `**/api/planning_jobs/${job.id}/retry`,
           async (route) => {
-            await route.fetch()
+            const response = await route.fetch()
+            expect(response.status()).toBe(200)
             await route.abort('failed')
           },
-          { times: 1 },
         )
       }
       phase = 'restored'
@@ -464,6 +464,7 @@ for (const unknown of [false, true]) {
         unknown,
       )
       await expect(page.getByRole('dialog')).toContainText('drafting')
+      if (!unknown) await page.unroute(`**/api/planning_jobs/${job.id}/retry`)
       await dispatch()
       await expect(page.getByRole('dialog')).toContainText(
         'Merged plan after retry',
@@ -496,3 +497,204 @@ for (const unknown of [false, true]) {
     }
   })
 }
+
+test('Council with a single accepted draft can be promoted to a degraded plan', async ({
+  page,
+}) => {
+  test.setTimeout(60_000)
+  page.setDefaultTimeout(10_000)
+  const calls: { model: string }[] = []
+  const server = createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    const body = JSON.parse(raw)
+    calls.push({ model: body.model })
+    if (body.model === 'y') {
+      res.writeHead(401, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'Denied' } }))
+      return
+    }
+    const content = document('Accepted draft', [questions[0]])
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        choices: [
+          {
+            message: { role: 'assistant', content: JSON.stringify(content) },
+          },
+        ],
+        usage: { total_tokens: 4 },
+      }),
+    )
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    await pair(page)
+    const address = server.address() as { port: number }
+    const project = await api(page, 'POST', '/projects', {
+      name: 'Single-member promote',
+      workspace_path: workspace(),
+    })
+    const chat = await api(page, 'POST', `/projects/${project.id}/chats`, {
+      title: 'Promote',
+    })
+    const template = await api(page, 'POST', '/templates', {
+      name: 'Promoted plan',
+    })
+    const version = await api(
+      page,
+      'POST',
+      `/templates/${template.id}/versions`,
+      {
+        graph: {
+          nodes: [
+            { id: 'start', type: 'Start' },
+            { id: 'end', type: 'End' },
+          ],
+          edges: [{ id: 'next', from: 'start', to: 'end' }],
+        },
+      },
+    )
+    const binding = await api(
+      page,
+      'POST',
+      `/versions/${version.id}/bindings`,
+      {
+        project_id: project.id,
+        name: 'Promoted plan',
+      },
+    )
+    const connection = await api(page, 'POST', '/connections', {
+      name: 'Single-member provider',
+      base_url: `http://127.0.0.1:${address.port}/v1`,
+      secret: 'synthetic-key',
+    })
+    const job = await api(page, 'POST', '/planning_jobs', {
+      project_id: project.id,
+      chat_id: chat.id,
+      task_text: 'Single-member fallback',
+      idempotency_key: crypto.randomUUID(),
+      participants: ['x', 'y', 'merge'].map((model_id, i) => ({
+        role: i === 2 ? 'merger' : 'participant',
+        selection: {
+          kind: 'direct',
+          model_id,
+          provider_connection_id: connection.id,
+        },
+      })),
+    })
+    const python = path.resolve(
+      '../backend/.venv',
+      process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
+    )
+    await promisify(execFile)(
+      python,
+      [
+        path.resolve('tests/e2e/dispatch_council.py'),
+        process.env.AGENTS_IDE_E2E_DATA_DIR!,
+        job.id,
+      ],
+      { windowsHide: true, timeout: 20_000 },
+    )
+    const before = await api(page, 'GET', `/planning_jobs/${job.id}`)
+    expect(before.state).toBe('failed')
+    expect(before.last_error.code).toBe('council_quorum_missing')
+    expect(before.n_participants_actual).toBe(1)
+    expect(before.degraded).toBe(true)
+    await page.reload()
+    await page.getByRole('option', { name: 'Single-member promote' }).click()
+    await page
+      .getByRole('region', { name: 'Планы этого диалога' })
+      .getByRole('button')
+      .click()
+    await expect(
+      page.getByText('Кворум не набран: принят только один черновик.'),
+    ).toBeVisible()
+    const promoteButton = page.getByRole('button', {
+      name: 'Принять единственный черновик',
+    })
+    await expect(promoteButton).toBeDisabled()
+    await page
+      .getByRole('checkbox', {
+        name: /Подтверждаю, что это уменьшенный состав/,
+      })
+      .check()
+    await expect(promoteButton).toBeEnabled()
+    // The write succeeds but its reply is lost; the UI must recover by reading.
+    await page.route(
+      `**/api/planning_jobs/${job.id}/promote_single`,
+      async (route) => {
+        const response = await route.fetch()
+        expect(response.status()).toBe(200)
+        await route.abort('failed')
+      },
+    )
+    await promoteButton.click()
+    await expect(page.getByRole('dialog')).toContainText('needs_answers')
+    await page.unroute(`**/api/planning_jobs/${job.id}/promote_single`)
+    const promoted = await api(page, 'GET', `/planning_jobs/${job.id}`)
+    expect(promoted.state).toBe('needs_answers')
+    expect(promoted.last_error).toBeNull()
+    expect(promoted.finished_at).toBeNull()
+    expect(promoted.drafts).toEqual(before.drafts)
+    expect(promoted.usage).toEqual(before.usage)
+    expect(promoted.degraded).toBe(true)
+    expect(promoted.n_participants_actual).toBe(1)
+    expect(promoted.revisions).toHaveLength(1)
+    expect(promoted.revisions[0].author).toBe('single_member')
+    const event = promoted.events.find(
+      (e: { type: string }) => e.type === 'planning.single_member_promoted',
+    )
+    expect(event?.payload.revision_number).toBe(1)
+    // Failed drafts remain visible in the diagnostic list.
+    expect(
+      promoted.drafts.some((d: { accepted: boolean }) => !d.accepted),
+    ).toBe(true)
+    expect(calls.map((c) => c.model)).toEqual(['x', 'y'])
+    expect(JSON.stringify(promoted)).not.toContain('synthetic-key')
+    let dialog = page.getByRole('dialog')
+    await expect(
+      dialog.getByRole('button', { name: 'Подтвердить план' }),
+    ).toHaveCount(0)
+    await dialog
+      .getByRole('combobox', { name: 'Database?', exact: true })
+      .selectOption('a')
+    await dialog
+      .getByRole('button', { name: 'Сохранить ответы и правки' })
+      .click()
+    await expect(
+      dialog.getByRole('heading', { name: /Ревизия 2/ }),
+    ).toBeVisible()
+    await dialog.getByRole('button', { name: 'Подтвердить план' }).click()
+    await expect(dialog).toContainText('confirmed')
+    await page.getByRole('button', { name: 'Использовать план в Run…' }).click()
+    dialog = page.getByRole('dialog', { name: 'Запустить задание' })
+    await dialog
+      .getByLabel('Привязка', { exact: true })
+      .selectOption(binding.id)
+    await dialog.getByRole('button', { name: 'Запустить preflight' }).click()
+    const start = dialog.getByRole('button', { name: 'Запустить', exact: true })
+    await expect(start).toBeEnabled()
+    const runResponse = page.waitForResponse(
+      (r) => r.url().endsWith('/api/runs') && r.request().method() === 'POST',
+    )
+    await start.click()
+    const run = await (await runResponse).json()
+    await expect(
+      page.getByText(
+        /План Council принят в уменьшенном составе: участников 1\/2/,
+      ),
+    ).toBeVisible()
+    const snapshot = await api(page, 'GET', `/runs/${run.id}/snapshot`)
+    expect(snapshot.planning_provenance).toMatchObject({
+      degraded: true,
+      n_participants_actual: 1,
+      n_participants_requested: 2,
+      revision_author: 'user',
+    })
+    expect(calls).toHaveLength(2)
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+})

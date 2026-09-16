@@ -647,7 +647,10 @@ class PlanningRevision(Base):
     __tablename__ = "planning_revisions"
     __table_args__ = (
         UniqueConstraint("job_id", "revision_number", name="uq_planning_revisions_number"),
-        CheckConstraint("author IN ('merger','user')", name="ck_planning_revisions_author"),
+        CheckConstraint(
+            "author IN ('merger','user','single_member')",
+            name="ck_planning_revisions_author",
+        ),
         CheckConstraint(
             "readiness IN ('ready','needs_answers','unverified','invalid_format')",
             name="ck_planning_revisions_readiness",

@@ -3756,6 +3756,122 @@
         "title": "PlanningMemberView",
         "type": "object"
       },
+      "PlanningPromoteSingle": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_member_id": {
+            "title": "Accepted Member Id",
+            "type": "string"
+          },
+          "accepted_model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted Model Id"
+          },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "n_participants_actual": {
+            "title": "N Participants Actual",
+            "type": "integer"
+          },
+          "revision_number": {
+            "title": "Revision Number",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PlanningState"
+          },
+          "state_version": {
+            "title": "State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "state_version",
+          "revision_number",
+          "degraded",
+          "n_participants_actual",
+          "accepted_member_id",
+          "accepted_model_id"
+        ],
+        "title": "PlanningPromoteSingle",
+        "type": "object"
+      },
+      "PlanningPromoteSingleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm_degraded": {
+            "title": "Confirm Degraded",
+            "type": "boolean"
+          },
+          "expected_state_version": {
+            "minimum": 0.0,
+            "title": "Expected State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_state_version",
+          "confirm_degraded"
+        ],
+        "title": "PlanningPromoteSingleRequest",
+        "type": "object"
+      },
+      "PlanningProvenance": {
+        "additionalProperties": false,
+        "properties": {
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "n_participants_actual": {
+            "title": "N Participants Actual",
+            "type": "integer"
+          },
+          "n_participants_requested": {
+            "title": "N Participants Requested",
+            "type": "integer"
+          },
+          "revision_author": {
+            "enum": [
+              "merger",
+              "user",
+              "single_member"
+            ],
+            "title": "Revision Author",
+            "type": "string"
+          },
+          "source_member_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Member Id"
+          }
+        },
+        "required": [
+          "degraded",
+          "n_participants_requested",
+          "n_participants_actual",
+          "revision_author",
+          "source_member_id"
+        ],
+        "title": "PlanningProvenance",
+        "type": "object"
+      },
       "PlanningQuestion": {
         "additionalProperties": false,
         "properties": {
@@ -3942,7 +4058,8 @@
           "author": {
             "enum": [
               "merger",
-              "user"
+              "user",
+              "single_member"
             ],
             "title": "Author",
             "type": "string"
@@ -5077,6 +5194,16 @@
           "min_retained_sequence": {
             "title": "Min Retained Sequence",
             "type": "integer"
+          },
+          "planning_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanningProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "run": {
             "$ref": "#/components/schemas/Run"
@@ -8483,6 +8610,59 @@
           }
         },
         "summary": "Planning Confirmation Hash Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/planning_jobs/{job_id}/promote_single": {
+      "post": {
+        "description": "Promote a single accepted draft to a revision after a quorum loss.\n\nThe caller must explicitly set ``confirm_degraded``. Without that flag\nthe request is rejected even if exactly one accepted draft exists. The\nresulting revision is recorded with ``author='single_member'`` and the\njob keeps ``degraded=true`` so downstream consumers can distinguish a\ndegraded Council from a consensus plan.",
+        "operationId": "promote_single_planning_endpoint_api_planning_jobs__job_id__promote_single_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanningPromoteSingleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningPromoteSingle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Promote Single Planning Endpoint",
         "tags": [
           "domain"
         ]

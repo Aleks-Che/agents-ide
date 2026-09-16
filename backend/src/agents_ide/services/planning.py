@@ -24,6 +24,8 @@ from agents_ide.domain.planning import (
     PlanningJobCreate,
     PlanningJobView,
     PlanningMemberView,
+    PlanningPromoteSingle,
+    PlanningPromoteSingleRequest,
     PlanningRetried,
     PlanningRetryRequest,
     PlanningRevisionView,
@@ -420,6 +422,131 @@ def retry_planning_job(
     )
 
 
+# Council ends in 'failed' with this code when fewer than two participants
+# produced an accepted draft. The user may explicitly accept the lone
+# accepted draft as the plan; that path is recorded as a 'single_member'
+# revision and never as a successful Council consensus.
+_QUORUM_LOST_CODES = {"council_quorum_missing"}
+
+
+def promote_single_member_plan(
+    session: Session, job_id: str, payload: PlanningPromoteSingleRequest
+) -> PlanningPromoteSingle:
+    """Promote the single accepted draft after a quorum loss into a revision.
+
+    The job must be in ``failed`` with ``last_error.code`` equal to
+    ``council_quorum_missing`` (or any code in ``_QUORUM_LOST_CODES``) and
+    must have exactly one accepted draft. The user must explicitly set
+    ``confirm_degraded`` to acknowledge that this is not a Council consensus.
+
+    The new revision uses ``author='single_member'`` so the audit trail and
+    downstream consumers (RunStart, snapshot, UI) can detect the degraded
+    source. Failed/invalid drafts remain untouched and remain available for
+    diagnostics.
+    """
+    begin_write(session)
+    job = get_planning_job(session, job_id)
+    if job.state != "failed":
+        raise AppError("planning_state_invalid", "Single-member promotion needs a failed job", 409)
+    if job.state_version != payload.expected_state_version:
+        raise AppError("planning_state_version_invalid", "Expected state version mismatch", 409)
+    last_error = json.loads(job.last_error_json) if job.last_error_json else {}
+    if last_error.get("code") not in _QUORUM_LOST_CODES:
+        raise AppError(
+            "planning_quorum_required",
+            "Single-member promotion requires a quorum loss",
+            409,
+        )
+    if job.lease_owner and (job.lease_expires_at or 0) > utc_now():
+        raise AppError("planning_worker_active", "Planning worker has not released the job", 409)
+    if not job.request_hash:
+        raise AppError("legacy_planning_unverifiable", "Legacy planning source is unverified", 409)
+    if content_hash(json.loads(job.context_snapshot_json)) != job.read_manifest_hash:
+        raise AppError("context_changed", "Pinned planning context changed", 409)
+    members = list(
+        session.scalars(
+            select(PlanningMember)
+            .where(PlanningMember.job_id == job.id)
+            .order_by(PlanningMember.slot_index)
+        )
+    )
+    participants = [m for m in members if m.role == "participant"]
+    accepted_members = [m for m in participants if m.status == "succeeded"]
+    if len(accepted_members) != 1:
+        raise AppError(
+            "planning_single_member_count",
+            "Exactly one accepted draft is required",
+            409,
+            {"n_accepted": len(accepted_members)},
+        )
+    accepted_member = accepted_members[0]
+    draft = session.scalar(
+        select(PlanningDraft).where(PlanningDraft.member_id == accepted_member.id)
+    )
+    if (
+        draft is None
+        or draft.job_id != job.id
+        or not draft.accepted
+        or draft.parse_status != "found"
+        or draft.body_truncated
+        or draft.content_hash != content_hash(draft.body_text)
+        or draft.byte_length != len(draft.body_text.encode("utf-8"))
+    ):
+        raise AppError(
+            "planning_single_member_invalid",
+            "The accepted draft is missing or invalid",
+            409,
+        )
+    try:
+        document = parse_document(draft.body_text)
+    except ValueError as exc:
+        raise AppError(
+            "planning_single_member_invalid", "The accepted draft is invalid", 409
+        ) from exc
+    # Promotion consumes persisted evidence, not another external attempt. Expired
+    # budgets are allowed, but unfinished work cannot be silently bypassed.
+    if any(m.status in {"pending", "running", "unknown"} for m in participants) or session.scalar(
+        select(PlanningAttempt.id)
+        .where(PlanningAttempt.job_id == job.id, PlanningAttempt.outcome == "running")
+        .limit(1)
+    ):
+        raise AppError("planning_work_unresolved", "Planning work is still unresolved", 409)
+    revision = add_revision(session, job, document, author="single_member")
+    job.merged_by_member_id = accepted_member.id
+    job.degraded = True
+    job.n_participants_actual = 1
+    job.last_error_json = None
+    job.finished_at = None
+    job.generation += 1
+    job.lease_owner, job.lease_expires_at = None, None
+    # The state move is owned by add_revision: 'needs_answers' if questions
+    # remain in the lone draft, otherwise 'ready_for_confirmation'.
+    _record_event(
+        session,
+        job_id,
+        event_type="planning.single_member_promoted",
+        member_id=accepted_member.id,
+        payload={
+            "revision_number": revision.revision_number,
+            "n_participants_actual": 1,
+            "model_id": accepted_member.model_id,
+            "draft_id": draft.id,
+            "draft_hash": draft.content_hash,
+            "generation": job.generation,
+        },
+    )
+    session.flush()
+    return PlanningPromoteSingle(
+        state=PlanningState(job.state),
+        state_version=job.state_version,
+        revision_number=revision.revision_number,
+        degraded=job.degraded,
+        n_participants_actual=job.n_participants_actual,
+        accepted_member_id=accepted_member.id,
+        accepted_model_id=accepted_member.model_id or None,
+    )
+
+
 def revision_hash(revision: PlanningRevision) -> str:
     return content_hash(
         {
@@ -627,7 +754,7 @@ def _revision_to_view(revision: PlanningRevision) -> PlanningRevisionView:
     return PlanningRevisionView(
         id=revision.id,
         revision_number=revision.revision_number,
-        author=cast(Literal["merger", "user"], revision.author),
+        author=cast(Literal["merger", "user", "single_member"], revision.author),
         body_text=sanitize(revision.body_text),
         body_truncated=revision.body_truncated,
         parse=cast(Literal["found", "none_found", "invalid_format"], revision.parse_status),
@@ -801,6 +928,13 @@ def planning_inputs(
     if job.project_id != project_id:
         raise AppError("planning_project_mismatch", "Council plan belongs to another project", 409)
     document = parse_document(revision.plan_json)
+    provenance = {
+        "degraded": job.degraded,
+        "n_participants_requested": job.n_participants_requested,
+        "n_participants_actual": job.n_participants_actual,
+        "revision_author": revision.author,
+        "source_member_id": job.merged_by_member_id,
+    }
     pinned = {
         "task": job.task_text,
         "plan": revision.body_text,
@@ -809,6 +943,7 @@ def planning_inputs(
         "planning_questions": json.loads(revision.questions_json),
         "planning_answers": json.loads(revision.answers_json),
         "planning_revision_hash": revision.confirmation_hash,
+        "planning_provenance": provenance,
     }
     if any(k in inputs and inputs[k] != v for k, v in pinned.items()):
         raise AppError(

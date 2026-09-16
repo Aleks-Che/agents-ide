@@ -349,6 +349,7 @@ function ReviewForm({
   )
   const [editing, setEditing] = useState(false)
   const [acknowledgeUnknown, setAcknowledgeUnknown] = useState(false)
+  const [confirmDegraded, setConfirmDegraded] = useState(false)
   const [body, setBody] = useState(() =>
     JSON.stringify(
       {
@@ -416,6 +417,18 @@ function ReviewForm({
       ),
     onSettled: refresh,
   })
+  const promoteSingle = useMutation({
+    mutationFn: () =>
+      planningApi.promoteSingle(
+        job.id,
+        {
+          expected_state_version: job.state_version,
+          confirm_degraded: true,
+        },
+        csrf,
+      ),
+    onSettled: refresh,
+  })
   const terminal = ['confirmed', 'cancelled', 'failed'].includes(job.state)
   const revisable = ['ready_for_confirmation', 'needs_answers'].includes(
     job.state,
@@ -428,6 +441,15 @@ function ReviewForm({
       'planning_budget_exhausted',
       'planning_deadline_exceeded',
     ].includes(String(job.last_error?.code))
+  const quorumLost =
+    job.state === 'failed' &&
+    String(job.last_error?.code) === 'council_quorum_missing'
+  const singleAccepted = quorumLost && job.n_participants_actual === 1
+  const promoteable =
+    singleAccepted &&
+    job.drafts?.some(
+      (d) => d.accepted && !d.body_truncated && d.parse_status === 'found',
+    )
   const unknownResult = job.members?.some((m) =>
     ['unknown', 'running'].includes(m.status),
   )
@@ -442,7 +464,11 @@ function ReviewForm({
     )
   })
   const busy =
-    submit.isPending || confirm.isPending || cancel.isPending || retry.isPending
+    submit.isPending ||
+    confirm.isPending ||
+    cancel.isPending ||
+    retry.isPending ||
+    promoteSingle.isPending
   return (
     <Modal onClose={onClose} busy={busy} labelledBy="council-review-title">
       <div className="dialog wide council-dialog">
@@ -452,6 +478,14 @@ function ReviewForm({
           {job.n_participants_actual}/{job.n_participants_requested}
           {job.degraded ? ' · уменьшенный состав' : ''}
         </p>
+        {promoteable ? (
+          <p role="status" className="council-degraded-banner">
+            Кворум не набран: принят только один черновик. Это не полное
+            согласие нескольких моделей; в Run будет передан единственный план с
+            пометкой уменьшенного состава. Невалидные и неуспешные черновики
+            останутся в истории для диагностики.
+          </p>
+        ) : null}
         <p>
           Вызовы: {String(job.usage?.external_calls ?? 0)} · токены:{' '}
           {String(job.usage?.tokens_used ?? 'неизвестно')} · стоимость:{' '}
@@ -503,8 +537,13 @@ function ReviewForm({
         {revision ? (
           <>
             <h3>
-              Ревизия {revision.revision_number} ·{' '}
-              {revision.confirmed_at ? 'подтверждена' : 'не подтверждена'}
+              Ревизия {revision.revision_number} · автор:{' '}
+              {revision.author === 'single_member'
+                ? 'единственный черновик (уменьшенный состав)'
+                : revision.author === 'merger'
+                  ? 'объединяющий'
+                  : 'пользователь'}{' '}
+              · {revision.confirmed_at ? 'подтверждена' : 'не подтверждена'}
             </h3>
             <pre className="council-plan">{revision.body_text}</pre>
             <ol>
@@ -604,13 +643,6 @@ function ReviewForm({
                 : 'Получаем и объединяем черновики…'}
           </p>
         )}
-        {[submit.error, confirm.error, cancel.error, retry.error]
-          .filter(Boolean)
-          .map((error, i) => (
-            <p role="alert" key={i}>
-              {launchError(error)}
-            </p>
-          ))}
         {retryable ? (
           <div>
             <p>
@@ -632,6 +664,39 @@ function ReviewForm({
             ) : null}
           </div>
         ) : null}
+        {promoteable ? (
+          <fieldset className="council-promote-single" disabled={busy}>
+            <legend>Принять единственный черновик как план</legend>
+            <p>
+              Единственный черновик станет планом с тем же текстом и вопросами.
+              Затем вы сможете проверить и подтвердить его для Run. Пометка
+              уменьшенного состава сохранится и после ручных правок.
+            </p>
+            <label>
+              <input
+                type="checkbox"
+                checked={confirmDegraded}
+                disabled={busy}
+                onChange={(e) => setConfirmDegraded(e.target.checked)}
+              />
+              Подтверждаю, что это уменьшенный состав без согласия остальных
+              участников
+            </label>
+          </fieldset>
+        ) : null}
+        {[
+          submit.error,
+          confirm.error,
+          cancel.error,
+          retry.error,
+          promoteSingle.error,
+        ]
+          .filter(Boolean)
+          .map((error, i) => (
+            <p role="alert" key={i}>
+              {launchError(error)}
+            </p>
+          ))}
         <footer>
           {!terminal ? (
             <button
@@ -649,6 +714,15 @@ function ReviewForm({
               onClick={() => retry.mutate()}
             >
               Повторить после восстановления доступа
+            </button>
+          ) : null}
+          {promoteable ? (
+            <button
+              className="quiet"
+              disabled={!csrf || busy || !confirmDegraded}
+              onClick={() => promoteSingle.mutate()}
+            >
+              Принять единственный черновик
             </button>
           ) : null}
           <button onClick={onClose}>Закрыть</button>

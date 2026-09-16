@@ -176,6 +176,13 @@ export function RunScreen({
         {data ? (
           <>
             <section className="run-meta" aria-label="Сводка Run">
+              {snapshot.data?.planning_provenance?.degraded ? (
+                <p role="status" className="council-degraded-banner">
+                  План Council принят в уменьшенном составе: участников{' '}
+                  {snapshot.data.planning_provenance.n_participants_actual}/
+                  {snapshot.data.planning_provenance.n_participants_requested}.
+                </p>
+              ) : null}
               <dl>
                 <div>
                   <dt>Состояние</dt>

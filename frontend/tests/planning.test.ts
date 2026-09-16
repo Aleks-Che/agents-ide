@@ -116,4 +116,31 @@ describe('Council transport', () => {
     ).rejects.toBeInstanceOf(ApiError)
     expect(fetch).toHaveBeenCalledTimes(1)
   })
+  it('promotes a single accepted draft only after explicit degraded confirmation', async () => {
+    const fetch = capture()
+    const body = {
+      expected_state_version: 3,
+      confirm_degraded: true,
+    }
+    await planningApi.promoteSingle('job', body, 'csrf')
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('/api/planning_jobs/job/promote_single')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual(body)
+    expect(init.headers.get('X-CSRF-Token')).toBe('csrf')
+  })
+  it('propagates conflicts when the single-member promotion races the state', async () => {
+    const fetch = capture(409, {
+      code: 'planning_state_version_invalid',
+      message: 'Reload',
+    })
+    await expect(
+      planningApi.promoteSingle(
+        'job',
+        { expected_state_version: 9, confirm_degraded: true },
+        'csrf',
+      ),
+    ).rejects.toBeInstanceOf(ApiError)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
 })

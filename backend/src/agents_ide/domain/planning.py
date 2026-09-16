@@ -143,7 +143,7 @@ class PlanningRevisionView(ApiOutput):
     answers: list[dict[str, Any]] = Field(default_factory=list)
     id: str
     revision_number: int
-    author: Literal["merger", "user"]
+    author: Literal["merger", "user", "single_member"]
     body_text: str
     body_truncated: bool
     parse: Literal["found", "none_found", "invalid_format"]
@@ -240,6 +240,38 @@ class PlanningRetried(ApiOutput):
     state_version: int
     reset_member_ids: list[str] = Field(default_factory=list)
     preserved_member_ids: list[str] = Field(default_factory=list)
+
+
+class PlanningPromoteSingleRequest(ApiModel):
+    expected_state_version: int = Field(ge=0)
+    # The user must explicitly accept the degraded Council. Without this
+    # confirmation the API will refuse to create a single-member revision
+    # even when the only accepted draft is otherwise valid.
+    confirm_degraded: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def _confirm_required(self) -> PlanningPromoteSingleRequest:
+        if not self.confirm_degraded:
+            raise ValueError("confirm_degraded must be true to accept a single-member plan")
+        return self
+
+
+class PlanningPromoteSingle(ApiOutput):
+    state: PlanningState
+    state_version: int
+    revision_number: int
+    degraded: bool
+    n_participants_actual: int
+    accepted_member_id: str
+    accepted_model_id: str | None
+
+
+class PlanningProvenance(ApiOutput):
+    degraded: bool
+    n_participants_requested: int
+    n_participants_actual: int
+    revision_author: Literal["merger", "user", "single_member"]
+    source_member_id: str | None
 
 
 class PlanningJobView(ApiOutput):

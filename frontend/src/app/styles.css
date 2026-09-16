@@ -1569,3 +1569,29 @@ button.primary {
   background: #10181c;
   border-radius: 6px;
 }
+
+.council-degraded-banner {
+  border: 1px solid #c08a2c;
+  background: rgba(192, 138, 44, 0.1);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #f3d089;
+}
+
+.council-promote-single {
+  border: 1px solid #c08a2c;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.council-promote-single legend {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #f3d089;
+  padding: 0 4px;
+}

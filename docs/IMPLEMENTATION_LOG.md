@@ -1,5 +1,60 @@
 # Журнал реализации
 
+### 2026-09-16 · Ревью Council: принятие единственного черновика
+
+**Результат:** ошибки исправлены; явное принятие одиночного плана проверено для текущего LLM Council. Полная приёмка 9A с harness/read workspace и реальными моделями остаётся открытой.
+
+**Исправления и доказательства.**
+
+- Исходный тест миграции работал с пустой таблицей: INSERT … SELECT не создавал ни одной строки. На заполненной истории воспроизведён `FOREIGN KEY constraint failed` при перестройке planning_revisions. [Миграция 0016](../backend/src/agents_ide/persistence/migrations/versions/0016_council_single_member.py) теперь атомарно переносит связанные ответы, сохраняет все поля ревизий/индексы/триггеры и оставляет FK включёнными. Проверены подтверждённые ревизии с ответами, действительный INSERT single_member и откат при искусственном сбое восстановления ответов. Downgrade с single_member заранее отклоняется: подтверждённое авторство не переписывается.
+- Promote оставлял старые last_error/finished_at. Теперь очищает их при переходе к проверке плана; прежняя ошибка остаётся в событиях. Принятые и диагностические черновики, attempts, usage, бюджет и исходное started_at сохраняются.
+- В [planning.py](../backend/src/agents_ide/services/planning.py) добавлены проверка живого lease, снятие владения/увеличение generation, отказ при незавершённых попытках и pending/running/unknown участниках. Конкурирующие promote/retry сериализуются; проходит ровно одна команда. Promote не расходует вызовы и допускается после исчерпания бюджета уже завершённых попыток.
+- Проверяются целостность закреплённого контекста и черновика, его job_id, hash/байты/флаг усечения. Невалидный JSON возвращает управляемый 409, без ревизии/события. Legacy-задание не обходится. confirm_degraded обязателен и принимает только настоящий JSON boolean true, без приведения строк/чисел.
+- Исходный Run snapshot не содержал заявленной пометки уменьшенного состава. Добавлен защищённый planning_provenance в inputs/snapshot, типизированный блок `/runs/{id}/snapshot` и баннер в [RunsPanel](../frontend/src/features/runs/RunsPanel.tsx). Пометка сохраняется после ответов/ручных правок и смены автора текущей ревизии на user. Подмена через inputs отклоняется; неподтверждённая ревизия не запускается. Старые Run без блока возвращают null.
+- Браузерный сценарий расширен: обязательный чекбокс → потеря успешного ответа promote → needs_answers → ответы → отдельный confirm → запуск Run и баннер 1/2. Модели вызываются только два раза, повторов при promote/ответах/confirm нет. Убрано внутреннее имя single_member из пояснения пользовательского действия.
+
+**Проверки.**
+
+- Общий backend-набор этапов 8/9/9A — **173 passed**, 396 нерелевантных тестов исключены, 480 с. Добавлены 18 регрессий в [test_stage9a_promote_review.py](../backend/tests/integration/test_stage9a_promote_review.py); переписан неполный тест миграции и добавлен откат при сбое. Финальный набор миграций отдельно — **4 passed**, включая повторное обновление через штатный database.migrate. Полный backend-набор не запускался; два прежних предупреждения deprecation TestClient остаются.
+- Frontend — **129 Vitest passed**, полный **25 Playwright passed**, включая расширенный путь одиночного плана до Run. В первом общем браузерном прогоне старый retry-тест завис на чтении после искусственной потери ответа, хотя трасса подтвердила серверный 200; перехват сохранён до восстановления UI с явной проверкой успешного ответа. Повтор полного набора — 25/25 без ошибок.
+- Mypy Windows/Linux (**93 модуля**), Ruff check/format, generate_contracts.py --check, ESLint/Prettier и tsc/Vite build — без ошибок. JS 433,41 kB / gzip 119,20 kB. Контракты обязательного confirm_degraded и planning_provenance синхронизированы.
+
+**Границы:** этап 9A остаётся частичным. Harness, read-only workspace, выбор произвольного подмножества неуспешных участников и gate с реальными моделями не реализованы этой итерацией. Успешные участники уже сохраняются при retry. Promote и обычное подтверждение плана — два отдельных действия; promote не запускает Run и не повторяет платный вызов. Потребитель старого Run не должен додумывать provenance из текущего PlanningJob.
+
+### 2026-09-16 · Этап 9A · Council: явный одиночный план при потере кворума
+
+Исторический отчёт до ревью; исправления и окончательные проверки приведены выше.
+
+**Статус:** добавлен `POST /api/planning_jobs/{id}/promote_single`, миграция `0016_council_single_member` и UI-кнопка с обязательным `confirm_degraded`. Ревизия записывается с `author='single_member'`, невалидные/неуспешные черновики остаются в истории для диагностики. Полная приёмка 9A с harness/read workspace, повтор только недостающих участников и реальный gate с платными моделями остаются открытыми.
+
+**Реализовано.**
+
+- [`persistence/migrations/versions/0016_council_single_member.py`](../backend/src/agents_ide/persistence/migrations/versions/0016_council_single_member.py) — переопределяет CHECK-ограничение `planning_revisions.author` под `('merger','user','single_member')` и сохраняет триггеры защиты подтверждённой ревизии. `SCHEMA_REVISION` поднят до `0016_council_single_member`.
+- [`persistence/models.py`](../backend/src/agents_ide/persistence/models.py) — `PlanningRevision` допускает `author='single_member'`.
+- [`domain/planning.py`](../backend/src/agents_ide/domain/planning.py) — добавлены `PlanningPromoteSingleRequest` (`expected_state_version`, `confirm_degraded`, model_validator требует явное согласие) и `PlanningPromoteSingle`. `PlanningRevisionView.author` расширен до `Literal['merger','user','single_member']`.
+- [`services/planning.py`](../backend/src/agents_ide/services/planning.py) — `promote_single_member_plan` под `begin_write`: принимает только `failed` с `last_error.code ∈ {council_quorum_missing}`, проверяет ровно один принятый участник и его валидный черновик, создаёт ревизию через `add_revision(..., author='single_member')`, фиксирует `degraded=true`, событие `planning.single_member_promoted` с ID/моделью принятого участника. Невалидные/неуспешные черновики не изменяются и сохраняются для диагностики.
+- [`api/domain.py`](../backend/src/agents_ide/api/domain.py) — endpoint `POST /api/planning_jobs/{job_id}/promote_single`. OpenAPI/TS-контракты перегенерированы.
+- [`frontend/src/api/planning.ts`](../frontend/src/api/planning.ts) — `planningApi.promoteSingle` через cookie/CSRF.
+- [`frontend/src/features/planning/CouncilPanel.tsx`](../frontend/src/features/planning/CouncilPanel.tsx) — отдельный баннер «Кворум не набран: принят только один черновик», обязательный чекбокс «Подтверждаю, что это уменьшенный состав» и кнопка «Принять единственный черновик»; автор ревизии отображается в заголовке.
+- [`frontend/src/app/styles.css`](../frontend/src/app/styles.css) — `.council-degraded-banner` и `.council-promote-single`.
+
+**Границы и нюансы.**
+
+- Endpoint требует `confirm_degraded=true`. Без явного согласия модельный валидатор возвращает 422 `validation_error`, никаких изменений в БД.
+- Состояние `failed` обязательно. После promote состояние переходит в `ready_for_confirmation` или `needs_answers` (если в черновике были вопросы). Повторный вызов на новом состоянии возвращает 409 `planning_state_invalid`.
+- Число участников, переданных в `expected_state_version`, защищено от оптимистичных конфликтов. Попытки/использование/бюджет не меняются: promote использует уже сохранённый черновик.
+- Без подтверждения невозможно ни создать ревизию, ни использовать её в Run. Ревизия `single_member` подтверждается через обычный `confirm` и попадает в `PlanningSource` существующего пути.
+- Council через harness, read-only workspace и повтор только недостающих участников остаются открытыми пунктами 9A.
+- Реальные платные модели и полная A71–A74 не закрыты; миграция и поведение совместимы с существующими заданиями 0013–0015.
+
+**Проверки.**
+
+- Backend `pytest tests/integration/test_stage9a_promote_single.py` — **7 passed**: успешная ревизия переводит задание в `ready_for_confirmation` и подтверждается; `confirm_degraded=false` отклоняется 422; чужие коды ошибки (например, `merge_unavailable`) дают 409 `planning_quorum_required`; 0 принятых участников отклоняется 409 `planning_single_member_count`; неверная версия состояния и повторный promote после успеха отклоняются; с вопросами переходит в `needs_answers`. Полный stage 9A набор (`test_stage9a_dispatcher`, `test_stage9a_migration`, `test_stage9a_planning`, `test_stage9a_planning_run`, `test_stage9a_real_worker`, `test_stage9a_retry_review`, `test_stage9a_promote_single`) — **58 passed**. Stage 8/9 регрессии — **154 passed**.
+- Миграция `test_single_member_migration_allows_degraded_author` — успешный upgrade/downgrade 0015↔0016, FK-check и приём нового автора.
+- Mypy — **93 модуля** без ошибок. Ruff check/format — clean. `scripts/generate_contracts.py --check` — синхронизирован.
+- Frontend: новый `planning.test.ts` — два кейса для `promoteSingle` (тело/CSRF и 409). Полный Vitest — **129 passed**. ESLint, Prettier и tsc/Vite build — зелёные; бандл 433,07 kB (gzip 119,13 kB).
+- Playwright: новый сценарий «Council with a single accepted draft can be promoted to a degraded plan» проверен через loopback HTTP и dispatch_council.py: баннер, блокировка кнопки до чекбокса, успешный promote, ревизия автора `single_member`, событие `planning.single_member_promoted`, невалидные черновики сохранены. Полный прогон — **25 passed**.
+
 ### 2026-09-16 · Ревью Council retry/resolve после восстановления доступа
 
 **Результат:** найденные ошибки исправлены. Этот раздел уточняет первоначальную запись о retry ниже. Пункт закрыт для текущего LLM direct/group Council; полная приёмка 9A с harness/read workspace и платными моделями остаётся открытой.

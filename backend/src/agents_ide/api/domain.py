@@ -39,6 +39,8 @@ from agents_ide.domain.planning import (
     PlanningConfirmRequest,
     PlanningJobCreate,
     PlanningJobView,
+    PlanningPromoteSingle,
+    PlanningPromoteSingleRequest,
     PlanningRetried,
     PlanningRetryRequest,
 )
@@ -681,6 +683,7 @@ def run_snapshot_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]:
         "last_sequence": highest or 0,
         "min_retained_sequence": minimum or 0,
         "selection": selection,
+        "planning_provenance": json.loads(run_row.snapshot_json).get("planning_provenance"),
     }
 
 
@@ -1119,6 +1122,24 @@ def retry_planning_job_endpoint(
     session: SessionDep, job_id: str, payload: PlanningRetryRequest
 ) -> PlanningRetried:
     return planning.retry_planning_job(session, job_id, payload)
+
+
+@router.post(
+    "/planning_jobs/{job_id}/promote_single",
+    response_model=PlanningPromoteSingle,
+)
+def promote_single_planning_endpoint(
+    session: SessionDep, job_id: str, payload: PlanningPromoteSingleRequest
+) -> PlanningPromoteSingle:
+    """Promote a single accepted draft to a revision after a quorum loss.
+
+    The caller must explicitly set ``confirm_degraded``. Without that flag
+    the request is rejected even if exactly one accepted draft exists. The
+    resulting revision is recorded with ``author='single_member'`` and the
+    job keeps ``degraded=true`` so downstream consumers can distinguish a
+    degraded Council from a consensus plan.
+    """
+    return planning.promote_single_member_plan(session, job_id, payload)
 
 
 @router.post(

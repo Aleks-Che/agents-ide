@@ -267,6 +267,7 @@ def start_run(session: Session, payload: RunStart) -> Run:
         )
     if payload.planning_source is not None:
         snapshot["planning_source"] = payload.planning_source.model_dump(mode="json")
+        snapshot["planning_provenance"] = payload.inputs["planning_provenance"]
     snapshot["execution_mode"] = payload.execution_mode
     snapshot["fake_scenario"] = (
         payload.fake_scenario.model_dump(mode="json") if payload.fake_scenario else None

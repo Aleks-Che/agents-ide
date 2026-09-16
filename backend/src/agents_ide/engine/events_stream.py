@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from agents_ide.domain.planning import PlanningProvenance
 from agents_ide.domain.schemas import Run as RunSchema
 from agents_ide.engine.events import EventEnvelope
 from agents_ide.errors import AppError
@@ -37,6 +38,7 @@ class RunSnapshot(BaseModel):
     last_sequence: int
     min_retained_sequence: int
     selection: SelectionSummary | None = None
+    planning_provenance: PlanningProvenance | None = None
 
 
 class ArtifactView(BaseModel):
