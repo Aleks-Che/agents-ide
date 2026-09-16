@@ -265,6 +265,21 @@ test('Council recovers creation, reviews complete plan, confirms revision and su
     await expect(
       dialog.getByRole('button', { name: 'Запустить', exact: true }),
     ).toBeEnabled()
+    const planSelect = dialog.getByRole('combobox', {
+      name: 'Подтверждённый план Council',
+      exact: true,
+    })
+    await expect(planSelect).toHaveValue(`${job.id}:3`)
+    await expect(planSelect.locator('option')).toHaveCount(2)
+    await planSelect.selectOption('')
+    await expect(
+      dialog.getByRole('button', { name: 'Запустить', exact: true }),
+    ).toBeDisabled()
+    await planSelect.selectOption(`${job.id}:3`)
+    await dialog.getByRole('button', { name: 'Запустить preflight' }).click()
+    await expect(
+      dialog.getByRole('button', { name: 'Запустить', exact: true }),
+    ).toBeEnabled()
     const runResponse = page.waitForResponse(
       (r) => r.url().endsWith('/api/runs') && r.request().method() === 'POST',
     )

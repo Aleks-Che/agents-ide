@@ -140,6 +140,19 @@ export interface ModelGroupQuery {
 }
 
 export const groupsApi = {
+  export(id: string): Promise<ModelGroupExport> {
+    return request<ModelGroupExport>(`/model_groups/${id}/export`)
+  },
+  import(
+    body: ApiSchemas['ModelGroupImport'],
+    csrf: string,
+  ): Promise<ModelGroup> {
+    return request<ModelGroup>(
+      '/model_groups/import',
+      { method: 'POST', body: JSON.stringify(body) },
+      csrf,
+    )
+  },
   list(query: ModelGroupQuery = {}): Promise<ModelGroup[]> {
     const params = new URLSearchParams()
     if (query.kind) params.set('kind', query.kind)

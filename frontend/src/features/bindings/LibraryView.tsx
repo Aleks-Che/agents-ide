@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { lazy, Suspense, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
 import {
@@ -16,6 +16,11 @@ import { useCsrfToken } from '../../app/session'
 import { formatDateTime, shortHash } from '../../app/format'
 import { BindingEditor, type BindingEditorResources } from './BindingEditor'
 import { Modal } from '../../app/Modal'
+const GraphEditor = lazy(() =>
+  import('../pipelines/GraphEditor').then((module) => ({
+    default: module.GraphEditor,
+  })),
+)
 
 interface LibraryViewProps {
   projects: Project[]
@@ -107,6 +112,21 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
   const [openTemplate, setOpenTemplate] = useState<PipelineTemplate | null>(
     null,
   )
+  const [editor, setEditor] = useState<{
+    templateId: string
+    version?: PipelineVersion
+  } | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [templateName, setTemplateName] = useState('')
+  const createTemplate = useMutation({
+    mutationFn: () => templatesApi.create({ name: templateName.trim() }, csrf),
+    onSuccess: (created) => {
+      setCreating(false)
+      setTemplateName('')
+      void client.invalidateQueries({ queryKey: ['templates'] })
+      setEditor({ templateId: created.id })
+    },
+  })
   const copyPresetMutation = useMutation({
     mutationFn: ({ preset, name }: { preset: PresetSummary; name: string }) =>
       presetsApi.copy(preset.id, csrf, name),
@@ -131,6 +151,13 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
             просматривайте версии и настраивайте выбор моделей для проекта.
           </span>
         </div>
+        <button
+          type="button"
+          disabled={!csrf}
+          onClick={() => setCreating(true)}
+        >
+          Новый шаблон
+        </button>
       </header>
       <div className="library-grid">
         {[groups, llmGroups, harnesses, connections].some(
@@ -221,6 +248,15 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
                     >
                       Версии…
                     </button>
+                    {tpl.kind !== 'system' && (
+                      <button
+                        type="button"
+                        className="quiet"
+                        onClick={() => setEditor({ templateId: tpl.id })}
+                      >
+                        Конструктор
+                      </button>
+                    )}
                   </span>
                 </li>
               ))}
@@ -313,6 +349,63 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
           }
         />
       ) : null}
+      {creating && (
+        <Modal
+          onClose={() => setCreating(false)}
+          busy={createTemplate.isPending}
+          label="Новый шаблон"
+        >
+          <form
+            className="dialog"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (templateName.trim() && csrf) createTemplate.mutate()
+            }}
+          >
+            <h3>Новый шаблон</h3>
+            <label>
+              Название шаблона
+              <input
+                value={templateName}
+                onChange={(event) => setTemplateName(event.target.value)}
+                required
+                maxLength={120}
+              />
+            </label>
+            {createTemplate.error && (
+              <p role="alert" className="error">
+                {renderLibraryError(createTemplate.error)}
+              </p>
+            )}
+            <footer>
+              <button
+                type="button"
+                className="quiet"
+                onClick={() => setCreating(false)}
+              >
+                Отмена
+              </button>
+              <button type="submit">Создать шаблон</button>
+            </footer>
+          </form>
+        </Modal>
+      )}
+      {editor && (
+        <Suspense fallback={<p role="status">Открываем конструктор…</p>}>
+          <GraphEditor
+            templateId={editor.templateId}
+            initialVersion={editor.version}
+            projectId={selectedProjectId}
+            onClose={() => setEditor(null)}
+            onCreated={(binding) => {
+              setEditor(null)
+              void client
+                .invalidateQueries({ queryKey: ['bindings'] })
+                .then(() => setOpenBindingId(binding.id))
+            }}
+          />
+        </Suspense>
+      )}
       {openTemplate ? (
         <TemplateVersionsDialog
           template={openTemplate}
@@ -324,6 +417,10 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
               .then(() => setOpenBindingId(binding.id))
           }}
           onClose={() => setOpenTemplate(null)}
+          onEdit={(version) => {
+            setOpenTemplate(null)
+            setEditor({ templateId: openTemplate.id, version })
+          }}
         />
       ) : null}
       {openBindingId ? (
@@ -414,6 +511,7 @@ interface TemplateVersionsDialogProps {
   projectId: string | null
   onCreated: (binding: PipelineBinding) => void
   onClose: () => void
+  onEdit: (version: PipelineVersion) => void
 }
 
 function TemplateVersionsDialog({
@@ -421,6 +519,7 @@ function TemplateVersionsDialog({
   projectId,
   onCreated,
   onClose,
+  onEdit,
 }: TemplateVersionsDialogProps) {
   const csrf = useCsrfToken()
   const [name, setName] = useState(template.name.slice(0, 120))
@@ -515,6 +614,15 @@ function TemplateVersionsDialog({
                 >
                   Создать привязку v{version.version_number}
                 </button>
+                {template.kind !== 'system' && (
+                  <button
+                    type="button"
+                    className="quiet"
+                    onClick={() => onEdit(version)}
+                  >
+                    Открыть v{version.version_number} в конструкторе
+                  </button>
+                )}
               </li>
             ))}
           </ol>

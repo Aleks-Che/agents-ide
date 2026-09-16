@@ -15,6 +15,10 @@ import type { Chat, Project } from '../../api/projects'
 import { Modal } from '../../app/Modal'
 import { formatDateTime, shortHash } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
+import { ConfirmedPlanSelect } from '../planning/ConfirmedPlanSelect'
+import { ObjectFields } from '../pipelines/SchemaFields'
+import { object } from '../pipelines/graph'
+import type { Schema } from '../../api/graphs'
 import {
   formatSettingSource,
   type BindingSelectionDraft,
@@ -50,7 +54,7 @@ interface LaunchRunDialogProps {
 }
 
 export function LaunchRunDialog({
-  planningSource,
+  planningSource: initialPlanningSource,
   project,
   chat,
   draft,
@@ -63,6 +67,9 @@ export function LaunchRunDialog({
 }: LaunchRunDialogProps) {
   const csrf = useCsrfToken()
   const client = useQueryClient()
+  const [planningSource, setPlanningSource] = useState(
+    initialPlanningSource ?? null,
+  )
   const [mode, setMode] = useState<LaunchMode>('binding')
   const [bindingId, setBindingId] = useState('')
   const [executionMode, setExecutionMode] = useState<'real' | 'simulated'>(
@@ -437,6 +444,13 @@ export function LaunchRunDialog({
               </>
             ) : null}
             {version.data ? (
+              <p className="hint">
+                Схема {version.data.schema_version} · возможности графа:{' '}
+                {version.data.required_features.join(', ') || 'базовый граф'}.
+                Capability исполнителей и права отображаются в preflight.
+              </p>
+            ) : null}
+            {version.data ? (
               <details>
                 <summary>Граф и настройки версии</summary>
                 <pre>
@@ -474,6 +488,19 @@ export function LaunchRunDialog({
                 ниже.
               </p>
             ) : null}
+            <ConfirmedPlanSelect
+              projectId={project.id}
+              chatId={chat.id}
+              value={planningSource}
+              onChange={setPlanningSource}
+            />
+            {version.data && (
+              <LaunchInputsForm
+                schema={object(version.data.graph.input_schema) as Schema}
+                inputsText={inputsText}
+                onChange={setInputsText}
+              />
+            )}
             <label htmlFor="launch-inputs">Входы запуска (JSON)</label>
             <textarea
               id="launch-inputs"
@@ -624,6 +651,38 @@ export function LaunchRunDialog({
         </footer>
       </form>
     </Modal>
+  )
+}
+
+function LaunchInputsForm({
+  schema,
+  inputsText,
+  onChange,
+}: {
+  schema: Schema
+  inputsText: string
+  onChange: (text: string) => void
+}) {
+  let value: Record<string, unknown>
+  try {
+    value = object(JSON.parse(inputsText))
+  } catch {
+    return (
+      <p className="hint">
+        Исправьте JSON входов, чтобы продолжить редактирование полей.
+      </p>
+    )
+  }
+  return (
+    <details>
+      <summary>Заполнить входы по схеме</summary>
+      <ObjectFields
+        schema={{ ...schema, required: [] }}
+        value={value}
+        label="Переопределения входов"
+        onChange={(next) => onChange(JSON.stringify(next, null, 2))}
+      />
+    </details>
   )
 }
 
