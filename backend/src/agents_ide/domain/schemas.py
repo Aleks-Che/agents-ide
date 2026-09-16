@@ -701,6 +701,12 @@ class SingleAgentSpec(ApiModel):
         return value
 
 
+class PlanningSource(ApiModel):
+    job_id: ShortStr
+    revision_number: int = Field(ge=1)
+    confirmation_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class RunStart(ApiModel):
     execution_mode: Literal["real", "simulated"] = "real"
     fake_scenario: FakeScenarioSpec | None = None
@@ -714,6 +720,7 @@ class RunStart(ApiModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     overrides: SettingsOverrides = Field(default_factory=SettingsOverrides)
     single_agent: SingleAgentSpec | None = None
+    planning_source: PlanningSource | None = None
 
     @model_validator(mode="after")
     def _one_of(self) -> RunStart:

@@ -20,6 +20,12 @@ import { ChatRunsList, LaunchRunDialog } from '../runs/LaunchRunDialog'
 import { RunScreen } from '../runs/RunsPanel'
 import { formatDateTime } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
+import { CouncilPanel, CouncilReviewer } from '../planning/CouncilPanel'
+import {
+  planningApi,
+  type PlanningJobView,
+  type PlanningSource,
+} from '../../api/planning'
 
 interface ChatViewProps {
   projectId: string | null
@@ -41,6 +47,18 @@ export function ChatView({
   const [launchOpen, setLaunchOpen] = useState(false)
   const [openRunId, setOpenRunId] = useState<string | null>(null)
   const [lastLaunched, setLastLaunched] = useState<string | null>(null)
+  const [councilOpen, setCouncilOpen] = useState(false)
+  const [councilJobId, setCouncilJobId] = useState<string | null>(null)
+  const [planningSource, setPlanningSource] = useState<PlanningSource | null>(
+    null,
+  )
+  const councilJobs = useQuery({
+    queryKey: ['planning-jobs', chat?.id],
+    queryFn: () =>
+      planningApi.list({ chatId: chat!.id, includeCompleted: true }),
+    enabled: Boolean(chat),
+    refetchInterval: 5000,
+  })
 
   const messages = useInfiniteQuery({
     queryKey: ['messages', { chatId: chat?.id ?? '' }],
@@ -105,6 +123,24 @@ export function ChatView({
 
   const projectValue: Project | null = project.data ?? null
 
+  const councilJob = useQuery({
+    queryKey: ['planning-job', councilJobId],
+    queryFn: () => planningApi.get(councilJobId!),
+    enabled: Boolean(councilJobId),
+    refetchInterval: (query) => {
+      const data = query.state.data as PlanningJobView | undefined
+      if (!data) return false
+      if (
+        data.state === 'confirmed' ||
+        data.state === 'cancelled' ||
+        data.state === 'failed'
+      ) {
+        return false
+      }
+      return 3000
+    },
+  })
+
   if (!chat) {
     return (
       <section className="main-pane">
@@ -145,6 +181,22 @@ export function ChatView({
             aria-label="Запустить задание"
           >
             Запустить
+          </button>
+          <button
+            type="button"
+            className="quiet"
+            onClick={() => setCouncilOpen(true)}
+            disabled={
+              !csrf ||
+              archiveChat.isPending ||
+              createMessage.isPending ||
+              !projectValue ||
+              projectValue.archived ||
+              chat.archived
+            }
+            aria-label="Составить план несколькими моделями"
+          >
+            Совет моделей
           </button>
           <button
             type="button"
@@ -249,6 +301,7 @@ export function ChatView({
       </section>
       {launchOpen && projectValue ? (
         <LaunchRunDialog
+          planningSource={planningSource}
           project={projectValue}
           chat={chat}
           draft={draftText}
@@ -256,11 +309,64 @@ export function ChatView({
           bindingsLoading={bindings.isLoading}
           bindingsError={bindings.error}
           onRetryBindings={() => void bindings.refetch()}
-          onClose={() => setLaunchOpen(false)}
+          onClose={() => {
+            setLaunchOpen(false)
+            setPlanningSource(null)
+          }}
           onLaunched={(run) => {
             setLaunchOpen(false)
+            setPlanningSource(null)
             setLastLaunched(run.id)
             setOpenRunId(run.id)
+          }}
+        />
+      ) : null}
+      {councilJobs.error ? (
+        <p role="alert">
+          Не удалось загрузить планы.{' '}
+          <button onClick={() => void councilJobs.refetch()}>
+            Повторить загрузку планов
+          </button>
+        </p>
+      ) : null}
+      {councilJobs.data?.length ? (
+        <section className="chat-runs" aria-label="Планы этого диалога">
+          <h3>Планы этого диалога</h3>
+          {councilJobs.data.map((job) => (
+            <button key={job.id} onClick={() => setCouncilJobId(job.id)}>
+              {job.task_text.slice(0, 70)} · {job.state}
+            </button>
+          ))}
+        </section>
+      ) : null}
+      {councilJob.error ? (
+        <p role="alert">
+          Не удалось загрузить план.{' '}
+          <button onClick={() => void councilJob.refetch()}>
+            Повторить загрузку плана
+          </button>
+        </p>
+      ) : null}
+      {councilOpen && projectValue ? (
+        <CouncilPanel
+          projectId={projectValue.id}
+          chatId={chat.id}
+          open={councilOpen}
+          onClose={() => setCouncilOpen(false)}
+          onLaunched={(job) => {
+            setCouncilJobId(job.id)
+            setCouncilOpen(false)
+          }}
+        />
+      ) : null}
+      {councilJobId && councilJob.data ? (
+        <CouncilReviewer
+          job={councilJob.data}
+          onClose={() => setCouncilJobId(null)}
+          onUse={(source) => {
+            setPlanningSource(source)
+            setCouncilJobId(null)
+            setLaunchOpen(true)
           }}
         />
       ) : null}

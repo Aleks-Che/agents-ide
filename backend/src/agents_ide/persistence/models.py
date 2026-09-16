@@ -546,6 +546,180 @@ class ProcessSupervision(Base):
     workspace_json: Mapped[str | None] = mapped_column(Text)
 
 
+class PlanningJob(Base):
+    __tablename__ = "planning_jobs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_planning_jobs_idempotency"),
+        CheckConstraint(
+            "state IN ('drafting','merging','needs_answers','ready_for_confirmation',"
+            "'confirmed','cancelled','failed')",
+            name="ck_planning_jobs_state",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(64))
+    request_hash: Mapped[str | None] = mapped_column(String(64))
+    lease_owner: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[float | None] = mapped_column(Float)
+    generation: Mapped[int] = mapped_column(Integer, default=0)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
+    chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id"))
+    initiator: Mapped[str] = mapped_column(String(64), default="ui")
+    state: Mapped[str] = mapped_column(String(32))
+    state_version: Mapped[int] = mapped_column(Integer, default=0)
+    read_manifest_hash: Mapped[str] = mapped_column(String(64), default="")
+    read_workspace_json: Mapped[str] = mapped_column(Text, default="{}")
+    task_text: Mapped[str] = mapped_column(Text)
+    context_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    budget_json: Mapped[str] = mapped_column(Text, default="{}")
+    usage_json: Mapped[str] = mapped_column(Text, default="{}")
+    n_participants_requested: Mapped[int] = mapped_column(Integer)
+    n_participants_actual: Mapped[int] = mapped_column(Integer, default=0)
+    degraded: Mapped[bool] = mapped_column(Boolean, default=False)
+    concurrency: Mapped[int] = mapped_column(Integer, default=2)
+    merged_by_member_id: Mapped[str | None] = mapped_column(String(32))
+    last_error_json: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    updated_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    finished_at: Mapped[float | None] = mapped_column(Float)
+
+
+class PlanningMember(Base):
+    __tablename__ = "planning_members"
+    __table_args__ = (
+        UniqueConstraint("job_id", "slot_index", name="uq_planning_members_slot"),
+        CheckConstraint("role IN ('participant','merger')", name="ck_planning_members_role"),
+        CheckConstraint(
+            "status IN ('pending','running','succeeded','failed','unknown','skipped')",
+            name="ck_planning_members_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("planning_jobs.id"))
+    slot_index: Mapped[int] = mapped_column(Integer)
+    role: Mapped[str] = mapped_column(String(16))
+    selection_json: Mapped[str] = mapped_column(Text)
+    selection_kind: Mapped[str] = mapped_column(String(16))
+    group_id: Mapped[str | None] = mapped_column(String(32))
+    harness_profile_id: Mapped[str | None] = mapped_column(String(32))
+    provider_connection_id: Mapped[str | None] = mapped_column(String(32))
+    model_id: Mapped[str] = mapped_column(String(256), default="")
+    params_json: Mapped[str] = mapped_column(Text, default="{}")
+    candidates_json: Mapped[str] = mapped_column(Text, default="[]")
+    candidate_index: Mapped[int] = mapped_column(Integer, default=0)
+    attempt_external_id: Mapped[str | None] = mapped_column(String(128))
+    draft_revision: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16))
+    error_json: Mapped[str | None] = mapped_column(Text)
+    actual_member_id: Mapped[str | None] = mapped_column(String(32))
+    started_at: Mapped[float | None] = mapped_column(Float)
+    finished_at: Mapped[float | None] = mapped_column(Float)
+
+
+class PlanningDraft(Base):
+    __tablename__ = "planning_drafts"
+    __table_args__ = (
+        UniqueConstraint("member_id", name="uq_planning_drafts_member"),
+        CheckConstraint(
+            "parse_status IN ('unparsed','found','none_found','invalid_format')",
+            name="ck_planning_drafts_parse",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("planning_jobs.id"))
+    member_id: Mapped[str] = mapped_column(ForeignKey("planning_members.id"))
+    accepted: Mapped[bool] = mapped_column(Boolean, default=False)
+    parse_status: Mapped[str] = mapped_column(String(16), default="unparsed")
+    body_text: Mapped[str] = mapped_column(Text, default="")
+    body_truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+    byte_length: Mapped[int] = mapped_column(BigInteger, default=0)
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    omissions_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+
+
+class PlanningRevision(Base):
+    __tablename__ = "planning_revisions"
+    __table_args__ = (
+        UniqueConstraint("job_id", "revision_number", name="uq_planning_revisions_number"),
+        CheckConstraint("author IN ('merger','user')", name="ck_planning_revisions_author"),
+        CheckConstraint(
+            "readiness IN ('ready','needs_answers','unverified','invalid_format')",
+            name="ck_planning_revisions_readiness",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("planning_jobs.id"))
+    revision_number: Mapped[int] = mapped_column(Integer)
+    author: Mapped[str] = mapped_column(String(16))
+    body_text: Mapped[str] = mapped_column(Text, default="")
+    body_truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+    parse_status: Mapped[str] = mapped_column(String(16), default="unparsed")
+    questions_json: Mapped[str] = mapped_column(Text, default="[]")
+    plan_json: Mapped[str] = mapped_column(Text, default="{}")
+    answers_json: Mapped[str] = mapped_column(Text, default="[]")
+    questions_hash: Mapped[str] = mapped_column(String(64), default="")
+    readiness: Mapped[str] = mapped_column(String(16), default="unverified")
+    confirmation_hash: Mapped[str | None] = mapped_column(String(64))
+    answered_hash: Mapped[str | None] = mapped_column(String(64))
+    confirmed_at: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+
+
+class PlanningAttempt(Base):
+    __tablename__ = "planning_attempts"
+    __table_args__ = (UniqueConstraint("member_id", "attempt_index"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("planning_jobs.id"))
+    member_id: Mapped[str] = mapped_column(ForeignKey("planning_members.id"))
+    attempt_index: Mapped[int] = mapped_column(Integer)
+    generation: Mapped[int] = mapped_column(Integer)
+    candidate_json: Mapped[str] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(String(32), default="running")
+    body_text: Mapped[str] = mapped_column(Text, default="")
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    finished_at: Mapped[float | None] = mapped_column(Float)
+
+
+class PlanningAnswer(Base):
+    __tablename__ = "planning_answers"
+    __table_args__ = (
+        UniqueConstraint(
+            "revision_id", "question_id", name="uq_planning_answers_revision_question"
+        ),
+        CheckConstraint("kind IN ('single','multi','text')", name="ck_planning_answers_kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("planning_revisions.id"))
+    question_id: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(16))
+    selected_option_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    free_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+
+
+class PlanningEvent(Base):
+    __tablename__ = "planning_events"
+    __table_args__ = (UniqueConstraint("job_id", "sequence", name="uq_planning_events_sequence"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("planning_jobs.id"))
+    member_id: Mapped[str | None] = mapped_column(String(32))
+    sequence: Mapped[int] = mapped_column(Integer)
+    event_version: Mapped[int] = mapped_column(Integer, default=1)
+    type: Mapped[str] = mapped_column(String(64))
+    occurred_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
 __all__ = [
     "Base",
     "Project",
@@ -570,4 +744,10 @@ __all__ = [
     "ModelGroup",
     "ModelGroupMember",
     "ProcessSupervision",
+    "PlanningJob",
+    "PlanningMember",
+    "PlanningDraft",
+    "PlanningRevision",
+    "PlanningAnswer",
+    "PlanningEvent",
 ]

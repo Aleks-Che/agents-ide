@@ -30,6 +30,19 @@ from agents_ide.domain.graph_validation import (
 from agents_ide.domain.graph_validation import (
     preflight as preflight_binding,
 )
+from agents_ide.domain.planning import (  # noqa: E402
+    PlanningAnswersAccepted as PlanningAnswersAcceptedSchema,
+)
+from agents_ide.domain.planning import (
+    PlanningAnswersSubmit,
+    PlanningCancelRequest,
+    PlanningConfirmRequest,
+    PlanningJobCreate,
+    PlanningJobView,
+)
+from agents_ide.domain.planning import (
+    PlanningConfirmed as PlanningConfirmedSchema,
+)
 from agents_ide.domain.schemas import (
     ApiModel,
     Chat,
@@ -66,6 +79,7 @@ from agents_ide.domain.schemas import (
     PipelineTemplateUpdate,
     PipelineVersion,
     PipelineVersionCreate,
+    PlanningSource,
     Project,
     ProjectArchive,
     ProjectCreate,
@@ -99,6 +113,7 @@ from agents_ide.services import (
     connections,
     groups,
     harness,
+    planning,
     projects,
     runs,
     templates,
@@ -1020,6 +1035,7 @@ class PreflightRequest(ApiModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     overrides: SettingsOverrides = Field(default_factory=SettingsOverrides)
     single_agent: SingleAgentSpec | None = None
+    planning_source: PlanningSource | None = None
 
 
 @router.post("/bindings/{binding_id}/preflight")
@@ -1042,6 +1058,7 @@ def preflight_endpoint(
         if payload and payload.fake_scenario
         else None,
         single_agent=payload.single_agent if payload else None,
+        planning_source=payload.planning_source if payload else None,
     )
     return report.to_dict()
 
@@ -1050,6 +1067,86 @@ def preflight_endpoint(
 def event_schemas() -> dict[str, Any]:
     catalog = event_catalog()
     return {"schema_version": "1.0.0", "events": catalog["types"], **catalog}
+
+
+# ----------------------------------------------------------------------------- Planning (Council)
+
+
+@router.get("/planning_jobs", response_model=list[PlanningJobView])
+def list_planning_jobs_endpoint(
+    session: SessionDep,
+    project_id: str | None = Query(default=None),
+    chat_id: str | None = Query(default=None),
+    include_completed: bool = Query(default=False),
+) -> list[PlanningJobView]:
+    return planning.list_planning_jobs(
+        session,
+        project_id=project_id,
+        chat_id=chat_id,
+        include_completed=include_completed,
+    )
+
+
+@router.post(
+    "/planning_jobs",
+    response_model=PlanningJobView,
+    status_code=201,
+)
+def create_planning_job_endpoint(
+    session: SessionDep, payload: PlanningJobCreate
+) -> PlanningJobView:
+    job = planning.create_planning_job(session, payload)
+    return planning.load_planning_view(session, job.id)
+
+
+@router.get("/planning_jobs/{job_id}", response_model=PlanningJobView)
+def get_planning_job_endpoint(session: SessionDep, job_id: str) -> PlanningJobView:
+    return planning.load_planning_view(session, job_id)
+
+
+@router.post("/planning_jobs/{job_id}/cancel", response_model=PlanningJobView)
+def cancel_planning_job_endpoint(
+    session: SessionDep, job_id: str, payload: PlanningCancelRequest
+) -> PlanningJobView:
+    planning.cancel_planning_job(session, job_id, payload)
+    return planning.load_planning_view(session, job_id)
+
+
+@router.post(
+    "/planning_jobs/{job_id}/answers",
+    response_model=PlanningAnswersAcceptedSchema,
+)
+def submit_planning_answers_endpoint(
+    session: SessionDep, job_id: str, payload: PlanningAnswersSubmit
+) -> PlanningAnswersAcceptedSchema:
+    return planning.submit_answers(session, job_id, payload)
+
+
+@router.post(
+    "/planning_jobs/{job_id}/confirm",
+    response_model=PlanningConfirmedSchema,
+)
+def confirm_planning_endpoint(
+    session: SessionDep, job_id: str, payload: PlanningConfirmRequest
+) -> PlanningConfirmedSchema:
+    return planning.confirm_planning(session, job_id, payload)
+
+
+@router.get(
+    "/planning_jobs/{job_id}/hash",
+    response_model=dict[str, Any],
+)
+def planning_confirmation_hash_endpoint(
+    session: SessionDep,
+    job_id: str,
+    revision_number: int = Query(ge=1),
+) -> dict[str, Any]:
+    """Return the confirmation hash a client must echo back at confirm time."""
+
+    return planning.confirmation_hash_for_view(session, job_id, revision_number)
+
+
+# ---- Capabilities and events
 
 
 @router.get("/capabilities")
@@ -1068,6 +1165,7 @@ def capabilities(settings: SettingsDep) -> dict[str, Any]:
             "bindings",
             "provider_connections",
             "model_groups",
+            "council_planning",
         ],
         "limits": {"max_projects": 1024, "max_chats_per_project": 256},
         "graph_limits": GRAPH_LIMITS,

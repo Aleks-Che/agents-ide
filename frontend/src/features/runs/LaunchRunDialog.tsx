@@ -37,6 +37,7 @@ import {
 type LaunchMode = 'binding' | 'single_agent'
 
 interface LaunchRunDialogProps {
+  planningSource?: ApiSchemas['PlanningSource'] | null
   project: Project
   chat: Chat
   draft: string
@@ -49,6 +50,7 @@ interface LaunchRunDialogProps {
 }
 
 export function LaunchRunDialog({
+  planningSource,
   project,
   chat,
   draft,
@@ -107,6 +109,7 @@ export function LaunchRunDialog({
 
   // Every user-editable launch input invalidates both the preview and import consent.
   const formKey = JSON.stringify([
+    planningSource,
     mode,
     bindingId,
     selectedBinding?.version,
@@ -129,6 +132,7 @@ export function LaunchRunDialog({
         limitsText,
         commandsText,
       )
+      if (planningSource) parameters.planning_source = planningSource
       const message = useDraft && draft.trim() ? draft.trim() : undefined
       if (message && message.length > 65536)
         throw new Error('Черновик превышает 65536 символов.')
@@ -461,6 +465,14 @@ export function LaunchRunDialog({
                   )}
                 </pre>
               </details>
+            ) : null}
+            {planningSource ? (
+              <p className="hint">
+                Подтверждённый план Council: {planningSource.job_id.slice(0, 8)}
+                , ревизия {planningSource.revision_number}. Текст, ответы и
+                критерии будут зафиксированы в Run; их нельзя заменить входами
+                ниже.
+              </p>
             ) : null}
             <label htmlFor="launch-inputs">Входы запуска (JSON)</label>
             <textarea

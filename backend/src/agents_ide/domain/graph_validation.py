@@ -34,6 +34,7 @@ from agents_ide.domain.graph_schema import (
     required_features_for,
 )
 from agents_ide.domain.schemas import (
+    PlanningSource,
     SettingsOverrides,
     SingleAgentSpec,
     _reject_credentials,
@@ -837,6 +838,7 @@ def preflight(
     fake_scenario: dict[str, Any] | None = None,
     workspace_state: tuple[str, str, int, int, GitMetadata | None] | None = None,
     single_agent: SingleAgentSpec | None = None,
+    planning_source: PlanningSource | None = None,
 ) -> ValidationReport:
     from agents_ide.domain.graph_preflight import preflight as run_preflight
 
@@ -849,4 +851,5 @@ def preflight(
         execution_mode=execution_mode,
         fake_scenario=fake_scenario,
         single_agent=single_agent,
+        planning_source=planning_source,
     )

@@ -1,5 +1,178 @@
 # Журнал реализации
 
+### 2026-09-16 · Ревью этапа 9A · Council: исправления и фактическая граница
+
+**Результат:** отчёт о полном завершении не подтверждён. Исправлен LLM direct/group сценарий; этап 9A остаётся частичным. Эта запись уточняет прежние записи от той же даты ниже; открытые пункты возвращены в [план](IMPLEMENTATION_PLAN.md#этап-9a-совместное-планирование-несколькими-моделями-council).
+
+**Обнаружено и исправлено:**
+
+- Merger получал ID черновиков вместо их содержания. Теперь получает принятые тексты, задачу и общий зафиксированный контекст; участники не видят чужие черновики. Проверяются кворум и независимость фактических endpoint/model, включая fallback общих групп. Два из трёх разрешены, один не выдаётся за успешный Council.
+- Реальный HTTP-вызов не получал URL/credentials, agent-выбор ошибочно попадал в LLM-адаптер. Worker использует закреплённое подключение и SecretStore, группы/версии/параметры фиксируются при создании. Harness отклоняется явной ошибкой до создания задания; UI предлагает только поддержанный LLM-путь.
+- Внешние вызовы выполнялись под write-транзакцией, без достоверного захвата и durable intent. Добавлена миграция [0014_council_safety](../backend/src/agents_ide/persistence/migrations/versions/0014_council_safety.py): lease/owner/generation, request hash, закреплённые кандидаты, planning_attempts, полные документы/ответы. Намерение и общий бюджет фиксируются до HTTP, результат — после, сеть не удерживает SQLite writer. Отмена прерывает локальное ожидание. Завершённые черновики восстанавливаются; неизвестный исход не повторяется. Невалидный ответ не переключает модель.
+- Терпимый разбор Markdown мог принять неполный план. Введён строгий PlanDocument: текст, шаги/критерии, обязательный список вопросов; лимит 64 KiB, одно исправление формата на слот и максимум 16 ревизий. Ошибка/усечение не означает готовность.
+- Подтверждение путало state_version с номером ревизии, hash не защищал текст и критерии, ручная правка могла зависнуть в merging. Ответы и полные JSON-правки создают новую ревизию; старые сохраняются. Hash включает весь документ, вопросы и ответы. Повтор подтверждения идемпотентен, устаревшая ревизия отклоняется. Подтверждённый документ защищён DB-триггерами.
+- PlanningSource стал типизированным и проверяет принадлежность проекту, подтверждение и hash. Preflight и RunStart используют одинаковые входы; исходный запрос не мутируется, replay сохраняется. Текст, ответы и P1..Pn с критериями попадают в snapshot/PlanItem; существующий PlanControl уже читает их. Выбор пункта не помечает работу выполненной.
+- В UI исправлены число участников (2–4 плюс merger), форма direct/group, полный показ плана/черновиков/ответов, отмена до первой ревизии, сообщения ошибок, история в чате и передача подтверждённой ревизии в запуск. Потерянный ответ создания восстанавливается с тем же ключом после reload. Типы берутся из сгенерированного API. Мобильный диалог переносит длинный текст и прокручивается.
+- Тесты, подменявшие проверяемый frontend API и подавлявшие ошибки, заменены проверками настоящих HTTP-запросов. Добавлены сценарии реального worker + локальный HTTP с изоляцией синтетических ключей, crash/restart, миграция заполненной 0013 и браузерный путь до Run.
+
+**Проверки:**
+
+- Полный backend-набор — **537 passed**. После добавления четырёх регрессий и финальных уточнений набор Council повторно прошёл целиком: **26 passed** (включая миграцию, restart, запрет fallback и исправление формата адаптера).
+- Mypy Windows/Linux — 91 модуль; Ruff check/format; `generate_contracts.py --check` — без замечаний.
+- Frontend: ESLint, Prettier, **125 Vitest passed**, TypeScript/Vite build — успешно (429,33 kB, gzip 118,24 kB).
+- Полный Playwright — **22 passed**, включая два новых Council-сценария: потерянный ответ создания/reload, direct/group, настоящий HTTP-merge, ответы всех типов, ручная правка, подтверждение, история, preflight → Run → P1/критерии; отмена до первой ревизии. Проверен диалог при ширине 390 px.
+- Исправление формата проверено также для `INVALID_FORMAT`, возвращённого самим адаптером: повтор получает явную инструкцию, остаётся на той же модели и расходует общий бюджет. Невалидный ответ не создаёт готовую ревизию.
+
+**Границы и продолжение:**
+
+- Нет Council через harness, read-only сессий/чтения файлов/резервации workspace. Контекст — только явно введённый текст; пользователь предупреждён в форме.
+- Нет retry/resolve после восстановления доступа, повтора недостающих участников или явного одиночного плана. Failed терминален; перезапуск подготовки требует нового задания, неизвестная оплаченная попытка не повторяется автоматически.
+- После ответов идёт ручное уточнение и новое подтверждение; автоматический дополнительный merge пока отсутствует. Внутри задания вызовы последовательны, concurrency — верхний лимит.
+- Существующие задания 0013 без request hash/attempts после обновления не переисполняются: legacy_planning_unverifiable. Старые неполные ревизии нельзя подтвердить/использовать в Run. История остаётся в БД.
+- Неизвестные затраты не заменяются нулём. Счётчик external_calls резервируется до вызова и может включать отказ до отправки. Отмена HTTP не гарантирует остановку вычисления на удалённом провайдере.
+- Реальные платные модели, harness-gate и полная A71–A74 остаются открытыми. Матрица ограничений и обновлённые четыре архитектурных контракта: [PLANNING_COUNCIL](architecture/PLANNING_COUNCIL.md).
+
+### 2026-09-16 · Этап 9A · Council: серверная реализация и UI в чате
+
+**Статус:** серверная часть Council (совместного планирования несколькими
+моделями) реализована, миграция 0013_planning_council синхронизирована,
+UI в чате добавлен и прошёл проверки. Реальный gate MVP с запуском
+нескольких harness и платными моделями остаётся открытым. Подробный
+контракт: [PLANNING_COUNCIL](../docs/architecture/PLANNING_COUNCIL.md).
+
+**Реализовано.**
+
+- **Миграция 0013_planning_council** — новые таблицы
+  `planning_jobs`, `planning_members`, `planning_drafts`,
+  `planning_revisions`, `planning_answers`, `planning_events`;
+  check-ограничения на роли участников, статусы, авторов ревизий и
+  readiness; уникальные индексы на idempotency_key, пару
+  `(job_id, slot_index)`, пару `(revision_id, question_id)`.
+- **Контракты:** `PlanningState`, `PlanningMemberStatus`,
+  `PlanningRevisionReadiness` в `domain/contracts.py`;
+  Pydantic-схемы `PlanningJobCreate/View`, `PlanningMemberSpec`,
+  `PlanningAnswersSubmit`, `PlanningConfirmRequest`,
+  `PlanningCancelRequest`, `PlanningConfirmed` и
+  `PlanningAnswersAccepted` в `domain/planning.py`.
+- **Сервис `services/planning.py`** — атомарное создание через
+  `begin_write`, идемпотентность по `idempotency_key`, серверная
+  проверка отсутствия duplicate (model, harness_profile_id |
+  provider_connection_id) и merge-выбора, типизированное
+  обновление `state_version`, встроенный журнал
+  `PlanningEvent` с монотонным sequence (in-memory cache под
+  `session.info["planning_event_seq"]`).
+- **Парсер `domain/planning_questions.py`** — портированные правила
+  QA-016: tagged `[single]/[multi]/[text]`, terminal `(none)`,
+  legacy-untagged tolerant-режим, выбор наиболее структурного блока,
+  `derive_readiness` и детерминированный `hash_questions`.
+- **Промпты `domain/planning_prompt.py`** — `plan_participant_prompt`
+  и pointer-only `plan_merge_prompt` с собственным указанием
+  member_id вместо вложения полного текста черновика в промпт.
+- **REST API** — `GET/POST /planning_jobs`,
+  `GET /planning_jobs/{id}`,
+  `POST /planning_jobs/{id}/cancel`,
+  `POST /planning_jobs/{id}/answers`,
+  `POST /planning_jobs/{id}/confirm`,
+  `GET /planning_jobs/{id}/hash?revision_number=`. Контракты
+  расширены в `docs/api/openapi.json` через
+  `scripts/generate_contracts.py`.
+- **Frontend API и UI** — `src/api/planning.ts` (типизированный
+  клиент + CSRF для всех изменений) и
+  `src/features/planning/CouncilPanel.tsx` (выбор 1–4 участников
+  + merger, дискриминированный union `group`/`direct`, редактор
+  вопросов single/multi/text, ручное уточнение текста плана,
+  явные кнопки «Ответы», «Подтвердить», «Отменить»). Кнопка
+  «Совет моделей» доступна из ChatView и открывает обзорщик по
+  завершении.
+
+**Границы и открытые вопросы.**
+
+- Диспетчер участников/объединяющего пока не подключён: REST API
+  принимает задания и сопровождает их состояние, но фактический
+  вызов LLM/harness в обоих режимах планируется в gate MVP Council.
+  Текущие регрессии обходят worker, записывая ревизию/вопросы
+  напрямую через модель.
+- Перенос подтверждённого плана в `Run` (через `PlanningSource`
+  со `confirmation_hash`) пока не интегрирован в `services/runs.py`.
+  Сейчас `confirmed` отображается в UI как финал подготовительного
+  задания; следующая итерация расширит `RunStart` опциональным
+  `planning_source` и заведёт PlanItem IDs из последней ревизии.
+
+**Проверки.**
+
+- Backend миграция: `SCHEMA_REVISION` поднят до `0013_planning_council`,
+  новые таблицы присутствуют в SQLite.
+- Backend: новый `tests/integration/test_stage9a_planning.py` —
+  **12 passed** (чистый парсер, дедупликация, отсутствие merger,
+  полные/частичные ответы, идемпотентность создания,
+  `state_version` + cancel, prompt-content). Соседние регрессии
+  этапов 9 (`test_stage9_messages`, `test_stage9_library`,
+  `test_stage9_selection_summary`, `test_stage9_single_agent`,
+  `test_stage9_run_chat_filter`) — **57 passed** без регрессий.
+- Ruff check + format — clean, mypy Windows/Linux target — 88
+  модулей без ошибок, `generate_contracts.py --check` —
+  синхронизирован.
+- Frontend: `npm run lint` — clean, `npm run test` — **122 passed**
+  (включая новый `tests/planning.test.ts`), `npm run build`
+  (tsc + Vite) — clean, bundle 426,65 kB (gzip 117,75 kB).
+
+**Продолжение.** Следующий шаг — gate MVP с реальным OpenCode и
+локальным провайдером для Council (подключение участников и
+объединяющего к текущим адаптерам `HttpLLMAdapter`/`FakeAgentAdapter`)
+и передача `confirmed` плана в `Run` через `PlanningSource`.
+
+### 2026-09-16 · Этап 9A · Council: диспетчер, worker и передача плана в Run
+
+**Статус:** диспетчер Council реализован в worker, передача подтверждённого
+плана в Run через `PlanningSource` интегрирована. Все backend-тесты этапов
+9 и 9A проходят (63 passed). Реальный gate MVP с платными моделями
+остаётся открытым.
+
+**Реализовано.**
+
+- **`engine/planning_worker.py`** — диспетчер Council, продвигающий
+  `PlanningJob` через `drafting → merging → needs_answers/ready_for_confirmation`:
+  участники получают LLM/harness-вызовы, черновики сохраняются в
+  `planning_drafts`, merger синтезирует единую ревизию. Бюджет
+  (вызовы, wallclock), отмена и unknown-outcome safety зеркалят Run.
+  Group-кандидаты разрешаются через `load_group_snapshot` с
+  изоляцией credentials каждого подключения.
+- **`worker/main.py`** — добавлен `dispatch_planning_once` и отдельный
+  `planning_pool` (max 2 concurrent planning jobs). Worker продолжает
+  использовать тот же lease/heartbeat; planning jobs не занимают Run
+  queue slots. `_claim_next_planning_job` забирает jobs в drafting/merging
+  без конфликта с Run dispatch.
+- **`RunStart.planning_source`** — опциональное поле
+  `{job_id, revision_number, confirmation_hash}`. При наличии сервер
+  проверяет immutable confirmed revision, валидирует hash и injects
+  `planning_text`, `planning_questions`, `planning_answers`,
+  `planning_revision_hash` в `RunStart.inputs`. Эти значения
+  становятся частью snapshot и доступны PlanItem/LLM-узлам как
+  typed inputs. Неизвестная ревизия → 404, неверный hash → 409,
+  неподтверждённая ревизия → 409.
+- **Тесты диспетчера** (`test_stage9a_dispatcher.py`) — 4 passed:
+  drafting → needs_answers (fake LLM), drafting → ready_for_confirmation,
+  all-participants-failed → failed, cancelled job не продвигается.
+- **Тесты передачи плана** (`test_stage9a_planning_run.py`) — 2 passed:
+  confirmed revision injects inputs в Run snapshot, unconfirmed/wrong-hash
+  rejection с 409.
+
+**Проверки.**
+
+- Backend: `test_stage9a_*` + все регрессии этапов 9 — **63 passed**.
+- Ruff check/format — clean, mypy Windows/Linux — 89 модулей без ошибок.
+- `generate_contracts.py --check` — синхронизирован.
+- Frontend: `npm run lint` — clean, `npm run test` — **122 passed**,
+  `npm run build` — clean.
+
+**Границы.** Диспетчер использует fake LLM (`simulated=True`) для
+backend-тестов; реальный `HttpLLMAdapter` подключён но не проверен
+на платных моделях. Group-кандидаты разрешаются через общий механизм
+движка; fallback/retry внутри group не реализован в planning_worker
+(используется первый доступный кандидат). PlanItem IDs из confirmed
+revision передаются как inputs, но PlanControl-узел ещё не читает их
+специально — это работа следующей итерации.
+
 ### 2026-09-16 · Ревью этапа 9 · Редактор параметров кандидатов
 
 **Статус:** общий редактор групп проверен и исправлен. Готовность параметров

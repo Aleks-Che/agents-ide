@@ -2988,6 +2988,1007 @@
         "title": "PipelineVersionCreate",
         "type": "object"
       },
+      "PlanningAnswerInput": {
+        "additionalProperties": false,
+        "properties": {
+          "free_text": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Text"
+          },
+          "kind": {
+            "enum": [
+              "single",
+              "multi",
+              "text"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "question_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Question Id",
+            "type": "string"
+          },
+          "selected_option_ids": {
+            "items": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Selected Option Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "question_id",
+          "kind"
+        ],
+        "title": "PlanningAnswerInput",
+        "type": "object"
+      },
+      "PlanningAnswersAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "new_revision": {
+            "$ref": "#/components/schemas/PlanningRevisionView"
+          },
+          "questions_hash": {
+            "title": "Questions Hash",
+            "type": "string"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/PlanningRevisionReadiness"
+          },
+          "requires_merger_revisit": {
+            "title": "Requires Merger Revisit",
+            "type": "boolean"
+          },
+          "revision_number": {
+            "title": "Revision Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision_number",
+          "questions_hash",
+          "readiness",
+          "requires_merger_revisit",
+          "new_revision"
+        ],
+        "title": "PlanningAnswersAccepted",
+        "type": "object"
+      },
+      "PlanningAnswersSubmit": {
+        "additionalProperties": false,
+        "properties": {
+          "answers": {
+            "items": {
+              "$ref": "#/components/schemas/PlanningAnswerInput"
+            },
+            "maxItems": 64,
+            "title": "Answers",
+            "type": "array"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "user_body_text": {
+            "anyOf": [
+              {
+                "maxLength": 131072,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Body Text"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanningAnswersSubmit",
+        "type": "object"
+      },
+      "PlanningCancelRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_state_version": {
+            "minimum": 0.0,
+            "title": "Expected State Version",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "expected_state_version"
+        ],
+        "title": "PlanningCancelRequest",
+        "type": "object"
+      },
+      "PlanningConfirmRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Confirmation Hash",
+            "type": "string"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "confirmation_hash"
+        ],
+        "title": "PlanningConfirmRequest",
+        "type": "object"
+      },
+      "PlanningConfirmed": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_hash": {
+            "title": "Confirmation Hash",
+            "type": "string"
+          },
+          "confirmed_at": {
+            "format": "date-time",
+            "title": "Confirmed At",
+            "type": "string"
+          },
+          "revision_number": {
+            "title": "Revision Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision_number",
+          "confirmation_hash",
+          "confirmed_at"
+        ],
+        "title": "PlanningConfirmed",
+        "type": "object"
+      },
+      "PlanningDraftView": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "body_text": {
+            "title": "Body Text",
+            "type": "string"
+          },
+          "body_truncated": {
+            "title": "Body Truncated",
+            "type": "boolean"
+          },
+          "byte_length": {
+            "title": "Byte Length",
+            "type": "integer"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "harness_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Profile Id"
+          },
+          "member_id": {
+            "title": "Member Id",
+            "type": "string"
+          },
+          "model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Id"
+          },
+          "parse_status": {
+            "enum": [
+              "unparsed",
+              "found",
+              "none_found",
+              "invalid_format"
+            ],
+            "title": "Parse Status",
+            "type": "string"
+          },
+          "provider_connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Connection Id"
+          },
+          "role": {
+            "enum": [
+              "participant",
+              "merger"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "selection_kind": {
+            "enum": [
+              "direct",
+              "group"
+            ],
+            "title": "Selection Kind",
+            "type": "string"
+          },
+          "slot_index": {
+            "title": "Slot Index",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PlanningMemberStatus"
+          }
+        },
+        "required": [
+          "body_text",
+          "body_truncated",
+          "member_id",
+          "slot_index",
+          "role",
+          "selection_kind",
+          "harness_profile_id",
+          "provider_connection_id",
+          "model_id",
+          "status",
+          "byte_length",
+          "parse_status",
+          "accepted",
+          "content_hash"
+        ],
+        "title": "PlanningDraftView",
+        "type": "object"
+      },
+      "PlanningEventView": {
+        "additionalProperties": false,
+        "properties": {
+          "member_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Member Id"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "type",
+          "member_id",
+          "payload"
+        ],
+        "title": "PlanningEventView",
+        "type": "object"
+      },
+      "PlanningJobBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "concurrency": {
+            "default": 2,
+            "maximum": 4.0,
+            "minimum": 1.0,
+            "title": "Concurrency",
+            "type": "integer"
+          },
+          "max_external_calls": {
+            "default": 8,
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Max External Calls",
+            "type": "integer"
+          },
+          "max_wallclock_seconds": {
+            "default": 600,
+            "maximum": 3600.0,
+            "minimum": 10.0,
+            "title": "Max Wallclock Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "PlanningJobBudget",
+        "type": "object"
+      },
+      "PlanningJobCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/PlanningJobBudget"
+          },
+          "chat_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
+          },
+          "context_text": {
+            "default": "",
+            "maxLength": 65536,
+            "title": "Context Text",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "initiator": {
+            "default": "ui",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Initiator",
+            "type": "string"
+          },
+          "participants": {
+            "items": {
+              "$ref": "#/components/schemas/PlanningMemberSpec"
+            },
+            "maxItems": 5,
+            "title": "Participants",
+            "type": "array"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "task_text": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "title": "Task Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "task_text",
+          "idempotency_key"
+        ],
+        "title": "PlanningJobCreate",
+        "type": "object"
+      },
+      "PlanningJobView": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/PlanningJobBudget"
+          },
+          "chat_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "degraded": {
+            "title": "Degraded",
+            "type": "boolean"
+          },
+          "drafts": {
+            "items": {
+              "$ref": "#/components/schemas/PlanningDraftView"
+            },
+            "title": "Drafts",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/PlanningEventView"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "initiator": {
+            "title": "Initiator",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/PlanningMemberView"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "n_participants_actual": {
+            "title": "N Participants Actual",
+            "type": "integer"
+          },
+          "n_participants_requested": {
+            "title": "N Participants Requested",
+            "type": "integer"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "read_manifest_hash": {
+            "title": "Read Manifest Hash",
+            "type": "string"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/PlanningRevisionView"
+            },
+            "title": "Revisions",
+            "type": "array"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PlanningState"
+          },
+          "state_version": {
+            "title": "State Version",
+            "type": "integer"
+          },
+          "task_text": {
+            "title": "Task Text",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "usage": {
+            "additionalProperties": true,
+            "title": "Usage",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "chat_id",
+          "idempotency_key",
+          "initiator",
+          "state",
+          "state_version",
+          "task_text",
+          "read_manifest_hash",
+          "n_participants_requested",
+          "n_participants_actual",
+          "degraded",
+          "budget",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PlanningJobView",
+        "type": "object"
+      },
+      "PlanningMemberSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "params": {
+            "additionalProperties": true,
+            "maxProperties": 128,
+            "title": "Params",
+            "type": "object"
+          },
+          "role": {
+            "default": "participant",
+            "enum": [
+              "participant",
+              "merger"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DirectAgentSelection"
+              },
+              {
+                "$ref": "#/components/schemas/DirectLLMSelection"
+              },
+              {
+                "$ref": "#/components/schemas/GroupSelection"
+              }
+            ],
+            "title": "Selection"
+          }
+        },
+        "required": [
+          "selection"
+        ],
+        "title": "PlanningMemberSpec",
+        "type": "object"
+      },
+      "PlanningMemberStatus": {
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed",
+          "unknown",
+          "skipped"
+        ],
+        "title": "PlanningMemberStatus",
+        "type": "string"
+      },
+      "PlanningMemberView": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "participant",
+              "merger"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "selected_connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Connection Id"
+          },
+          "selected_connection_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Connection Name"
+          },
+          "selected_member_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Member Id"
+          },
+          "selected_model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Model Id"
+          },
+          "selection": {
+            "additionalProperties": true,
+            "title": "Selection",
+            "type": "object"
+          },
+          "slot_index": {
+            "title": "Slot Index",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PlanningMemberStatus"
+          }
+        },
+        "required": [
+          "id",
+          "slot_index",
+          "role",
+          "selection",
+          "status"
+        ],
+        "title": "PlanningMemberView",
+        "type": "object"
+      },
+      "PlanningQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_text": {
+            "default": true,
+            "title": "Allow Text",
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "single",
+              "multi",
+              "text"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/PlanningQuestionOption"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "prompt"
+        ],
+        "title": "PlanningQuestion",
+        "type": "object"
+      },
+      "PlanningQuestionOption": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "PlanningQuestionOption",
+        "type": "object"
+      },
+      "PlanningRevisionReadiness": {
+        "enum": [
+          "ready",
+          "needs_answers",
+          "unverified",
+          "invalid_format"
+        ],
+        "title": "PlanningRevisionReadiness",
+        "type": "string"
+      },
+      "PlanningRevisionView": {
+        "additionalProperties": false,
+        "properties": {
+          "answered": {
+            "default": false,
+            "title": "Answered",
+            "type": "boolean"
+          },
+          "answered_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered Hash"
+          },
+          "answers": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Answers",
+            "type": "array"
+          },
+          "author": {
+            "enum": [
+              "merger",
+              "user"
+            ],
+            "title": "Author",
+            "type": "string"
+          },
+          "body_text": {
+            "title": "Body Text",
+            "type": "string"
+          },
+          "body_truncated": {
+            "title": "Body Truncated",
+            "type": "boolean"
+          },
+          "confirmation_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation Hash"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parse": {
+            "enum": [
+              "found",
+              "none_found",
+              "invalid_format"
+            ],
+            "title": "Parse",
+            "type": "string"
+          },
+          "plan_items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Plan Items",
+            "type": "array"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/PlanningQuestion"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/PlanningRevisionReadiness"
+          },
+          "revision_number": {
+            "title": "Revision Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "revision_number",
+          "author",
+          "body_text",
+          "body_truncated",
+          "parse",
+          "readiness",
+          "created_at"
+        ],
+        "title": "PlanningRevisionView",
+        "type": "object"
+      },
+      "PlanningSource": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_hash": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Confirmation Hash",
+            "type": "string"
+          },
+          "job_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Job Id",
+            "type": "string"
+          },
+          "revision_number": {
+            "minimum": 1.0,
+            "title": "Revision Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id",
+          "revision_number",
+          "confirmation_hash"
+        ],
+        "title": "PlanningSource",
+        "type": "object"
+      },
+      "PlanningState": {
+        "enum": [
+          "drafting",
+          "merging",
+          "needs_answers",
+          "ready_for_confirmation",
+          "confirmed",
+          "cancelled",
+          "failed"
+        ],
+        "title": "PlanningState",
+        "type": "string"
+      },
       "PortableGroupMember": {
         "additionalProperties": false,
         "properties": {
@@ -3063,6 +4064,16 @@
           },
           "overrides": {
             "$ref": "#/components/schemas/SettingsOverrides"
+          },
+          "planning_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanningSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "single_agent": {
             "anyOf": [
@@ -4074,6 +5085,16 @@
           },
           "overrides": {
             "$ref": "#/components/schemas/SettingsOverrides"
+          },
+          "planning_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanningSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "project_id": {
             "title": "Project Id",
@@ -7010,6 +8031,377 @@
           }
         },
         "summary": "Schema"
+      }
+    },
+    "/api/planning_jobs": {
+      "get": {
+        "operationId": "list_planning_jobs_endpoint_api_planning_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "chat_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Chat Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_completed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Completed",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PlanningJobView"
+                  },
+                  "title": "Response List Planning Jobs Endpoint Api Planning Jobs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Planning Jobs Endpoint",
+        "tags": [
+          "domain"
+        ]
+      },
+      "post": {
+        "operationId": "create_planning_job_endpoint_api_planning_jobs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanningJobCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningJobView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Planning Job Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/planning_jobs/{job_id}": {
+      "get": {
+        "operationId": "get_planning_job_endpoint_api_planning_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningJobView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Planning Job Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/planning_jobs/{job_id}/answers": {
+      "post": {
+        "operationId": "submit_planning_answers_endpoint_api_planning_jobs__job_id__answers_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanningAnswersSubmit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningAnswersAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Planning Answers Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/planning_jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancel_planning_job_endpoint_api_planning_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanningCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningJobView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Planning Job Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/planning_jobs/{job_id}/confirm": {
+      "post": {
+        "operationId": "confirm_planning_endpoint_api_planning_jobs__job_id__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanningConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningConfirmed"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Planning Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/planning_jobs/{job_id}/hash": {
+      "get": {
+        "description": "Return the confirmation hash a client must echo back at confirm time.",
+        "operationId": "planning_confirmation_hash_endpoint_api_planning_jobs__job_id__hash_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision_number",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Revision Number",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Planning Confirmation Hash Endpoint Api Planning Jobs  Job Id  Hash Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Planning Confirmation Hash Endpoint",
+        "tags": [
+          "domain"
+        ]
       }
     },
     "/api/presets": {

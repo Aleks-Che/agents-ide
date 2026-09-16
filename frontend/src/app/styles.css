@@ -1476,3 +1476,96 @@ button.primary {
   border-radius: 4px;
   color: #d8f0e1;
 }
+
+.council-member {
+  border: 1px solid #1c2d33;
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.council-member legend {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #89a8b1;
+  padding: 0 4px;
+}
+
+.council-member label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #b8d2da;
+}
+
+.council-member select,
+.council-member input,
+.council-member textarea {
+  background: #0a1014;
+  border: 1px solid #243640;
+  border-radius: 4px;
+  padding: 4px 6px;
+  color: #e8f3f7;
+}
+
+.radio-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+}
+
+.council-participants {
+  margin-bottom: 16px;
+}
+
+.council-revision {
+  border-top: 1px solid #1c2d33;
+  margin-top: 16px;
+  padding-top: 12px;
+}
+
+.council-question {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.council-question-prompt {
+  color: #d8f0e1;
+  font-weight: 500;
+}
+
+.council-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.council-dialog pre,
+.council-dialog li {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.council-dialog fieldset {
+  min-width: 0;
+}
+.council-dialog pre {
+  padding: 12px;
+  background: #10181c;
+  border-radius: 6px;
+}

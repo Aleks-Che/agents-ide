@@ -26,6 +26,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from agents_ide.config import Settings
+from agents_ide.engine.planning_worker import dispatch_planning_job
 from agents_ide.engine.queue import claim_next_job, refresh_lease, release_job
 from agents_ide.engine.runner import build_runner
 from agents_ide.persistence.database import check_database, create_database, migrate
@@ -78,8 +79,10 @@ def run_worker(settings: Settings) -> None:
         registry = ProcessRegistry()
         logger.info("worker.started", extra={"worker_id": worker_id})
         pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="run")
+        planning_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="planning")
         try:
             pending: list[Future[bool]] = []
+            planning_pending: list[Future[bool]] = []
             last_heartbeat = 0.0
             db_failures = 0
             while not stopping.is_set():
@@ -119,6 +122,13 @@ def run_worker(settings: Settings) -> None:
                             future.result()
                         except Exception:
                             logger.exception("worker.dispatch_error")
+                for future in planning_pending[:]:
+                    if future.done():
+                        planning_pending.remove(future)
+                        try:
+                            future.result()
+                        except Exception:
+                            logger.exception("worker.planning_dispatch_error")
                 while len(pending) < 2 and db_failures == 0 and not stopping.is_set():
                     pending.append(
                         pool.submit(
@@ -130,11 +140,22 @@ def run_worker(settings: Settings) -> None:
                             registry,
                         )
                     )
+                while len(planning_pending) < 2 and db_failures == 0 and not stopping.is_set():
+                    planning_pending.append(
+                        planning_pool.submit(
+                            dispatch_planning_once,
+                            settings,
+                            worker_id,
+                            factory,
+                            stopping,
+                        )
+                    )
                 stopping.wait(min(0.25, settings.heartbeat_seconds))
         finally:
             stopping.set()
             registry.abort_all()
             pool.shutdown(wait=True, cancel_futures=True)
+            planning_pool.shutdown(wait=True, cancel_futures=True)
             for entry in registry.entries():
                 if entry.group:
                     entry.group.close()
@@ -145,6 +166,34 @@ def run_worker(settings: Settings) -> None:
             finally:
                 engine.dispose()
             logger.info("worker.stopped", extra={"worker_id": worker_id})
+
+
+def dispatch_planning_once(
+    settings: Settings,
+    worker_id: str,
+    session_factory: sessionmaker[Session] | None = None,
+    stopping: threading.Event | None = None,
+) -> bool:
+    from agents_ide.engine.planning_worker import claim_planning_job
+    from agents_ide.security.secrets import SecretStore
+
+    owned_engine = create_database(settings) if session_factory is None else None
+    factory = session_factory or sessionmaker(bind=owned_engine, expire_on_commit=False)
+    try:
+        claim = claim_planning_job(factory, worker_id)
+        if claim is None:
+            return False
+        dispatch_planning_job(
+            factory,
+            claim.job_id,
+            claim=claim,
+            abort=stopping,
+            secret_store=SecretStore(settings.data_dir / "secrets"),
+        )
+        return True
+    finally:
+        if owned_engine is not None:
+            owned_engine.dispose()
 
 
 def dispatch_once(

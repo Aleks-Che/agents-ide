@@ -21,6 +21,7 @@ from agents_ide.domain.graph_validation import (
     validate_parameters,
 )
 from agents_ide.domain.schemas import (
+    PlanningSource,
     SettingsOverrides,
     SingleAgentSpec,
     _reject_credentials,
@@ -51,6 +52,7 @@ def preflight(
     fake_scenario: dict[str, Any] | None = None,
     workspace_state: tuple[str, str, int, int, GitMetadata | None] | None = None,
     single_agent: SingleAgentSpec | None = None,
+    planning_source: PlanningSource | None = None,
 ) -> ValidationReport:
     version = session.get(PipelineVersion, binding.version_id)
     project = session.get(Project, binding.project_id)
@@ -60,6 +62,10 @@ def preflight(
         graph = build_single_agent_graph(version, single_agent)
     else:
         graph = json.loads(version.graph_json)
+    if planning_source is not None:
+        from agents_ide.services.planning import planning_inputs
+
+        inputs = planning_inputs(session, planning_source, binding.project_id, inputs or {})
     values = {**json.loads(version.inputs_json), **(inputs or {})}
     report = validate_graph(graph, inputs=values)
     check_version_features(

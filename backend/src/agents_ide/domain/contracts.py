@@ -67,3 +67,42 @@ class RunState(StrEnum):
     @property
     def terminal(self) -> bool:
         return self in {self.COMPLETED, self.FAILED, self.CANCELLED}
+
+
+class PlanningState(StrEnum):
+    DRAFTING = "drafting"
+    MERGING = "merging"
+    NEEDS_ANSWERS = "needs_answers"
+    READY_FOR_CONFIRMATION = "ready_for_confirmation"
+    CONFIRMED = "confirmed"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+    @property
+    def terminal(self) -> bool:
+        return self in {self.CONFIRMED, self.CANCELLED, self.FAILED}
+
+
+class PlanningMemberStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+    SKIPPED = "skipped"
+
+    @property
+    def terminal(self) -> bool:
+        return self in {
+            self.SUCCEEDED,
+            self.FAILED,
+            self.UNKNOWN,
+            self.SKIPPED,
+        }
+
+
+class PlanningRevisionReadiness(StrEnum):
+    READY = "ready"
+    NEEDS_ANSWERS = "needs_answers"
+    UNVERIFIED = "unverified"
+    INVALID_FORMAT = "invalid_format"

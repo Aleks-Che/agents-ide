@@ -140,3 +140,7 @@ Pause_requested не ждёт бесконечно: на шаг продолжа
 ## 6. Обязательные проверки контракта
 
 Табличные тесты всех разрешённых и запрещённых переходов; stop/completion и cancel/End в обоих порядках; cancel/retry_wait; pause→stop; resume до устранения blocker; два разных command_id с устаревшей версией из двух вкладок; повтор command_id с тем же/другим payload; потеря lease; late-событие старой попытки; неизвестный исход с последующей сверкой; долгий pause_requested; неподтверждённая остановка дерева.
+
+## Подготовка Council (частичная реализация 9A)
+
+PlanningJob отделён от Run: drafting → merging → needs_answers | ready_for_confirmation → confirmed. Ответы/ручная правка создают новую ревизию в needs_answers или ready_for_confirmation. Отмена из любого нетерминального состояния даёт cancelled; отсутствие кворума, лимит, отказ merger или неизвестный внешний исход — failed с причиной. Confirmed/cancelled/failed терминальны; бюджет не превращается в отмену пользователя. Cancel сверяет state_version, ответы/confirm — номер ревизии; это разные счётчики. Полный контракт и остающиеся retry/resolve/harness-сценарии: [PLANNING_COUNCIL](PLANNING_COUNCIL.md).

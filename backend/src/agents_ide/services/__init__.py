@@ -9,6 +9,7 @@ from agents_ide.services import (  # noqa: F401
     connections,
     groups,
     harness,
+    planning,
     projects,
     runs,
     templates,
@@ -35,4 +36,5 @@ __all__ = [
     "harness",
     "groups",
     "runs",
+    "planning",
 ]

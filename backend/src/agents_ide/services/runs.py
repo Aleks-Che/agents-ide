@@ -198,6 +198,17 @@ def start_run(session: Session, payload: RunStart) -> Run:
         filter_single_agent_configuration(
             configuration, sources, payload.single_agent, synthetic_graph
         )
+    # Inject confirmed Council plan into inputs when planning_source is present.
+    if payload.planning_source is not None:
+        from agents_ide.services.planning import planning_inputs
+
+        payload = payload.model_copy(
+            update={
+                "inputs": planning_inputs(
+                    session, payload.planning_source, payload.project_id, payload.inputs
+                )
+            }
+        )
     from agents_ide.domain.graph_validation import preflight as preflight_binding
 
     report = preflight_binding(
@@ -254,6 +265,8 @@ def start_run(session: Session, payload: RunStart) -> Run:
         snapshot["required_features"] = sorted(
             set(snapshot.get("required_features", [])) | {"single_agent"}
         )
+    if payload.planning_source is not None:
+        snapshot["planning_source"] = payload.planning_source.model_dump(mode="json")
     snapshot["execution_mode"] = payload.execution_mode
     snapshot["fake_scenario"] = (
         payload.fake_scenario.model_dump(mode="json") if payload.fake_scenario else None
