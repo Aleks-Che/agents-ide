@@ -609,6 +609,7 @@ class PlanningMember(Base):
     model_id: Mapped[str] = mapped_column(String(256), default="")
     params_json: Mapped[str] = mapped_column(Text, default="{}")
     candidates_json: Mapped[str] = mapped_column(Text, default="[]")
+    access_overrides_json: Mapped[str] = mapped_column(Text, default="{}")
     candidate_index: Mapped[int] = mapped_column(Integer, default=0)
     attempt_external_id: Mapped[str | None] = mapped_column(String(128))
     draft_revision: Mapped[int] = mapped_column(Integer, default=0)

@@ -324,7 +324,7 @@ export function CouncilReviewer({
   const revision = job.revisions?.at(-1)
   return (
     <ReviewForm
-      key={`${job.id}:${revision?.revision_number ?? 0}`}
+      key={`${job.id}:${revision?.revision_number ?? 0}:${job.state_version}`}
       job={job}
       onClose={onClose}
       onUse={onUse}
@@ -348,6 +348,7 @@ function ReviewForm({
     {},
   )
   const [editing, setEditing] = useState(false)
+  const [acknowledgeUnknown, setAcknowledgeUnknown] = useState(false)
   const [body, setBody] = useState(() =>
     JSON.stringify(
       {
@@ -401,9 +402,34 @@ function ReviewForm({
       ),
     onSuccess: refresh,
   })
+  const retry = useMutation({
+    mutationFn: () =>
+      planningApi.retry(
+        job.id,
+        {
+          expected_state_version: job.state_version,
+          reset_all_failed: true,
+          refresh_credentials: true,
+          acknowledge_unknown_result: acknowledgeUnknown,
+        },
+        csrf,
+      ),
+    onSettled: refresh,
+  })
   const terminal = ['confirmed', 'cancelled', 'failed'].includes(job.state)
   const revisable = ['ready_for_confirmation', 'needs_answers'].includes(
     job.state,
+  )
+  const retryable =
+    job.state === 'failed' &&
+    ![
+      'legacy_planning_unverifiable',
+      'context_changed',
+      'planning_budget_exhausted',
+      'planning_deadline_exceeded',
+    ].includes(String(job.last_error?.code))
+  const unknownResult = job.members?.some((m) =>
+    ['unknown', 'running'].includes(m.status),
   )
   const questions = revision?.questions ?? []
   const answered = questions.every((q) => {
@@ -415,7 +441,8 @@ function ReviewForm({
         : Boolean(a.selected_option_ids?.length))
     )
   })
-  const busy = submit.isPending || confirm.isPending || cancel.isPending
+  const busy =
+    submit.isPending || confirm.isPending || cancel.isPending || retry.isPending
   return (
     <Modal onClose={onClose} busy={busy} labelledBy="council-review-title">
       <div className="dialog wide council-dialog">
@@ -570,18 +597,41 @@ function ReviewForm({
           </>
         ) : (
           <p role="status">
-            {terminal
-              ? 'Подготовка завершена без готового плана.'
-              : 'Получаем и объединяем черновики…'}
+            {retryable
+              ? `Подготовка прервана: ${job.last_error?.code ?? job.last_error?.reason ?? 'неизвестная причина'}. После восстановления доступа можно повторить.`
+              : terminal
+                ? 'Подготовка завершена без готового плана.'
+                : 'Получаем и объединяем черновики…'}
           </p>
         )}
-        {[submit.error, confirm.error, cancel.error]
+        {[submit.error, confirm.error, cancel.error, retry.error]
           .filter(Boolean)
           .map((error, i) => (
             <p role="alert" key={i}>
               {launchError(error)}
             </p>
           ))}
+        {retryable ? (
+          <div>
+            <p>
+              Повтор сохраняет принятые черновики и общий лимит времени и
+              вызовов. Используется текущий ключ того же подключения; адрес,
+              модели и состав группы сохраняются.
+            </p>
+            {unknownResult ? (
+              <label>
+                <input
+                  type="checkbox"
+                  checked={acknowledgeUnknown}
+                  disabled={busy}
+                  onChange={(e) => setAcknowledgeUnknown(e.target.checked)}
+                />
+                Предыдущий вызов мог выполниться. Подтверждаю возможный повтор и
+                дополнительную оплату.
+              </label>
+            ) : null}
+          </div>
+        ) : null}
         <footer>
           {!terminal ? (
             <button
@@ -590,6 +640,15 @@ function ReviewForm({
               onClick={() => cancel.mutate()}
             >
               Отменить подготовку
+            </button>
+          ) : null}
+          {retryable ? (
+            <button
+              className="quiet"
+              disabled={!csrf || busy || (unknownResult && !acknowledgeUnknown)}
+              onClick={() => retry.mutate()}
+            >
+              Повторить после восстановления доступа
             </button>
           ) : null}
           <button onClick={onClose}>Закрыть</button>

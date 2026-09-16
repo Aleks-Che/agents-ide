@@ -87,4 +87,33 @@ describe('Council transport', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
     await expect(planningApi.get('job')).rejects.toThrow('offline')
   })
+  it('retries only the displayed version with explicit access and unknown-outcome choices', async () => {
+    const fetch = capture()
+    const body = {
+      expected_state_version: 7,
+      reset_all_failed: true,
+      refresh_credentials: true,
+      acknowledge_unknown_result: false,
+    }
+    await planningApi.retry('job', body, 'csrf-retry')
+    const [url, init] = fetch.mock.calls[0]
+    expect(url).toBe('/api/planning_jobs/job/retry')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual(body)
+    expect(init.headers.get('X-CSRF-Token')).toBe('csrf-retry')
+  })
+  it('does not silently repeat a retry after a conflict', async () => {
+    const fetch = capture(409, {
+      code: 'planning_state_version_invalid',
+      message: 'Reload',
+    })
+    await expect(
+      planningApi.retry(
+        'job',
+        { expected_state_version: 1, reset_all_failed: true },
+        'csrf',
+      ),
+    ).rejects.toBeInstanceOf(ApiError)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
 })

@@ -212,6 +212,36 @@ class PlanningCancelRequest(ApiModel):
     reason: str | None = Field(default=None, max_length=512)
 
 
+class PlanningRetryRequest(ApiModel):
+    expected_state_version: int = Field(ge=0)
+    reason: str | None = Field(default=None, max_length=512)
+    # Members whose slot indices are listed are reset to pending with
+    # candidate_index=0 so the worker can pick them up again. Members not
+    # listed are left untouched (typically because they already succeeded
+    # and their draft will be merged again).
+    reset_member_indices: list[Annotated[int, Field(ge=0, le=4)]] = Field(
+        default_factory=list, max_length=5
+    )
+    reset_all_failed: bool = False
+    acknowledge_unknown_result: bool = False
+    refresh_credentials: bool = False
+
+    @model_validator(mode="after")
+    def _reset_selection(self) -> PlanningRetryRequest:
+        if self.reset_all_failed and self.reset_member_indices:
+            raise ValueError("Choose reset_all_failed or reset_member_indices")
+        if len(set(self.reset_member_indices)) != len(self.reset_member_indices):
+            raise ValueError("Duplicate member indices")
+        return self
+
+
+class PlanningRetried(ApiOutput):
+    state: PlanningState
+    state_version: int
+    reset_member_ids: list[str] = Field(default_factory=list)
+    preserved_member_ids: list[str] = Field(default_factory=list)
+
+
 class PlanningJobView(ApiOutput):
     id: str
     project_id: str

@@ -180,7 +180,7 @@ def _prepare(
                     identities.add(service.candidate_identity(selected))
         candidate = None
         while member.candidate_index < len(candidates):
-            current = candidates[member.candidate_index]
+            current = service.effective_candidate(member, candidates[member.candidate_index])
             resource = session.get(ProviderConnection, current["provider_connection_id"])
             reason = None
             if not current["enabled"]:
@@ -303,6 +303,8 @@ def _finish(
         job = _owned(session, claim)
         attempt = session.get(PlanningAttempt, attempt_id)
         assert attempt
+        if attempt.generation != claim.generation or attempt.outcome != "running":
+            raise AppError("planning_attempt_stale", "Planning attempt already settled", 409)
         member = session.get(PlanningMember, attempt.member_id)
         assert member
         raw = str(sanitize(result.raw_text))

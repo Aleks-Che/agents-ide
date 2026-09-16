@@ -8,7 +8,7 @@ from sqlalchemy import URL, Engine, create_engine, event
 
 from agents_ide.config import Settings
 
-SCHEMA_REVISION = "0014_council_safety"
+SCHEMA_REVISION = "0015_council_retry"
 
 
 def create_database(settings: Settings) -> Engine:

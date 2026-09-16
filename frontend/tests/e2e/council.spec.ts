@@ -327,3 +327,172 @@ test('Council can be cancelled before the first revision', async ({ page }) => {
   expect(final.usage.external_calls).toBe(0)
   expect(final.revisions).toEqual([])
 })
+
+for (const unknown of [false, true]) {
+  test(`Council retry: ${unknown ? 'explicit unknown consent' : 'rotated credentials and lost reply'}`, async ({
+    page,
+  }) => {
+    test.setTimeout(60_000)
+    page.setDefaultTimeout(10_000)
+    const calls: { model: string; authorization: string | undefined }[] = []
+    let phase = 'broken'
+    const server = createServer(async (req, res) => {
+      let raw = ''
+      for await (const chunk of req) raw += chunk
+      const body = JSON.parse(raw)
+      calls.push({
+        model: body.model,
+        authorization: req.headers.authorization,
+      })
+      if (phase === 'broken' && body.model === 'x') {
+        if (unknown) {
+          req.socket.destroy()
+          return
+        }
+        res.writeHead(401, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'Expired credential' } }))
+        return
+      }
+      const content = document(
+        body.model === 'merge'
+          ? 'Merged plan after retry'
+          : `Draft ${body.model}`,
+      )
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: { role: 'assistant', content: JSON.stringify(content) },
+            },
+          ],
+          usage: { total_tokens: 4 },
+        }),
+      )
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      await pair(page)
+      const address = server.address() as { port: number }
+      const project = await api(page, 'POST', '/projects', {
+        name: `Retry council ${unknown}`,
+        workspace_path: workspace(),
+      })
+      const chat = await api(page, 'POST', `/projects/${project.id}/chats`, {
+        title: 'Retry',
+      })
+      const connection = await api(page, 'POST', '/connections', {
+        name: `Retry provider ${unknown}`,
+        base_url: `http://127.0.0.1:${address.port}/v1`,
+        secret: 'synthetic-old-key',
+      })
+      const job = await api(page, 'POST', '/planning_jobs', {
+        project_id: project.id,
+        chat_id: chat.id,
+        task_text: 'Retry after restoration',
+        idempotency_key: crypto.randomUUID(),
+        participants: ['x', 'y', 'merge'].map((model_id, i) => ({
+          role: i === 2 ? 'merger' : 'participant',
+          selection: {
+            kind: 'direct',
+            model_id,
+            provider_connection_id: connection.id,
+          },
+        })),
+      })
+      const python = path.resolve(
+        '../backend/.venv',
+        process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
+      )
+      const dispatch = () =>
+        promisify(execFile)(
+          python,
+          [
+            path.resolve('tests/e2e/dispatch_council.py'),
+            process.env.AGENTS_IDE_E2E_DATA_DIR!,
+            job.id,
+          ],
+          { windowsHide: true, timeout: 20_000 },
+        )
+      await dispatch()
+      const before = await api(page, 'GET', `/planning_jobs/${job.id}`)
+      expect(before.state).toBe('failed')
+      expect(before.last_error.code).toBe(
+        unknown ? 'unknown_external_result' : 'council_quorum_missing',
+      )
+      expect(before.usage.external_calls).toBe(unknown ? 1 : 2)
+      const accepted = before.drafts.filter(
+        (d: { accepted: boolean }) => d.accepted,
+      )
+      await api(page, 'PATCH', `/connections/${connection.id}`, {
+        expected_version: connection.version,
+        secret: 'synthetic-new-key',
+      })
+      await page.reload()
+      await page
+        .getByRole('option', { name: `Retry council ${unknown}` })
+        .click()
+      await page
+        .getByRole('region', { name: 'Планы этого диалога' })
+        .getByRole('button')
+        .click()
+      const button = page.getByRole('button', {
+        name: 'Повторить после восстановления доступа',
+      })
+      if (unknown) {
+        await expect(button).toBeDisabled()
+        await page
+          .getByRole('checkbox', { name: /Предыдущий вызов мог выполниться/ })
+          .check()
+      } else {
+        // Commit the mutation but lose its HTTP reply: refetch must leave failed UI.
+        await page.route(
+          `**/api/planning_jobs/${job.id}/retry`,
+          async (route) => {
+            await route.fetch()
+            await route.abort('failed')
+          },
+          { times: 1 },
+        )
+      }
+      phase = 'restored'
+      const request = page.waitForRequest((r) =>
+        r.url().endsWith(`/planning_jobs/${job.id}/retry`),
+      )
+      await button.click()
+      expect((await request).postDataJSON().acknowledge_unknown_result).toBe(
+        unknown,
+      )
+      await expect(page.getByRole('dialog')).toContainText('drafting')
+      await dispatch()
+      await expect(page.getByRole('dialog')).toContainText(
+        'Merged plan after retry',
+        { timeout: 15_000 },
+      )
+      const after = await api(page, 'GET', `/planning_jobs/${job.id}`)
+      expect(after.state).toBe('ready_for_confirmation')
+      expect(after.usage.external_calls).toBe(4)
+      expect(after.started_at).toBe(before.started_at)
+      expect(after.drafts).toEqual(expect.arrayContaining(accepted))
+      expect(calls.map((c) => c.model)).toEqual(
+        unknown ? ['x', 'x', 'y', 'merge'] : ['x', 'y', 'x', 'merge'],
+      )
+      expect(
+        calls
+          .slice(before.usage.external_calls)
+          .every((c) => c.authorization === 'Bearer synthetic-new-key'),
+      ).toBe(true)
+      const events = after.events.filter(
+        (e: { type: string }) => e.type === 'planning.retried',
+      )
+      expect(events).toHaveLength(1)
+      expect(events[0].payload.acknowledged_unknown_members).toHaveLength(
+        unknown ? 1 : 0,
+      )
+      expect(JSON.stringify(after)).not.toContain('synthetic-new-key')
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+}

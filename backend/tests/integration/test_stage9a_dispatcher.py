@@ -324,3 +324,164 @@ def test_two_of_three_merge_but_single_draft_never_passes_as_council(authenticat
         assert result["n_participants_actual"] == count - 1
         assert result["degraded"]
         assert result["state"] == ("ready_for_confirmation" if count == 3 else "failed")
+
+
+def test_retry_failed_job_preserves_budget_and_accepted_drafts(authenticated, tmp_path):
+    client, headers = authenticated
+    *_, payload = setup(client, headers, tmp_path)
+    job = create(client, headers, payload)
+    failed = dispatch(
+        client,
+        job,
+        responses=[
+            {
+                "node_id": "council_participant_0",
+                "outcome": "confirmed_failure",
+                "error_code": "quota",
+            },
+            {
+                "node_id": "council_participant_1",
+                "outcome": "confirmed_failure",
+                "error_code": "quota",
+            },
+        ],
+    )
+    assert failed["state"] == "failed"
+    assert failed["last_error"]["code"] == "council_quorum_missing"
+    usage_before = failed["usage"]["external_calls"]
+    # After access restoration: retry resets both failed participants.
+    response = client.post(
+        f"/api/planning_jobs/{job['id']}/retry",
+        headers=headers,
+        json={"expected_state_version": failed["state_version"], "reset_all_failed": True},
+    )
+    assert response.status_code == 200, response.text
+    accepted = response.json()
+    assert accepted["state"] == "drafting"
+    assert len(accepted["reset_member_ids"]) == 2
+    # The merger is untouched (never tried), so it is preserved.
+    assert len(accepted["preserved_member_ids"]) == 1
+    refreshed = client.get(f"/api/planning_jobs/{job['id']}").json()
+    assert refreshed["state"] == "drafting"
+    assert refreshed["usage"]["external_calls"] == usage_before
+    statuses = sorted(m["status"] for m in refreshed["members"] if m["role"] == "participant")
+    assert statuses == ["pending", "pending"]
+    # Redispatch completes the council with the same shared budget preserved.
+    finished = dispatch(
+        client,
+        refreshed,
+        responses=[
+            {
+                "node_id": "council_participant_0",
+                "attempt_index": 2,
+                "raw_text": json.dumps(document("Recovered 0")),
+            },
+            {
+                "node_id": "council_participant_1",
+                "attempt_index": 2,
+                "raw_text": json.dumps(document("Recovered 1")),
+            },
+            {"node_id": "council_merger", "raw_text": json.dumps(document("Merged after retry"))},
+        ],
+    )
+    assert finished["state"] == "ready_for_confirmation"
+    assert finished["usage"]["external_calls"] == usage_before + 3
+    assert "Recovered 0" in finished["drafts"][0]["body_text"]
+    assert "Recovered 1" in finished["drafts"][1]["body_text"]
+
+
+def test_retry_without_listing_failed_members_is_rejected(authenticated, tmp_path):
+    client, headers = authenticated
+    *_, payload = setup(client, headers, tmp_path)
+    job = create(client, headers, payload)
+    failed = dispatch(
+        client,
+        job,
+        responses=[
+            {"node_id": "council_participant_0", "outcome": "confirmed_failure"},
+            {"node_id": "council_participant_1", "outcome": "confirmed_failure"},
+        ],
+    )
+    assert failed["state"] == "failed"
+    response = client.post(
+        f"/api/planning_jobs/{job['id']}/retry",
+        headers=headers,
+        json={"expected_state_version": failed["state_version"], "reset_member_indices": [0]},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "planning_retry_unresolved"
+
+
+def test_retry_rejects_attempt_to_reset_succeeded_member(authenticated, tmp_path):
+    client, headers = authenticated
+    *_, payload = setup(client, headers, tmp_path, count=3)
+    job = create(client, headers, payload)
+    failed = dispatch(
+        client,
+        job,
+        responses=[
+            {"node_id": "council_participant_0", "outcome": "confirmed_failure"},
+            {"node_id": "council_participant_1", "raw_text": json.dumps(document())},
+            {"node_id": "council_participant_2", "raw_text": json.dumps(document())},
+            {"node_id": "council_merger", "raw_text": json.dumps(document())},
+        ],
+    )
+    assert failed["state"] == "ready_for_confirmation"
+    # ready_for_confirmation is not eligible for retry even with reset_all_failed.
+    response = client.post(
+        f"/api/planning_jobs/{job['id']}/retry",
+        headers=headers,
+        json={"expected_state_version": failed["state_version"], "reset_all_failed": True},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "planning_state_invalid"
+
+
+def test_retry_state_version_mismatch_returns_conflict(authenticated, tmp_path):
+    client, headers = authenticated
+    *_, payload = setup(client, headers, tmp_path)
+    job = create(client, headers, payload)
+    failed = dispatch(
+        client,
+        job,
+        responses=[
+            {"node_id": "council_participant_0", "outcome": "confirmed_failure"},
+            {"node_id": "council_participant_1", "outcome": "confirmed_failure"},
+        ],
+    )
+    assert failed["state"] == "failed"
+    response = client.post(
+        f"/api/planning_jobs/{job['id']}/retry",
+        headers=headers,
+        json={"expected_state_version": failed["state_version"] + 99, "reset_all_failed": True},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "planning_state_version_invalid"
+
+
+def test_retry_records_event_and_clears_finished_at(authenticated, tmp_path):
+    client, headers = authenticated
+    *_, payload = setup(client, headers, tmp_path)
+    job = create(client, headers, payload)
+    failed = dispatch(
+        client,
+        job,
+        responses=[
+            {"node_id": "council_participant_0", "outcome": "confirmed_failure"},
+            {"node_id": "council_participant_1", "outcome": "confirmed_failure"},
+        ],
+    )
+    assert failed["state"] == "failed"
+    assert failed["finished_at"] is not None
+    response = client.post(
+        f"/api/planning_jobs/{job['id']}/retry",
+        headers=headers,
+        json={"expected_state_version": failed["state_version"], "reset_all_failed": True},
+    )
+    assert response.status_code == 200, response.text
+    refreshed = client.get(f"/api/planning_jobs/{job['id']}").json()
+    assert refreshed["finished_at"] is None
+    assert any(e["type"] == "planning.retried" for e in refreshed["events"])
+    retry_event = next(e for e in refreshed["events"] if e["type"] == "planning.retried")
+    assert len(retry_event["payload"]["reset_members"]) == 2
+    assert retry_event["payload"]["reason"] is None

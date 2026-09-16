@@ -24,6 +24,8 @@ from agents_ide.domain.planning import (
     PlanningJobCreate,
     PlanningJobView,
     PlanningMemberView,
+    PlanningRetried,
+    PlanningRetryRequest,
     PlanningRevisionView,
 )
 from agents_ide.domain.planning_document import PlanDocument, parse_document
@@ -33,6 +35,7 @@ from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
     Chat,
     PlanningAnswer,
+    PlanningAttempt,
     PlanningDraft,
     PlanningEvent,
     PlanningJob,
@@ -269,6 +272,152 @@ def cancel_planning_job(
     _record_event(session, job_id, event_type="planning.cancelled")
     session.flush()
     return job
+
+
+# Running can remain after a lost worker; it requires explicit unknown-outcome consent.
+_RETRY_RESET_STATUSES = {"failed", "unknown", "skipped", "running"}
+
+
+def effective_candidate(member: PlanningMember, candidate: dict[str, Any]) -> dict[str, Any]:
+    """Apply an explicitly recorded access revision to an immutable candidate."""
+    override = json.loads(member.access_overrides_json).get(candidate["provider_connection_id"], {})
+    return {**candidate, "connection": {**candidate["connection"], **override}}
+
+
+def _refresh_access(session: Session, member: PlanningMember) -> list[dict[str, Any]]:
+    overrides = json.loads(member.access_overrides_json)
+    changes = []
+    for pinned in json.loads(member.candidates_json):
+        current = effective_candidate(member, pinned)["connection"]
+        resource = session.get(ProviderConnection, pinned["provider_connection_id"])
+        if resource is None or resource.archived_at is not None:
+            continue  # An unavailable fallback must not block other pinned candidates.
+        if resource.base_url != pinned["connection"]["base_url"]:
+            raise AppError(
+                "planning_retry_endpoint_changed",
+                "Адрес подключения изменён: создайте новый Council",
+                409,
+                {"connection_id": resource.id},
+            )
+        if resource.version != current["version"]:
+            overrides[resource.id] = {
+                "version": resource.version,
+                "secret_reference": resource.secret_reference,
+            }
+            changes.append(
+                {
+                    "member_id": member.id,
+                    "connection_id": resource.id,
+                    "previous_version": current["version"],
+                    "version": resource.version,
+                }
+            )
+    member.access_overrides_json = _serialise(overrides)
+    return changes
+
+
+def retry_planning_job(
+    session: Session, job_id: str, payload: PlanningRetryRequest
+) -> PlanningRetried:
+    """Explicit retry with fencing, unchanged budgets and preserved evidence."""
+    begin_write(session)
+    job = get_planning_job(session, job_id)
+    if job.state != "failed":
+        raise AppError("planning_state_invalid", "Retry requires a failed planning job", 409)
+    if job.state_version != payload.expected_state_version:
+        raise AppError("planning_state_version_invalid", "Expected state version mismatch", 409)
+    now = utc_now()
+    if job.lease_owner and (job.lease_expires_at or 0) > now:
+        raise AppError("planning_retry_worker_active", "Дождитесь освобождения задания worker", 409)
+    if not job.request_hash:
+        raise AppError("legacy_planning_unverifiable", "Создайте новый Council", 409)
+    if content_hash(json.loads(job.context_snapshot_json)) != job.read_manifest_hash:
+        raise AppError("context_changed", "Контекст Council повреждён", 409)
+    budget, usage = json.loads(job.budget_json), json.loads(job.usage_json)
+    if job.started_at and now >= job.started_at + budget["max_wallclock_seconds"]:
+        raise AppError("planning_deadline_exceeded", "Общий лимит времени исчерпан", 409)
+    if usage.get("external_calls", 0) >= budget["max_external_calls"]:
+        raise AppError("planning_budget_exhausted", "Общий лимит вызовов исчерпан", 409)
+    members = list(
+        session.scalars(
+            select(PlanningMember)
+            .where(PlanningMember.job_id == job.id)
+            .order_by(PlanningMember.slot_index)
+        )
+    )
+    if not members:
+        raise AppError("planning_invalid", "Planning job has no members", 409)
+    reset_indices = (
+        {m.slot_index for m in members if m.status in _RETRY_RESET_STATUSES}
+        if payload.reset_all_failed
+        else set(payload.reset_member_indices)
+    )
+    if reset_indices - {m.slot_index for m in members}:
+        raise AppError("planning_retry_invalid", "Unknown member index", 409)
+    for member in members:
+        if member.slot_index in reset_indices and member.status not in _RETRY_RESET_STATUSES:
+            raise AppError("planning_retry_invalid", "Only unsuccessful members may be reset", 409)
+        if member.status in _RETRY_RESET_STATUSES and member.slot_index not in reset_indices:
+            raise AppError("planning_retry_unresolved", "List all unsuccessful members", 409)
+    if not reset_indices and not any(m.status == "pending" for m in members):
+        raise AppError("planning_retry_invalid", "No work to retry", 409)
+    unfinished = list(
+        session.scalars(
+            select(PlanningAttempt).where(
+                PlanningAttempt.job_id == job.id, PlanningAttempt.outcome == "running"
+            )
+        )
+    )
+    unknown_ids = {m.id for m in members if m.status in {"unknown", "running"}}
+    unknown_ids.update(a.member_id for a in unfinished)
+    if unknown_ids and not payload.acknowledge_unknown_result:
+        raise AppError(
+            "planning_retry_unknown_requires_ack",
+            "Предыдущий вызов мог выполниться у провайдера. Подтвердите возможный повтор и оплату",
+            409,
+        )
+    # Fencing occurs before requeueing. A late old worker cannot finish or release this round.
+    job.generation += 1
+    job.lease_owner, job.lease_expires_at = None, None
+    for attempt in unfinished:
+        attempt.outcome, attempt.error_code, attempt.finished_at = "unknown", "worker_lost", now
+    reset, preserved, access_changes = [], [], []
+    for member in members:
+        if member.slot_index in reset_indices:
+            member.status = "pending"
+            member.candidate_index = 0
+            # Keep the format-repair count and diagnostic drafts across retry rounds.
+            member.started_at = member.finished_at = None
+            member.error_json = None
+            reset.append(member.id)
+        else:
+            preserved.append(member.id)
+        if payload.refresh_credentials and member.status == "pending":
+            access_changes.extend(_refresh_access(session, member))
+    job.state, job.finished_at, job.last_error_json = "drafting", None, None
+    job.state_version += 1
+    job.updated_at = now
+    _record_event(
+        session,
+        job_id,
+        event_type="planning.retried",
+        payload={
+            "reset_members": reset,
+            "preserved_members": preserved,
+            "reason": payload.reason,
+            "generation": job.generation,
+            "external_calls": usage.get("external_calls", 0),
+            "acknowledged_unknown_members": sorted(unknown_ids),
+            "access_changes": access_changes,
+        },
+    )
+    session.flush()
+    return PlanningRetried(
+        state=PlanningState(job.state),
+        state_version=job.state_version,
+        reset_member_ids=reset,
+        preserved_member_ids=preserved,
+    )
 
 
 def revision_hash(revision: PlanningRevision) -> str:

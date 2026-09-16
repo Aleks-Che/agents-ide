@@ -1,5 +1,116 @@
 # Журнал реализации
 
+### 2026-09-16 · Ревью Council retry/resolve после восстановления доступа
+
+**Результат:** найденные ошибки исправлены. Этот раздел уточняет первоначальную запись о retry ниже. Пункт закрыт для текущего LLM direct/group Council; полная приёмка 9A с harness/read workspace и платными моделями остаётся открытой.
+
+**Исправления.**
+
+- Retry продлевал общий wallclock-бюджет через новый started_at. Теперь сохраняет исходный дедлайн, счётчик вызовов и одно исправление формата на слот; исчерпанные лимиты отклоняются до постановки новых вызовов. Legacy-задание и повреждённый контекст восстановлением не обходятся.
+- Старый worker мог записать результат после сброса слотов. Живой lease блокирует retry, после истечения владение снимается с увеличением generation; `_finish` проверяет поколение и незавершённость попытки. Оставшееся намерение становится unknown.
+- Unknown/running нельзя повторить обычной кнопкой восстановления доступа. Требуется отдельное `acknowledge_unknown_result` с явной UI-подсказкой о возможном исполнении/оплате предыдущего вызова. Автоматического replay нет.
+- Замена ключа раньше оставляла snapshot на недоступной старой версии. Добавлены `refresh_credentials` и миграция [0015_council_retry](../backend/src/agents_ide/persistence/migrations/versions/0015_council_retry.py): отдельные access_overrides для того же ID/base_url, без изменения кандидатов/параметров/группы. Записываются версии доступа в попытках и audit-событии; API не раскрывает ключи или secret_reference. Смена endpoint отклоняется.
+- Retry больше не стирает диагностический черновик. Принятые результаты сохраняются; отказ только merger повторяет только merger. Неверные/дублирующиеся/отсутствующие индексы, смешанные способы выбора, сброс succeeded/pending и неполный список failed отклоняются атомарно.
+- UI/API используют сгенерированный PlanningRetryRequest; после любого исхода мутации UI перечитывает состояние. Потерянный HTTP-ответ не оставляет экран в старом failed и не вызывает автоматическую повторную команду. Согласие unknown привязано к текущей версии задания.
+- Исходный e2e возвращал HTTP 200 с невалидным планом вместо отказа доступа, не запускал worker после retry и ожидал ready при наличии вопросов. Исправлены сценарии HTTP 401, реальной ротации ключей, неизвестного исхода и потерянного ответа.
+
+**Проверки.**
+
+- Общий интеграционный набор этапов 8/9/9A: **145 passed**, 396 нерелевантных тестов исключены, 520 с. После сбора этого набора добавлена отдельная регрессия retry закреплённой группы: **1 passed**. Совокупно проверены все 146 связанных сценариев; полный backend-набор в этой итерации не запускался.
+- В регрессиях проверены настоящие worker/локальный HTTP с синтетическими DPAPI-ключами, миграция 0014 → 0015 с сохранением snapshot, unknown/late worker, конкурирующие запросы, атомарные отказы, дедлайн/лимиты, сохранение принятых и диагностических черновиков, повтор только merger и независимость кандидатов группы.
+- Frontend: **127 Vitest passed**, **4 Playwright Council passed** (включая ротацию ключа с потерянным ответом retry и отдельное согласие unknown). Полный браузерный набор не запускался.
+- Ruff check/format, mypy Windows + Linux (**92 модуля**), generate_contracts.py --check, ESLint, Prettier и tsc/Vite build — без ошибок. Есть два прежних предупреждения deprecation в зависимостях TestClient. JS 430,92 kB / gzip 118,66 kB.
+
+
+**Нюансы для продолжения:** wallclock включает ожидание восстановления в failed; по истечении общего дедлайна нужен новый Council. Retry с устаревшей версией возвращает 409; отдельного idempotency key у этой операции нет, UI восстанавливает состояние чтением. Выбор подмножества неуспешных слотов с оставлением остальных failed, явный одиночный план, автоматический backoff и harness/read workspace остаются открытыми. Сохранение успешно принятых участников без повторных вызовов уже проверено.
+
+### 2026-09-16 · Этап 9A · Council: явный retry после восстановления доступа
+
+Исторический отчёт до ревью; найденные ограничения и окончательное поведение уточнены в записи выше.
+
+**Статус:** добавлен `POST /api/planning_jobs/{id}/retry` и кнопка в CouncilPanel.
+Этап 9A остаётся частичным: harness/read workspace, retry/resolve после
+восстановления доступа в полном объёме, повтор недостающих участников и
+явный одиночный план при потере кворума — открытые пункты, см. [план](IMPLEMENTATION_PLAN.md#этап-9a-совместное-планирование-несколькими-моделями-council).
+Настоящие платные модели, harness-gate и полная A71–A74 не закрыты.
+
+**Реализовано.**
+
+- [`domain/planning.py`](backend/src/agents_ide/domain/planning.py) —
+  новые `PlanningRetryRequest` (`expected_state_version`, опциональные
+  `reason`, `reset_member_indices`, `reset_all_failed`) и `PlanningRetried`
+  с разделёнными `reset_member_ids`/`preserved_member_ids`.
+- [`services/planning.py`](backend/src/agents_ide/services/planning.py) —
+  `retry_planning_job` под `begin_write`: принимает только `failed`,
+  проверяет `state_version`, переводит в `drafting`, сбрасывает
+  `finished_at`, записывает `planning.retried` событие с фактическими
+  ID сброшенных и сохранённых участников. Не сбрасывает общий
+  `external_calls` бюджет, `read_manifest_hash`, контекст, ревизии и
+  принятые черновики.
+- [`api/domain.py`](backend/src/agents_ide/api/domain.py) — endpoint
+  `POST /api/planning_jobs/{id}/retry` возвращает `PlanningRetried`.
+  OpenAPI/TS-контракты перегенерированы.
+- [`engine/planning_worker.py`](backend/src/agents_ide/engine/planning_worker.py) —
+  `claim_planning_job` уже поднимает `drafting` после сбоя lease; добавленных
+  изменений не требуется. Сценарий «worker умер → job failed → retry» уже
+  проходит существующий путь через `_prepare` с обнулённым
+  `candidate_index` и сохранёнными попытками.
+- [`frontend/src/api/planning.ts`](frontend/src/api/planning.ts) —
+  `planningApi.retry` использует сгенерированный `PlanningRetryRequest`
+  и возвращает `PlanningRetried` через cookie/CSRF.
+- [`frontend/src/features/planning/CouncilPanel.tsx`](frontend/src/features/planning/CouncilPanel.tsx) —
+  кнопка «Повторить после восстановления доступа» для `state==='failed'`,
+  вызов с `reset_all_failed: true`; сообщение об ошибке и `last_error.code`
+  показываются явно. Загрузка и ошибки отражены в общем `busy`.
+- [`frontend/tests/e2e/council.spec.ts`](frontend/tests/e2e/council.spec.ts) —
+  e2e-сценарий: фаза «провайдер недоступен» даёт
+  `council_quorum_missing`, переключение на восстановленный провайдер +
+  retry завершает `ready_for_confirmation`. Проверены общий бюджет,
+  `planning.retried` событие и видимость плана в UI.
+
+**Границы и нюансы.**
+
+- Сброс принимает либо `reset_all_failed=true`, либо явный список
+  `reset_member_indices`, который должен покрывать всех участников в
+  статусах `failed`/`unknown`/`skipped`. Принятые (`succeeded`) сбрасывать
+  запрещено — иначе их черновики теряются. Неполный список → 409
+  `planning_retry_unresolved`, чтобы пользователь явно подтвердил выбор.
+- Состояния `ready_for_confirmation`/`needs_answers`/`cancelled`/`confirmed`
+  не подлежат retry (409 `planning_state_invalid`).
+- Попытки не очищаются: следующий заход использует `attempt_index = N+1`,
+  что сохраняет аудит всех прошлых обращений и совместимо с общим
+  бюджетом вызовов.
+- Retry не делает явного одиночного плана при потере кворума и не
+  повторяет только недостающих участников — это требует дополнительной
+  семантики, обсуждается в этапе 9A.
+- Активная попытка не прерывается принудительно. Если retry вызван,
+  пока worker пишет участника, его `_finish` обновит состояние по
+  фактическому результату, а сброшенный `pending` будет перезаписан
+  при следующем `_prepare`.
+
+**Проверки.**
+
+- Backend: `pytest tests/integration/test_stage9a_dispatcher.py` —
+  **20 passed** (15 предыдущих + 5 новых для retry).
+  `pytest tests/integration/test_stage9a_planning.py
+  tests/integration/test_stage9a_planning_run.py
+  tests/integration/test_stage9a_real_worker.py
+  tests/integration/test_stage9a_migration.py` — **11 passed**.
+  `pytest tests/integration/test_stage8_review.py` — **18 passed**
+  (регрессии пресета не затронуты).
+  Mypy src — **91 модуль** без замечаний, Ruff check/format — clean.
+  `scripts/generate_contracts.py --check` — синхронизирован.
+- Frontend: `npm run lint` — clean, `npm run format:check` — clean,
+  `npm run test` (Vitest) — **125 passed**, `npm run build` — clean.
+  JS 429,96 kB / gzip 118,36 kB. Playwright в этой итерации не
+  запускался (требует backend + Chromium и CI); новый e2e-сценарий
+  ждёт следующего прогона.
+
+**Для продолжения:** повтор только недостающих участников, явный
+одиночный план при потере кворума, retry/resolve из состояния
+`unknown_external_result`, harness/read workspace и реальный gate с
+платными моделями.
+
 ### 2026-09-16 · Ревью этапа 9A · Council: исправления и фактическая граница
 
 **Результат:** отчёт о полном завершении не подтверждён. Исправлен LLM direct/group сценарий; этап 9A остаётся частичным. Эта запись уточняет прежние записи от той же даты ниже; открытые пункты возвращены в [план](IMPLEMENTATION_PLAN.md#этап-9a-совместное-планирование-несколькими-моделями-council).

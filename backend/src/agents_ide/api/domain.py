@@ -39,6 +39,8 @@ from agents_ide.domain.planning import (
     PlanningConfirmRequest,
     PlanningJobCreate,
     PlanningJobView,
+    PlanningRetried,
+    PlanningRetryRequest,
 )
 from agents_ide.domain.planning import (
     PlanningConfirmed as PlanningConfirmedSchema,
@@ -1110,6 +1112,13 @@ def cancel_planning_job_endpoint(
 ) -> PlanningJobView:
     planning.cancel_planning_job(session, job_id, payload)
     return planning.load_planning_view(session, job_id)
+
+
+@router.post("/planning_jobs/{job_id}/retry", response_model=PlanningRetried)
+def retry_planning_job_endpoint(
+    session: SessionDep, job_id: str, payload: PlanningRetryRequest
+) -> PlanningRetried:
+    return planning.retry_planning_job(session, job_id, payload)
 
 
 @router.post(

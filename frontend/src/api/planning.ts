@@ -8,6 +8,8 @@ export type PlanningQuestion = ApiSchemas['PlanningQuestion']
 export type PlanningRevisionView = ApiSchemas['PlanningRevisionView']
 export type PlanningAnswersAccepted = ApiSchemas['PlanningAnswersAccepted']
 export type PlanningConfirmed = ApiSchemas['PlanningConfirmed']
+export type PlanningRetryRequest = ApiSchemas['PlanningRetryRequest']
+export type PlanningRetried = ApiSchemas['PlanningRetried']
 export type PlanningJobCreatePayload = ApiSchemas['PlanningJobCreate']
 export type PlanningConfirmationHash = {
   job_id: string
@@ -56,6 +58,17 @@ export const planningApi = {
   ): Promise<PlanningJobView> {
     return request<PlanningJobView>(
       `/planning_jobs/${jobId}/cancel`,
+      { method: 'POST', body: JSON.stringify(body) },
+      csrf,
+    )
+  },
+  retry(
+    jobId: string,
+    body: PlanningRetryRequest,
+    csrf: string,
+  ): Promise<PlanningRetried> {
+    return request<PlanningRetried>(
+      `/planning_jobs/${jobId}/retry`,
       { method: 'POST', body: JSON.stringify(body) },
       csrf,
     )

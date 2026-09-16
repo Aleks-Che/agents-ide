@@ -3818,6 +3818,90 @@
         "title": "PlanningQuestionOption",
         "type": "object"
       },
+      "PlanningRetried": {
+        "additionalProperties": false,
+        "properties": {
+          "preserved_member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Preserved Member Ids",
+            "type": "array"
+          },
+          "reset_member_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reset Member Ids",
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PlanningState"
+          },
+          "state_version": {
+            "title": "State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "state_version"
+        ],
+        "title": "PlanningRetried",
+        "type": "object"
+      },
+      "PlanningRetryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledge_unknown_result": {
+            "default": false,
+            "title": "Acknowledge Unknown Result",
+            "type": "boolean"
+          },
+          "expected_state_version": {
+            "minimum": 0.0,
+            "title": "Expected State Version",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "refresh_credentials": {
+            "default": false,
+            "title": "Refresh Credentials",
+            "type": "boolean"
+          },
+          "reset_all_failed": {
+            "default": false,
+            "title": "Reset All Failed",
+            "type": "boolean"
+          },
+          "reset_member_indices": {
+            "items": {
+              "maximum": 4.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "maxItems": 5,
+            "title": "Reset Member Indices",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_state_version"
+        ],
+        "title": "PlanningRetryRequest",
+        "type": "object"
+      },
       "PlanningRevisionReadiness": {
         "enum": [
           "ready",
@@ -8399,6 +8483,58 @@
           }
         },
         "summary": "Planning Confirmation Hash Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/planning_jobs/{job_id}/retry": {
+      "post": {
+        "operationId": "retry_planning_job_endpoint_api_planning_jobs__job_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanningRetryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningRetried"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Planning Job Endpoint",
         "tags": [
           "domain"
         ]

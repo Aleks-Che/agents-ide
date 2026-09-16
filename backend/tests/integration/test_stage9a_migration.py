@@ -36,3 +36,38 @@ def test_stage13_history_survives_upgrade_and_legacy_job_is_not_replayed(authent
     result = client.get(f"/api/planning_jobs/{job['id']}").json()
     assert result["last_error"]["code"] == "legacy_planning_unverifiable"
     assert result["usage"]["external_calls"] == 0
+
+
+def test_retry_migration_preserves_pinned_candidates(authenticated, tmp_path):
+    client, headers = authenticated
+    *_, payload = setup(client, headers, tmp_path)
+    create(client, headers, payload)
+    with client.app.state.engine.connect() as connection:
+        config = Config()
+        config.set_main_option(
+            "script_location", str(Path(database.__file__).parent / "migrations")
+        )
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0014_council_safety")
+        connection.commit()
+        before = connection.exec_driver_sql(
+            "SELECT id, candidates_json, candidate_index FROM planning_members ORDER BY id"
+        ).all()
+        command.upgrade(config, "head")
+        connection.commit()
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+        assert (
+            connection.exec_driver_sql(
+                "SELECT id, candidates_json, candidate_index FROM planning_members ORDER BY id"
+            ).all()
+            == before
+        )
+        assert (
+            connection.exec_driver_sql("SELECT access_overrides_json FROM planning_members")
+            .scalars()
+            .all()
+            == ["{}"] * 3
+        )
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == (
+            database.SCHEMA_REVISION
+        )

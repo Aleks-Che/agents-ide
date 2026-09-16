@@ -72,6 +72,8 @@ export interface ApiSchemas {
   "PlanningMemberView": { "error"?: (Record<string, unknown> | null); "finished_at"?: (string | null); "id": string; "role": "participant" | "merger"; "selected_connection_id"?: (string | null); "selected_connection_name"?: (string | null); "selected_member_id"?: (string | null); "selected_model_id"?: (string | null); "selection": Record<string, unknown>; "slot_index": number; "started_at"?: (string | null); "status": ApiSchemas["PlanningMemberStatus"] }
   "PlanningQuestion": { "allow_text"?: boolean; "id": string; "kind": "single" | "multi" | "text"; "options"?: Array<ApiSchemas["PlanningQuestionOption"]>; "prompt": string }
   "PlanningQuestionOption": { "id": string; "label": string }
+  "PlanningRetried": { "preserved_member_ids"?: Array<string>; "reset_member_ids"?: Array<string>; "state": ApiSchemas["PlanningState"]; "state_version": number }
+  "PlanningRetryRequest": { "acknowledge_unknown_result"?: boolean; "expected_state_version": number; "reason"?: (string | null); "refresh_credentials"?: boolean; "reset_all_failed"?: boolean; "reset_member_indices"?: Array<number> }
   "PlanningRevisionReadiness": "ready" | "needs_answers" | "unverified" | "invalid_format"
   "PlanningRevisionView": { "answered"?: boolean; "answered_hash"?: (string | null); "answers"?: Array<Record<string, unknown>>; "author": "merger" | "user"; "body_text": string; "body_truncated": boolean; "confirmation_hash"?: (string | null); "confirmed_at"?: (string | null); "created_at": string; "id": string; "parse": "found" | "none_found" | "invalid_format"; "plan_items"?: Array<Record<string, unknown>>; "questions"?: Array<ApiSchemas["PlanningQuestion"]>; "readiness": ApiSchemas["PlanningRevisionReadiness"]; "revision_number": number }
   "PlanningSource": { "confirmation_hash": string; "job_id": string; "revision_number": number }
@@ -166,6 +168,7 @@ export interface ApiOperations {
   "POST /api/planning_jobs/{job_id}/cancel": { body: ApiSchemas["PlanningCancelRequest"]; parameters: { "path.job_id": string }; responses: { "200": ApiSchemas["PlanningJobView"]; "422": ApiSchemas["HTTPValidationError"] } }
   "POST /api/planning_jobs/{job_id}/confirm": { body: ApiSchemas["PlanningConfirmRequest"]; parameters: { "path.job_id": string }; responses: { "200": ApiSchemas["PlanningConfirmed"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/planning_jobs/{job_id}/hash": { body: never; parameters: { "path.job_id": string; "query.revision_number": number }; responses: { "200": Record<string, unknown>; "422": ApiSchemas["HTTPValidationError"] } }
+  "POST /api/planning_jobs/{job_id}/retry": { body: ApiSchemas["PlanningRetryRequest"]; parameters: { "path.job_id": string }; responses: { "200": ApiSchemas["PlanningRetried"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/presets": { body: never; parameters: Record<string, never>; responses: { "200": Array<Record<string, unknown>> } }
   "POST /api/presets/{preset_id}/copy": { body: (ApiSchemas["PresetCopyRequest"] | null); parameters: { "path.preset_id": string }; responses: { "201": ApiSchemas["PipelineTemplate"]; "422": ApiSchemas["HTTPValidationError"] } }
   "GET /api/projects": { body: never; parameters: { "query.include_archived"?: boolean }; responses: { "200": Array<ApiSchemas["Project"]>; "422": ApiSchemas["HTTPValidationError"] } }
