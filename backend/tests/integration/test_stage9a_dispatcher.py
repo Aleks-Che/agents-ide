@@ -390,7 +390,7 @@ def test_retry_failed_job_preserves_budget_and_accepted_drafts(authenticated, tm
     assert "Recovered 1" in finished["drafts"][1]["body_text"]
 
 
-def test_retry_without_listing_failed_members_is_rejected(authenticated, tmp_path):
+def test_retry_subset_preserves_unselected_failures_and_requires_quorum(authenticated, tmp_path):
     client, headers = authenticated
     *_, payload = setup(client, headers, tmp_path)
     job = create(client, headers, payload)
@@ -408,8 +408,24 @@ def test_retry_without_listing_failed_members_is_rejected(authenticated, tmp_pat
         headers=headers,
         json={"expected_state_version": failed["state_version"], "reset_member_indices": [0]},
     )
-    assert response.status_code == 409
-    assert response.json()["code"] == "planning_retry_unresolved"
+    assert response.status_code == 200, response.text
+    assert response.json()["reset_member_ids"] == [failed["members"][0]["id"]]
+    finished = dispatch(
+        client,
+        failed,
+        responses=[
+            {
+                "node_id": "council_participant_0",
+                "attempt_index": 2,
+                "raw_text": json.dumps(document("Recovered one")),
+            }
+        ],
+    )
+    assert finished["state"] == "failed"
+    assert finished["last_error"]["code"] == "council_quorum_missing"
+    assert finished["usage"]["external_calls"] == failed["usage"]["external_calls"] + 1
+    assert finished["members"][1] == failed["members"][1]
+    assert finished["drafts"][1] == failed["drafts"][1]
 
 
 def test_retry_rejects_attempt_to_reset_succeeded_member(authenticated, tmp_path):

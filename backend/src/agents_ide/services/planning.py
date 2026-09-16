@@ -36,6 +36,7 @@ from agents_ide.engine.artifacts import sanitize
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
     Chat,
+    HarnessProfile,
     PlanningAnswer,
     PlanningAttempt,
     PlanningDraft,
@@ -118,19 +119,50 @@ def _candidate(
     member_id: str | None = None,
     enabled: bool = True,
 ) -> dict[str, Any]:
-    if selection.get("harness_profile_id"):
-        raise AppError(
-            "council_harness_unimplemented",
-            "Council supports LLM connections; read-only harness execution is not verified",
-            422,
-        )
+    """Build an immutable candidate snapshot for one slot.
+
+    Both LLM (``provider_connection_id``) and harness (``harness_profile_id``)
+    selections share the same shape so the worker can iterate over a single
+    list. The kind is derived from the persisted fields.
+    """
     validate_parameters(params)
+    profile_id = selection.get("harness_profile_id")
+    if profile_id:
+        profile = session.get(HarnessProfile, profile_id)
+        if profile is None or profile.archived_at is not None:
+            raise AppError("harness_unavailable", "Council harness profile unavailable", 409)
+        # Until stage 6 opens the real-model gate, only the same read-only/never
+        # permissions are accepted. Any unverified policy change fails fast.
+        if not _harness_is_read_only(profile):
+            raise AppError(
+                "council_harness_unverified",
+                "Council harness must declare an explicit read-only/no-tools policy",
+                422,
+                {"harness_profile_id": profile.id, "harness_kind": profile.harness_kind},
+            )
+        return {
+            "member_id": member_id,
+            "enabled": enabled,
+            "kind": "agent",
+            "model_id": selection["model_id"],
+            "params": params,
+            "harness_profile_id": profile.id,
+            "harness": {
+                "id": profile.id,
+                "name": profile.name,
+                "harness_kind": profile.harness_kind,
+                "executable_path": profile.executable_path,
+                "settings": json.loads(profile.settings_json or "{}"),
+                "version": profile.version,
+            },
+        }
     connection = session.get(ProviderConnection, selection.get("provider_connection_id"))
     if connection is None or connection.archived_at is not None:
         raise AppError("connection_unavailable", "Council connection unavailable", 409)
     return {
         "member_id": member_id,
         "enabled": enabled,
+        "kind": "llm",
         "model_id": selection["model_id"],
         "params": params,
         "provider_connection_id": connection.id,
@@ -144,14 +176,62 @@ def _candidate(
     }
 
 
+def _harness_is_read_only(profile: HarnessProfile) -> bool:
+    """Harness must enforce read-only/no-tools for Council preparation.
+
+    The settings shape follows what ``engine.opencode_runtime.validate_settings``
+    and ``engine.codex_runtime.validate_settings`` already accept. Other shapes
+    remain unverified and are refused to avoid silent capability drift.
+    """
+    try:
+        settings = json.loads(profile.settings_json or "{}")
+    except ValueError:
+        return False
+    if not isinstance(settings, dict):
+        return False
+    from agents_ide.engine.codex_runtime import validate_settings as validate_codex
+    from agents_ide.engine.opencode_runtime import validate_settings as validate_opencode
+
+    try:
+        if profile.harness_kind == "opencode":
+            validate_opencode(settings)
+        elif profile.harness_kind == "codex":
+            validate_codex(settings)
+        else:
+            return False
+    except AppError:
+        return False
+    return True
+
+
 def candidate_identity(candidate: dict[str, Any]) -> tuple[str, str]:
-    # Two credentials for the same endpoint/model are not independent models.
+    """Independence key for a candidate.
+
+    LLM candidates are keyed by the normalised endpoint and model id. Harness
+    candidates use the model ID across harness kinds: changing the transport
+    does not create an independent vote. Unknown aliases remain unverified.
+    """
+    if candidate.get("kind") == "agent":
+        return "harness", candidate["model_id"]
     url = urlsplit(candidate["connection"]["base_url"])
     endpoint = f"{url.scheme.lower()}://{url.netloc.lower()}{url.path.rstrip('/')}"
     return endpoint, candidate["model_id"]
 
 
-def create_planning_job(session: Session, payload: PlanningJobCreate) -> PlanningJob:
+def require_real_council_supported(session: Session, job: PlanningJob) -> None:
+    """Reject the entire job before any external call, including a late merger."""
+    for member in session.scalars(select(PlanningMember).where(PlanningMember.job_id == job.id)):
+        if any(c.get("kind") == "agent" for c in json.loads(member.candidates_json)):
+            raise AppError(
+                "council_harness_real_unverified",
+                "Council через harness пока доступен только во внутренних симуляционных тестах",
+                422,
+            )
+
+
+def create_planning_job(
+    session: Session, payload: PlanningJobCreate, *, simulated: bool = False
+) -> PlanningJob:
     begin_write(session)
     request_hash = content_hash(payload.model_dump(mode="json"))
     existing = session.scalar(
@@ -160,6 +240,8 @@ def create_planning_job(session: Session, payload: PlanningJobCreate) -> Plannin
     if existing:
         if existing.request_hash != request_hash:
             raise AppError("idempotency_conflict", "Planning key belongs to another request", 409)
+        if not simulated:
+            require_real_council_supported(session, existing)
         return existing
     project = session.get(Project, payload.project_id)
     if project is None or project.archived_at is not None:
@@ -199,7 +281,8 @@ def create_planning_job(session: Session, payload: PlanningJobCreate) -> Plannin
     direct_identities: set[tuple[str, str]] = set()
     for index, entry in enumerate(payload.participants):
         selection = entry.selection.model_dump(mode="json", exclude_none=True)
-        candidates = []
+        candidates: list[dict[str, Any]] = []
+        member_kind = "llm"
         if selection["kind"] == "group":
             loaded = load_group_snapshot(session, selection["group_id"])
             if loaded is None:
@@ -207,18 +290,26 @@ def create_planning_job(session: Session, payload: PlanningJobCreate) -> Plannin
             group, rows = loaded
             selection["group_revision"] = group.revision
             selection["group_name"] = group.name
-            if group.kind != "llm":
+            selection["group_kind"] = group.kind
+            if group.kind not in {"llm", "agent"}:
                 raise AppError(
-                    "council_harness_unimplemented", "Council requires an LLM group", 422
+                    "council_group_unsupported",
+                    "Council requires an LLM or agent group",
+                    422,
                 )
+            member_kind = group.kind
             for row in rows:
+                row_payload: dict[str, Any] = {
+                    "model_id": row.model_id,
+                }
+                if row.harness_profile_id:
+                    row_payload["harness_profile_id"] = row.harness_profile_id
+                else:
+                    row_payload["provider_connection_id"] = row.provider_connection_id
                 candidates.append(
                     _candidate(
                         session,
-                        {
-                            "model_id": row.model_id,
-                            "provider_connection_id": row.provider_connection_id,
-                        },
+                        row_payload,
                         {**json.loads(row.params_json), **entry.params},
                         row.id,
                         row.enabled,
@@ -228,6 +319,8 @@ def create_planning_job(session: Session, payload: PlanningJobCreate) -> Plannin
                 raise AppError("model_group_empty", "Нужен включённый кандидат", 422)
         else:
             candidate = _candidate(session, selection, entry.params)
+            if candidate.get("kind") == "agent":
+                member_kind = "agent"
             identity = candidate_identity(candidate)
             if entry.role == "participant" and identity in direct_identities:
                 raise AppError(
@@ -244,16 +337,25 @@ def create_planning_job(session: Session, payload: PlanningJobCreate) -> Plannin
             selection_json=_serialise(selection),
             selection_kind=selection["kind"],
             group_id=selection.get("group_id"),
-            model_id=selection.get("model_id", ""),
+            harness_profile_id=selection.get("harness_profile_id"),
             provider_connection_id=selection.get("provider_connection_id"),
+            model_id=selection.get("model_id", ""),
             params_json=_serialise(entry.params),
             candidates_json=_serialise(candidates),
             status="pending",
         )
         session.add(member)
-        _record_event(session, job.id, event_type="planning.member.scheduled", member_id=member.id)
+        _record_event(
+            session,
+            job.id,
+            event_type="planning.member.scheduled",
+            member_id=member.id,
+            payload={"kind": member_kind},
+        )
     _record_event(session, job.id, event_type="planning.created")
     session.flush()
+    if not simulated:
+        require_real_council_supported(session, job)
     return job
 
 
@@ -281,37 +383,81 @@ _RETRY_RESET_STATUSES = {"failed", "unknown", "skipped", "running"}
 
 
 def effective_candidate(member: PlanningMember, candidate: dict[str, Any]) -> dict[str, Any]:
-    """Apply an explicitly recorded access revision to an immutable candidate."""
-    override = json.loads(member.access_overrides_json).get(candidate["provider_connection_id"], {})
+    """Apply an explicitly recorded access revision to an immutable candidate.
+
+    LLM candidates carry a ``connection`` block keyed by ``provider_connection_id``;
+    harness candidates carry a ``harness`` block keyed by ``harness_profile_id``.
+    The override storage uses the resource ID so each kind has its own bucket.
+    """
+    overrides = json.loads(member.access_overrides_json)
+    if candidate.get("kind") == "agent":
+        key = candidate["harness_profile_id"]
+        override = overrides.get(key, {})
+        return {**candidate, "harness": {**candidate["harness"], **override}}
+    key = candidate["provider_connection_id"]
+    override = overrides.get(key, {})
     return {**candidate, "connection": {**candidate["connection"], **override}}
 
 
 def _refresh_access(session: Session, member: PlanningMember) -> list[dict[str, Any]]:
     overrides = json.loads(member.access_overrides_json)
-    changes = []
+    changes: list[dict[str, Any]] = []
     for pinned in json.loads(member.candidates_json):
-        current = effective_candidate(member, pinned)["connection"]
-        resource = session.get(ProviderConnection, pinned["provider_connection_id"])
-        if resource is None or resource.archived_at is not None:
+        current = effective_candidate(member, pinned)
+        if pinned.get("kind") == "agent":
+            profile = session.get(HarnessProfile, pinned["harness_profile_id"])
+            if profile is None or profile.archived_at is not None:
+                continue
+            if not _harness_is_read_only(profile):
+                raise AppError(
+                    "council_harness_unverified", "Политика harness больше не допускается", 422
+                )
+            original = pinned["harness"]
+            if (
+                profile.harness_kind != original["harness_kind"]
+                or profile.executable_path != original["executable_path"]
+                or json.loads(profile.settings_json) != original["settings"]
+            ):
+                raise AppError(
+                    "planning_retry_harness_changed",
+                    "Исполнитель или настройки harness изменились: создайте новый Council",
+                    409,
+                )
+            if profile.version != current["harness"]["version"]:
+                overrides[profile.id] = {
+                    "version": profile.version,
+                }
+                changes.append(
+                    {
+                        "member_id": member.id,
+                        "harness_id": profile.id,
+                        "previous_version": current["harness"]["version"],
+                        "version": profile.version,
+                    }
+                )
+            continue
+        connection = current["connection"]
+        provider = session.get(ProviderConnection, pinned["provider_connection_id"])
+        if provider is None or provider.archived_at is not None:
             continue  # An unavailable fallback must not block other pinned candidates.
-        if resource.base_url != pinned["connection"]["base_url"]:
+        if provider.base_url != pinned["connection"]["base_url"]:
             raise AppError(
                 "planning_retry_endpoint_changed",
                 "Адрес подключения изменён: создайте новый Council",
                 409,
-                {"connection_id": resource.id},
+                {"connection_id": provider.id},
             )
-        if resource.version != current["version"]:
-            overrides[resource.id] = {
-                "version": resource.version,
-                "secret_reference": resource.secret_reference,
+        if provider.version != connection["version"]:
+            overrides[provider.id] = {
+                "version": provider.version,
+                "secret_reference": provider.secret_reference,
             }
             changes.append(
                 {
                     "member_id": member.id,
-                    "connection_id": resource.id,
-                    "previous_version": current["version"],
-                    "version": resource.version,
+                    "connection_id": provider.id,
+                    "previous_version": connection["version"],
+                    "version": provider.version,
                 }
             )
     member.access_overrides_json = _serialise(overrides)
@@ -319,7 +465,7 @@ def _refresh_access(session: Session, member: PlanningMember) -> list[dict[str, 
 
 
 def retry_planning_job(
-    session: Session, job_id: str, payload: PlanningRetryRequest
+    session: Session, job_id: str, payload: PlanningRetryRequest, *, simulated: bool = False
 ) -> PlanningRetried:
     """Explicit retry with fencing, unchanged budgets and preserved evidence."""
     begin_write(session)
@@ -328,6 +474,8 @@ def retry_planning_job(
         raise AppError("planning_state_invalid", "Retry requires a failed planning job", 409)
     if job.state_version != payload.expected_state_version:
         raise AppError("planning_state_version_invalid", "Expected state version mismatch", 409)
+    if not simulated:
+        require_real_council_supported(session, job)
     now = utc_now()
     if job.lease_owner and (job.lease_expires_at or 0) > now:
         raise AppError("planning_retry_worker_active", "Дождитесь освобождения задания worker", 409)
@@ -359,8 +507,8 @@ def retry_planning_job(
     for member in members:
         if member.slot_index in reset_indices and member.status not in _RETRY_RESET_STATUSES:
             raise AppError("planning_retry_invalid", "Only unsuccessful members may be reset", 409)
-        if member.status in _RETRY_RESET_STATUSES and member.slot_index not in reset_indices:
-            raise AppError("planning_retry_unresolved", "List all unsuccessful members", 409)
+        if member.status in {"unknown", "running"} and member.slot_index not in reset_indices:
+            raise AppError("planning_retry_unresolved", "Resolve all unknown outcomes", 409)
     if not reset_indices and not any(m.status == "pending" for m in members):
         raise AppError("planning_retry_invalid", "No work to retry", 409)
     unfinished = list(
@@ -830,9 +978,26 @@ def load_planning_view(session: Session, job_id: str) -> PlanningJobView:
                     "selected_connection_id": m.provider_connection_id,
                     "selected_connection_name": next(
                         (
-                            c["connection"].get("name")
+                            (c.get("connection") or {}).get("name")
                             for c in json.loads(m.candidates_json)
-                            if c["provider_connection_id"] == m.provider_connection_id
+                            if c.get("provider_connection_id") == m.provider_connection_id
+                        ),
+                        None,
+                    ),
+                    "selected_harness_id": m.harness_profile_id,
+                    "selected_harness_name": next(
+                        (
+                            (c.get("harness") or {}).get("name")
+                            for c in json.loads(m.candidates_json)
+                            if c.get("harness_profile_id") == m.harness_profile_id
+                        ),
+                        None,
+                    ),
+                    "selected_harness_kind": next(
+                        (
+                            (c.get("harness") or {}).get("harness_kind")
+                            for c in json.loads(m.candidates_json)
+                            if c.get("harness_profile_id") == m.harness_profile_id
                         ),
                         None,
                     ),

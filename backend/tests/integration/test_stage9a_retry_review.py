@@ -332,3 +332,32 @@ def test_group_retry_restarts_pinned_order_without_repeating_accepted_model(
     assert result["usage"]["external_calls"] == 5
     assert [m["selected_model_id"] for m in result["members"][:2]] == ["b", "a"]
     assert result["drafts"][0] == job["drafts"][0]
+
+
+def test_retry_subset_must_resolve_unknown_outcomes(authenticated, tmp_path):
+    client, headers = authenticated
+    *_, payload = setup(client, headers, tmp_path)
+    job = create(client, headers, payload)
+    job = dispatch(
+        client,
+        job,
+        responses=[
+            {"node_id": "council_participant_0", "outcome": "unknown"},
+        ],
+    )
+    with client.app.state.session_factory() as session:
+        other = session.get(PlanningMember, job["members"][1]["id"])
+        other.status = "failed"
+        session.commit()
+    before = client.get(f"/api/planning_jobs/{job['id']}").json()
+    response = retry(
+        client,
+        headers,
+        before,
+        reset_all_failed=False,
+        reset_member_indices=[1],
+        acknowledge_unknown_result=True,
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "planning_retry_unresolved"
+    assert client.get(f"/api/planning_jobs/{job['id']}").json() == before

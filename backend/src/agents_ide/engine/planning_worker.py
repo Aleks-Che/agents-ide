@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from agents_ide.adapters.base import AdapterError, ExternalOutcome, LLMAdapterRequest, LLMResult
-from agents_ide.adapters.fake import FakeLLMAdapter, parse_fake_scenario
+from agents_ide.adapters.base import (
+    AdapterError,
+    AgentAdapterRequest,
+    ExternalOutcome,
+    LLMAdapterRequest,
+    LLMResult,
+)
+from agents_ide.adapters.fake import FakeAgentAdapter, FakeLLMAdapter, parse_fake_scenario
 from agents_ide.adapters.llm_http import HttpLLMAdapter
 from agents_ide.domain.common import content_hash, new_id, utc_now
 from agents_ide.domain.contracts import PlanningState
@@ -21,6 +28,7 @@ from agents_ide.domain.planning_prompt import plan_merge_prompt, plan_participan
 from agents_ide.engine.artifacts import sanitize
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
+    HarnessProfile,
     PlanningAttempt,
     PlanningDraft,
     PlanningJob,
@@ -53,6 +61,25 @@ def _fail(session: Session, job: PlanningJob, code: str) -> None:
     job.state_version += 1
     job.last_error_json = service._serialise({"code": code})
     service._record_event(session, job.id, event_type="planning.failed", payload={"code": code})
+
+
+def _matching_candidate(other: PlanningMember) -> dict[str, Any] | None:
+    """Pick the persisted candidate that produced ``other``'s accepted draft.
+
+    The match key is the actual model id plus the resource id (harness profile
+    or provider connection) so we avoid regressing to legacy connection-only
+    matching for harness participants.
+    """
+    candidates: list[dict[str, Any]] = json.loads(other.candidates_json)
+    for c in candidates:
+        if c["model_id"] != other.model_id:
+            continue
+        if c.get("kind") == "agent":
+            if c.get("harness_profile_id") == other.harness_profile_id:
+                return c
+        elif c.get("provider_connection_id") == other.provider_connection_id:
+            return c
+    return None
 
 
 def claim_planning_job(
@@ -123,13 +150,20 @@ def _budget_reason(job: PlanningJob) -> str | None:
 
 
 def _prepare(
-    factory: sessionmaker[Session], claim: PlanningClaim
-) -> tuple[str, dict[str, Any], LLMAdapterRequest] | None:
+    factory: sessionmaker[Session], claim: PlanningClaim, *, simulated: bool = False
+) -> tuple[str, dict[str, Any], LLMAdapterRequest | AgentAdapterRequest] | None:
     with factory() as session:
         begin_write(session)
         job = _owned(session, claim)
         if job.state not in ACTIVE:
             return None
+        if not simulated:
+            try:
+                service.require_real_council_supported(session, job)
+            except AppError as exc:
+                _fail(session, job, exc.code)
+                session.commit()
+                return None
         members = list(
             session.scalars(
                 select(PlanningMember)
@@ -167,30 +201,42 @@ def _prepare(
         identities = set()
         for other in accepted:
             if other.id != member.id:
-                selected = next(
-                    (
-                        c
-                        for c in json.loads(other.candidates_json)
-                        if c["model_id"] == other.model_id
-                        and c["provider_connection_id"] == other.provider_connection_id
-                    ),
-                    None,
-                )
+                selected = _matching_candidate(other)
                 if selected:
                     identities.add(service.candidate_identity(selected))
         candidate = None
         while member.candidate_index < len(candidates):
             current = service.effective_candidate(member, candidates[member.candidate_index])
-            resource = session.get(ProviderConnection, current["provider_connection_id"])
-            reason = None
-            if not current["enabled"]:
-                reason = "disabled"
-            elif member.role == "participant" and service.candidate_identity(current) in identities:
-                reason = "duplicate_model"
-            elif resource is None or resource.archived_at is not None:
-                reason = "connection_unavailable"
-            elif resource.version != current["connection"]["version"]:
-                reason = "resource_changed"
+            if current.get("kind") == "agent":
+                profile = session.get(HarnessProfile, current["harness_profile_id"])
+                reason = None
+                if not current["enabled"]:
+                    reason = "disabled"
+                elif (
+                    member.role == "participant"
+                    and service.candidate_identity(current) in identities
+                ):
+                    reason = "duplicate_model"
+                elif profile is None or profile.archived_at is not None:
+                    reason = "harness_unavailable"
+                elif profile.version != current["harness"]["version"]:
+                    reason = "resource_changed"
+                resource_id = current["harness_profile_id"]
+            else:
+                resource = session.get(ProviderConnection, current["provider_connection_id"])
+                reason = None
+                if not current["enabled"]:
+                    reason = "disabled"
+                elif (
+                    member.role == "participant"
+                    and service.candidate_identity(current) in identities
+                ):
+                    reason = "duplicate_model"
+                elif resource is None or resource.archived_at is not None:
+                    reason = "connection_unavailable"
+                elif resource.version != current["connection"]["version"]:
+                    reason = "resource_changed"
+                resource_id = current["provider_connection_id"]
             if reason:
                 service._record_event(
                     session,
@@ -201,7 +247,10 @@ def _prepare(
                         "index": member.candidate_index,
                         "reason": reason,
                         "model_id": current["model_id"],
-                        "connection_id": current["provider_connection_id"],
+                        "kind": current.get("kind", "llm"),
+                        "resource_id": resource_id,
+                        "harness_id": current.get("harness_profile_id"),
+                        "connection_id": current.get("provider_connection_id"),
                     },
                 )
                 member.candidate_index += 1
@@ -257,7 +306,12 @@ def _prepare(
         session.add(attempt)
         member.status, member.started_at = "running", utc_now()
         member.actual_member_id, member.model_id = candidate["member_id"], candidate["model_id"]
-        member.provider_connection_id = candidate["provider_connection_id"]
+        if candidate.get("kind") == "agent":
+            member.harness_profile_id = candidate["harness_profile_id"]
+            member.provider_connection_id = None
+        else:
+            member.harness_profile_id = None
+            member.provider_connection_id = candidate["provider_connection_id"]
         usage = json.loads(job.usage_json)
         usage["external_calls"] = usage.get("external_calls", 0) + 1
         job.usage_json = service._serialise(usage)
@@ -271,6 +325,8 @@ def _prepare(
                 "attempt_id": attempt.id,
                 "model_id": member.model_id,
                 "candidate_index": member.candidate_index,
+                "kind": candidate.get("kind", "llm"),
+                "harness_id": member.harness_profile_id,
                 "connection_id": member.provider_connection_id,
             },
         )
@@ -279,20 +335,42 @@ def _prepare(
             if member.role == "merger"
             else f"council_participant_{member.slot_index}"
         )
-        request = LLMAdapterRequest(
-            role=node,
-            model_id=member.model_id,
-            prompt=prompt,
-            context_package={"__node_id__": node, "read_manifest_hash": job.read_manifest_hash},
-            params=candidate["params"],
-            response_format="json",
-            output_schema=PlanDocument.model_json_schema(),
-            attempt_index=attempt.attempt_index,
-            visit_index=1,
-            deadline_at=job.started_at + json.loads(job.budget_json)["max_wallclock_seconds"],
-        )
+        deadline_at = job.started_at + json.loads(job.budget_json)["max_wallclock_seconds"]
+        if candidate.get("kind") == "agent":
+            adapter_request: AgentAdapterRequest | LLMAdapterRequest = AgentAdapterRequest(
+                role=node,
+                model_id=member.model_id,
+                prompt=prompt,
+                context_package={
+                    "__node_id__": node,
+                    "read_manifest_hash": job.read_manifest_hash,
+                    "read_workspace_mode": json.loads(job.read_workspace_json or "{}").get(
+                        "mode", "no_workspace_access"
+                    ),
+                },
+                # No repository access until a pinned read manifest/reservation exists.
+                workspace_path="",
+                capabilities={"harness_kind": candidate["harness"]["harness_kind"]},
+                params=candidate["params"],
+                attempt_index=attempt.attempt_index,
+                visit_index=1,
+                deadline_at=deadline_at,
+            )
+        else:
+            adapter_request = LLMAdapterRequest(
+                role=node,
+                model_id=member.model_id,
+                prompt=prompt,
+                context_package={"__node_id__": node, "read_manifest_hash": job.read_manifest_hash},
+                params=candidate["params"],
+                response_format="json",
+                output_schema=PlanDocument.model_json_schema(),
+                attempt_index=attempt.attempt_index,
+                visit_index=1,
+                deadline_at=deadline_at,
+            )
         session.commit()
-        return attempt.id, candidate, request
+        return attempt.id, candidate, adapter_request
 
 
 def _finish(
@@ -403,6 +481,110 @@ def _finish(
         session.commit()
 
 
+def _invoke_external(
+    candidate: dict[str, Any],
+    request: LLMAdapterRequest | AgentAdapterRequest,
+    *,
+    simulated: bool,
+    fake_scenario: dict[str, Any] | None,
+    secret_store: SecretStore | None,
+    stop_event: threading.Event,
+    check_owned: Callable[[], None],
+) -> LLMResult:
+    """Dispatch outside the transaction; simulations use the shared adapter contract."""
+    check_owned()
+    if candidate.get("kind") == "agent":
+        assert isinstance(request, AgentAdapterRequest)
+        result = _invoke_harness(
+            replace(request, stop_event=stop_event, check_owned=check_owned),
+            simulated=simulated,
+            fake_scenario=fake_scenario,
+        )
+        check_owned()
+        return result
+    assert isinstance(request, LLMAdapterRequest)
+    connection = dict(candidate["connection"])
+    if not simulated and connection.get("secret_reference"):
+        if secret_store is None:
+            raise AppError("secret_unavailable", "No credential store", 409)
+        connection["secret_value"] = secret_store.get(connection["secret_reference"])
+    llm_request = replace(
+        request, connection=connection, stop_event=stop_event, check_owned=check_owned
+    )
+    llm_scenario = {
+        key: value for key, value in (fake_scenario or {}).items() if not key.startswith("harness_")
+    }
+    adapter = FakeLLMAdapter(parse_fake_scenario(llm_scenario)) if simulated else HttpLLMAdapter()
+    return adapter.run(llm_request)
+
+
+def _invoke_harness(
+    request: AgentAdapterRequest,
+    *,
+    simulated: bool,
+    fake_scenario: dict[str, Any] | None,
+) -> LLMResult:
+    """Internal simulation only; real process ownership/read isolation remain gated."""
+    if not simulated:
+        raise AppError("council_harness_real_unverified", "Council harness is not verified", 422)
+    scenario = dict(fake_scenario or {})
+    responses = list(scenario.get("responses", []))
+    node_id = request.role
+    body_key = f"harness_body_text:{node_id}"
+    outcome_key = f"harness_outcome:{node_id}"
+    explicit_body = scenario.get(body_key, scenario.get("harness_body_text"))
+    explicit_outcome = scenario.get(outcome_key, scenario.get("harness_outcome"))
+    matching = next(
+        (
+            r
+            for r in responses
+            if r.get("node_id") == node_id
+            and r.get("attempt_index", 1) == request.attempt_index
+            and r.get("visit_index") in (None, request.visit_index)
+        ),
+        None,
+    )
+    if matching is None or explicit_body is not None or explicit_outcome is not None:
+        response = dict(matching or {})
+        if matching is not None:
+            responses.remove(matching)
+        response.update(node_id=node_id, attempt_index=request.attempt_index)
+        response.setdefault(
+            "raw_text",
+            json.dumps(
+                {
+                    "body_text": f"Simulated plan from {request.model_id}",
+                    "steps": [{"title": "Implement", "acceptance_criteria": ["Tests pass"]}],
+                    "questions": [],
+                },
+                ensure_ascii=False,
+            ),
+        )
+        if explicit_body is not None:
+            response["raw_text"] = explicit_body
+        if explicit_outcome is not None:
+            response["outcome"] = explicit_outcome
+        if "harness_error_code" in scenario:
+            response["error_code"] = scenario["harness_error_code"]
+        responses.append(response)
+    # No workspace passed: even a scripted file edit is refused by FakeAgentAdapter.
+    result = FakeAgentAdapter(parse_fake_scenario({"responses": responses})).run(request)
+    return LLMResult(
+        outcome=result.outcome,
+        raw_text=result.raw_text,
+        validated_result=result.validated_result,
+        decision=result.decision,
+        error=result.error,
+        tokens_used=result.tokens_used,
+        cost_estimated=result.cost_estimated,
+        budget_quality=result.budget_quality,
+        elapsed_seconds=result.elapsed_seconds,
+        finished_at=result.finished_at,
+        no_effect=result.no_effect,
+        result_schema="harness_council",
+    )
+
+
 def dispatch_planning_job(
     factory: sessionmaker[Session],
     job_id: str,
@@ -450,7 +632,7 @@ def dispatch_planning_job(
     watcher.start()
     try:
         while not abort.is_set() and not call_stop.is_set():
-            prepared = _prepare(factory, claim)
+            prepared = _prepare(factory, claim, simulated=simulated)
             if prepared is None:
                 with factory() as session:
                     if service.get_planning_job(session, job_id).state not in ACTIVE:
@@ -458,22 +640,15 @@ def dispatch_planning_job(
                 continue
             attempt_id, candidate, request = prepared
             try:
-                from dataclasses import replace
-
-                connection = dict(candidate["connection"])
-                if not simulated and connection.get("secret_reference"):
-                    if secret_store is None:
-                        raise AppError("secret_unavailable", "No credential store", 409)
-                    connection["secret_value"] = secret_store.get(connection["secret_reference"])
-                request = replace(
-                    request, connection=connection, stop_event=call_stop, check_owned=check_owned
+                result = _invoke_external(
+                    candidate,
+                    request,
+                    simulated=simulated,
+                    fake_scenario=fake_scenario,
+                    secret_store=secret_store,
+                    stop_event=call_stop,
+                    check_owned=check_owned,
                 )
-                adapter = (
-                    FakeLLMAdapter(parse_fake_scenario(fake_scenario or {}))
-                    if simulated
-                    else HttpLLMAdapter()
-                )
-                result = adapter.run(request)
             except AppError as exc:
                 result = LLMResult(
                     ExternalOutcome.UNAVAILABLE

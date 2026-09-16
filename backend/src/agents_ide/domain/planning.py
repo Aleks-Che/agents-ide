@@ -115,6 +115,9 @@ class PlanningMemberView(ApiOutput):
     selected_model_id: str | None = None
     selected_connection_id: str | None = None
     selected_connection_name: str | None = None
+    selected_harness_id: str | None = None
+    selected_harness_name: str | None = None
+    selected_harness_kind: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error: dict[str, Any] | None = None

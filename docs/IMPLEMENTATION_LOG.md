@@ -1,5 +1,111 @@
 # Журнал реализации
 
+### 2026-09-16 · Ревью этапа 9A · Снимки harness и симуляция Council
+
+**Статус:** исправлены замечания; полноценное подключение Council к harness остаётся открытым. Исходный отчёт ниже описывает состояние до этого ревью. Рабочими остаются LLM direct/group; agent direct/group проверяется только внутренним FakeAgentAdapter. Наличие AgentAdapterRequest не означало вызова OpenCode/Codex: в исходной реализации возвращался локальный стаб.
+
+**Найдено и исправлено:**
+
+- API принимал harness-задание, которое рабочий dispatcher заведомо не выполнял; смешанный состав мог сначала расходовать LLM-вызовы. Добавлен gate до создания/повтора и проверка всего задания worker до первой попытки. При отказе API не остаётся ни job, ни members/attempts. Флаг simulated — только аргумент внутреннего сервиса, в REST его нет. UI блокирует отправку agent direct/group, не обещает запуска или фактической изоляции.
+- Retry мог принять новые небезопасные settings, сохранив старый executable. Теперь политика проверяется runtime-валидаторами; смена kind/executable/settings требует нового Council, исходные кандидаты неизменяемы. При переименовании/обновлении каталога допускается закрепить только новую version. Codex использует тот же default approval_policy=never, что runtime и редактор профиля; OpenCode проверяет также auth/env/serve_args.
+- Симуляция harness игнорировала stop/ownership и метаданные безопасного отказа. Использован общий FakeAgentAdapter со stop_event/check_owned, попытками и no_effect/retry_safety. Перенесены token/cost/budget_quality из сценария в результат агента. Проверены безопасный fallback, запрет fallback после unknown, прерывание долгого вызова, форматная коррекция и передача принятых черновиков merger.
+- При no_workspace_access больше не передаётся корень проекта; fake-адаптеру не выдаётся workspace для записи. Пустой ответ не превращается в успешный стаб, JSON создаётся сериализацией. Одинаковая модель через разные harness не считается двумя независимыми голосами. До выбора кандидата группы selected_harness не указывает на последний профиль списка. В событиях сохранены connection_id и добавлены harness_id/resource_id.
+- Полный браузерный прогон обнаружил существующий разрыв subset-retry: UI позволял выбрать часть failed, сервер требовал всех. Разрешён явный повтор подмножества failed/skipped с сохранением остальных, принятых черновиков, бюджета и прежнего кворума. Unknown/running по-прежнему требуют полного явного разрешения; обход через исключение такого слота запрещён.
+
+**Проверки:**
+
+- `pytest tests/integration tests/unit -k "stage9 or stage4 or fake" -q -p no:cacheprovider` — **209 passed**, 445 deselected, 167,66 с. Включены все Council/stage9 и stage4 регрессии. Добавлены 22 проверки в `test_stage9a_harness_review.py` и одна в `test_stage9a_retry_review.py`; исправлен старый тест, который требовал запрета subset-retry. Полный backend-набор в этом ревью не запускался.
+- Playwright `tests/e2e/council.spec.ts` — **7 passed**, включая локальные HTTP/worker, subset-retry и новый запрет agent direct/group/agent merger до отправки. Первоначальный прогон воспроизвёл ошибку subset-retry; итоговый полный прогон зелёный.
+- Vitest — **132 passed**; ESLint/Prettier/tsc+Vite — clean (JS 438,44 kB / gzip 120,44 kB).
+- Ruff check/format — clean, 141 файл; mypy Windows/Linux — 95 модулей, clean; `generate_contracts.py --check` — синхронизирован. В pytest остаются два прежних deprecation warning FastAPI/Starlette.
+- Реальные OpenCode/Codex-процессы и платные модели в этом ревью Council не вызывались.
+
+**Для продолжения:** реализовать и проверить lifecycle/сессии/артефакты Council через реальные CodexRuntime/OpenCodeRuntime, read-only manifest/reservation, capability моделей, real-model gate A71–A74. Runtime-валидатор настроек не является доказательством прав процесса. Неизвестные alias моделей и совпадение между LLM/harness требуют отдельной проверки идентичности.
+
+### 2026-09-16 · Этап 9A · Council: участники через harness (Codex/OpenCode) — исходный отчёт до ревью
+
+**Статус:** добавлены agent direct/group как полноправные участники и merger
+Council. Участник/merger через harness получает `AgentAdapterRequest` с
+`workspace_path` проекта и подтверждённой read-only/no-tools политикой
+профиля; реальный запуск остаётся под gate 6A/6B и через
+`council_harness_real_unverified` отвергается вне `simulated=True`. Старые
+участники LLM продолжают работать без изменений. LLM Council через harness
+без полного моделирования сессий harness и без фикстур остаётся
+отдельным gate; см. [Контракт](architecture/PLANNING_COUNCIL.md).
+
+**Реализовано.**
+
+- [`services/planning.py`](../backend/src/agents_ide/services/planning.py) —
+  `_candidate` теперь принимает `harness_profile_id` и собирает снимок
+  `{kind='agent', model_id, harness_profile_id, harness={…}}` без секретов.
+  Независимость кандидатов (`candidate_identity`) различает
+  `('harness:<kind>', model_id)` для agent и нормализованный endpoint для
+  LLM. `_refresh_access` записывает новые версии профиля и настройки
+  отдельно от LLM-оверрайдов. `create_planning_job` принимает
+  agent direct/group; agent-группы проходят `load_group_snapshot`, а
+  неизвестный kind отклоняется явной ошибкой.
+- [`services/planning.py`](../backend/src/agents_ide/services/planning.py) —
+  `_harness_is_read_only(profile)` подтверждает read-only/no-tools
+  политику профиля (`permission_mode=no_tools` для OpenCode,
+  `permission_mode=read_only` + `approval_policy=never` для Codex).
+  Нарушение даёт `council_harness_unverified` (422) до постановки
+  задания.
+- [`engine/planning_worker.py`](../backend/src/agents_ide/engine/planning_worker.py) —
+  `_invoke_external` раздваивает путь: harness идёт через `_invoke_harness`
+  (формирует `AgentAdapterRequest`, читает workspace проекта, в
+  simulated режиме принимает `harness_body_text[:role]` /
+  `harness_body_text` / стаб); LLM идёт через прежний
+  `FakeLLMAdapter`/`HttpLLMAdapter`. `fake_scenario` фильтруется
+  отдельно от `harness_*` ключей, чтобы `FakeScenarioSpec(extra='forbid')`
+  не отклонял council-сценарий. Селектор кандидатов и `_finish` теперь
+  корректно интерпретируют `kind='agent'`/`kind='llm'`.
+- [`domain/planning.py`](../backend/src/agents_ide/domain/planning.py) —
+  `PlanningMemberView` дополнен `selected_harness_id/name/kind`,
+  контракты OpenAPI/TS перегенерированы.
+- [`frontend/src/features/planning/CouncilPanel.tsx`](../frontend/src/features/planning/CouncilPanel.tsx) —
+  в редакторе появилась подсекция «Подтип» (LLM/Агент) и поле профиля
+  harness для agent direct; список групп теперь показывает обе
+  разновидности (`kind`). В обзорщике печатается `selected_harness_name`
+  и фактический `selected_harness_kind` для каждого слота.
+- [`backend/tests/integration/test_stage9a_harness.py`](../backend/tests/integration/test_stage9a_harness.py) —
+  новый файл: 6 регрессий (прямой agent direct, Codex read_only/never,
+  неполная read-only политика, agent-группа с двумя harness-кандидатами,
+  архивный/неизвестный профиль, маркировка попыток как `agent`).
+
+**Границы и нюансы.**
+
+- Реальный harness через Council остаётся под gate 6A/6B: `_invoke_harness`
+  возвращает `council_harness_real_unverified`, если `simulated=False`.
+  Подготовка к gate требует поднятия `OpenCodeRuntime`/`CodexRuntime` на
+  каждого участника отдельно с явным `permission_mode=no_tools`/
+  `read_only`+`never`.
+- Read-only manifest проекта (`CollectContext`) в этой итерации не
+  строится; harness получает путь и собственную политику, текстовый
+  контекст по-прежнему передаётся через `context_text`. Полное чтение
+  workspace для участников остаётся отдельным gate.
+- `set_workspace_json` пока хранит `mode: no_workspace_access`;
+  manifest и reservation планируются отдельной миграцией.
+- `_invoke_harness` использует per-node `harness_body_text[:role]` для
+  отдельных ответов участников; общий `harness_body_text` применяется,
+  если per-node не задан. Это позволяет существующим council-тестам
+  добавлять harness-участников без потери существующих LLM-сценариев.
+
+**Проверки.**
+
+- Backend `pytest tests/integration -k "stage9a"` — **83 passed**, 56 c.
+  Новый файл `test_stage9a_harness.py` — 6 passed. Старые stage9a
+  регрессии (planning, dispatcher, real_worker, migration, retry, promote
+  single/review, planning_run) — без изменений: 77 passed.
+- `mypy src` — 95 модулей без замечаний. `ruff check`/`format` — clean.
+- `scripts/generate_contracts.py --check` — синхронизирован.
+- Frontend `npm run lint` — clean; `npm run test` — **132 passed**
+  (без новых UI-кейсов: harness-сценарий проверяется через API);
+  `npm run build` — clean, бандл 438.11 kB / gzip 120.35 kB.
+
+**Для продолжения:** реальный gate с Codex/OpenCode и capability конкретных
+моделей; manifest и reservation проекта для read-only сессий;
+модельное уточнение после ответов; полная A71–A74.
+
 ### 2026-09-16 · Этап 9A · Council: UI выбора подмножества неуспешных участников
 
 **Статус:** добавлен интерфейс для повтора только выбранных неуспешных

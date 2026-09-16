@@ -224,6 +224,9 @@ class FakeAgentAdapter(AgentAdapter):
             error=_error(response),
             elapsed_seconds=response.delay_seconds,
             no_effect=response.no_effect,
+            tokens_used=response.tokens_used,
+            cost_estimated=response.cost_estimated,
+            budget_quality=response.budget_quality,
         )
 
 

@@ -3699,6 +3699,39 @@
             ],
             "title": "Selected Connection Name"
           },
+          "selected_harness_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Harness Id"
+          },
+          "selected_harness_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Harness Kind"
+          },
+          "selected_harness_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Harness Name"
+          },
           "selected_member_id": {
             "anyOf": [
               {

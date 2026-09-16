@@ -857,3 +857,89 @@ test('Council retry can reset a strict subset of failed participants', async ({
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 })
+
+test('Council blocks harness direct and group before submission and restores LLM launch', async ({
+  page,
+}) => {
+  await pair(page)
+  const project = await api(page, 'POST', '/projects', {
+    name: 'Council harness gate',
+    workspace_path: workspace(),
+  })
+  await api(page, 'POST', `/projects/${project.id}/chats`, {
+    title: 'Gate chat',
+  })
+  const provider = await api(page, 'POST', '/connections', {
+    name: 'Gate provider',
+    base_url: 'http://127.0.0.1:9/v1',
+  })
+  const harness = await api(page, 'POST', '/harness_profiles', {
+    name: 'Council Codex',
+    harness_kind: 'codex',
+    settings: { permission_mode: 'read_only' },
+  })
+  const group = await api(page, 'POST', '/model_groups/agent', {
+    name: 'Council agent group',
+    members: [{ model_id: 'alpha', harness_profile_id: harness.id }],
+  })
+  await page.reload()
+  await page.getByRole('option', { name: /Council harness gate/ }).click()
+  await page
+    .getByRole('button', { name: 'Составить план несколькими моделями' })
+    .click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Текст задачи').fill('Check harness availability')
+  await dialog
+    .getByRole('combobox', { name: 'Число участников', exact: true })
+    .selectOption('2')
+  const editors = ['Участник 1', 'Участник 2', 'Объединяющий'].map((name) =>
+    dialog.getByRole('group', { name, exact: true }),
+  )
+  for (const [i, editor] of editors.entries()) {
+    await editor.getByLabel('Модель', { exact: true }).fill(`model-${i}`)
+    await editor
+      .getByRole('combobox', { name: 'Подключение', exact: true })
+      .selectOption(provider.id)
+  }
+  const submit = dialog.getByRole('button', {
+    name: 'Составить план',
+    exact: true,
+  })
+  await expect(submit).toBeEnabled()
+  const participant = editors[0]
+  await participant
+    .getByRole('combobox', { name: 'Подтип', exact: true })
+    .selectOption('agent')
+  await participant
+    .getByRole('combobox', { name: 'Профиль harness', exact: true })
+    .selectOption(harness.id)
+  await expect(submit).toBeDisabled()
+  await expect(dialog.getByRole('alert')).toContainText(
+    'Запуск Council с агентом или агентной группой пока недоступен',
+  )
+  await participant
+    .getByRole('combobox', { name: 'Тип выбора', exact: true })
+    .selectOption('group')
+  await participant
+    .getByRole('combobox', { name: 'Группа', exact: true })
+    .selectOption(group.id)
+  await expect(submit).toBeDisabled()
+  await participant
+    .getByRole('combobox', { name: 'Тип выбора', exact: true })
+    .selectOption('direct')
+  await participant.getByLabel('Модель', { exact: true }).fill('model-0')
+  await participant
+    .getByRole('combobox', { name: 'Подключение', exact: true })
+    .selectOption(provider.id)
+  await expect(submit).toBeEnabled()
+  await editors[2]
+    .getByRole('combobox', { name: 'Подтип', exact: true })
+    .selectOption('agent')
+  await editors[2]
+    .getByRole('combobox', { name: 'Профиль harness', exact: true })
+    .selectOption(harness.id)
+  await expect(submit).toBeDisabled()
+  expect(
+    await api(page, 'GET', `/planning_jobs?project_id=${project.id}`),
+  ).toEqual([])
+})
