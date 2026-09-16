@@ -39,6 +39,53 @@ test('agent group can be created, extended, disabled, removed and archived in UI
   await item.getByRole('button', { name: 'Параметры…' }).click()
   await expect(dialog.getByLabel('ID модели').nth(1)).toHaveValue('test/second')
   await dialog
+    .getByRole('button', { name: 'Параметры', exact: true })
+    .nth(1)
+    .click()
+  await dialog.getByLabel('Новый параметр').selectOption('temperature')
+  await dialog.getByRole('button', { name: 'Добавить параметр' }).click()
+  await dialog.getByLabel('Значение temperature').fill('0.5')
+  await dialog
+    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
+    .click()
+  await expect(dialog.getByRole('status')).toContainText('Кандидаты сохранены')
+  let groups = await api(page, 'GET', '/model_groups?kind=agent')
+  let saved = groups.find((group: { name: string }) => group.name === name)
+  expect(
+    saved.members.find(
+      (member: { model_id: string }) => member.model_id === 'test/second',
+    ).params,
+  ).toEqual({ temperature: 0.5 })
+  await expect(
+    dialog.getByRole('button', { name: 'Параметры (1)', exact: true }),
+  ).toBeVisible()
+  await dialog.getByLabel('Значение temperature').fill('3')
+  await expect(dialog.getByRole('alert').first()).toContainText(
+    'Нужно число от 0 до 2',
+  )
+  await expect(
+    dialog.getByRole('button', { name: 'Сохранить кандидатов', exact: true }),
+  ).toBeDisabled()
+  await dialog.getByLabel('Значение temperature').fill('0.7')
+  await dialog
+    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
+    .click()
+  await expect(dialog.getByRole('status')).toContainText('Кандидаты сохранены')
+  await dialog
+    .getByRole('button', { name: 'Удалить параметр temperature' })
+    .click()
+  await dialog
+    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
+    .click()
+  await expect(dialog.getByRole('status')).toContainText('Кандидаты сохранены')
+  groups = await api(page, 'GET', '/model_groups?kind=agent')
+  saved = groups.find((group: { name: string }) => group.name === name)
+  expect(
+    saved.members.find(
+      (member: { model_id: string }) => member.model_id === 'test/second',
+    ).params,
+  ).toEqual({})
+  await dialog
     .getByRole('button', { name: 'Удалить', exact: true })
     .first()
     .click()

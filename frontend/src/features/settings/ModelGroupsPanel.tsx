@@ -1,4 +1,6 @@
 import { EditorError } from './EditorError'
+import { MemberParamsEditor, type ParamDraft } from './MemberParamsEditor'
+import { validateParamValue } from './model_params'
 import { Modal } from '../../app/Modal'
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -373,8 +375,8 @@ function CreateGroupDialog({
         </datalist>
         <p className="hint">
           Укажите точный ID модели или выберите подсказку из каталога. Наличие в
-          каталоге не подтверждает доступ. Порядок и состав можно изменить после
-          создания; редактор параметров моделей ещё не реализован.
+          каталоге не подтверждает доступ. Порядок, состав и параметры
+          кандидатов можно изменить после создания кнопкой «Параметры…».
         </p>
         {(kind === 'agent' ? harnesses.isLoading : connections.isLoading) ? (
           <p role="status">Загружаем источники моделей…</p>
@@ -516,6 +518,10 @@ function EditGroupForm({
       params: member.params,
     })),
   )
+  const [expandedParams, setExpandedParams] = useState<Record<string, boolean>>(
+    {},
+  )
+  const [paramDrafts, setParamDrafts] = useState<Record<string, ParamDraft>>({})
 
   function accept(updated: ModelGroup) {
     setGroup(updated)
@@ -529,6 +535,7 @@ function EditGroupForm({
   }
   function acceptMembers(updated: ModelGroup) {
     accept(updated)
+    setParamDrafts({})
     setMembers(
       updated.members.map((member) => ({
         key: member.id,
@@ -629,14 +636,23 @@ function EditGroupForm({
   const rename = kind === 'agent' ? renameAgent : renameLLM
   const replaceMembers =
     kind === 'agent' ? replaceAgentMembers : replaceLLMMembers
-  const validMembers = members.every(
-    (member) =>
-      member.modelId.trim() &&
-      (kind === 'agent' ? member.profileId : member.connectionId),
+  const paramsValid = members.every((member) =>
+    Object.entries(member.params).every(([name, value]) => {
+      const draft = paramDrafts[`${member.key}:${name}`]
+      if (draft?.error) return false
+      return validateParamValue(name, value) === null
+    }),
   )
+  const validMembers =
+    members.every(
+      (member) =>
+        member.modelId.trim() &&
+        (kind === 'agent' ? member.profileId : member.connectionId),
+    ) && paramsValid
   const metadataDirty =
     name.trim() !== group.name || description.trim() !== group.description
   const membersDirty =
+    !paramsValid ||
     JSON.stringify(
       members.map(
         ({ id, enabled, modelId, profileId, connectionId, params }) => ({
@@ -649,16 +665,16 @@ function EditGroupForm({
         }),
       ),
     ) !==
-    JSON.stringify(
-      group.members.map((member) => ({
-        id: member.id,
-        enabled: member.enabled,
-        modelId: member.model_id,
-        profileId: member.harness_profile_id ?? '',
-        connectionId: member.provider_connection_id ?? '',
-        params: member.params,
-      })),
-    )
+      JSON.stringify(
+        group.members.map((member) => ({
+          id: member.id,
+          enabled: member.enabled,
+          modelId: member.model_id,
+          profileId: member.harness_profile_id ?? '',
+          connectionId: member.provider_connection_id ?? '',
+          params: member.params,
+        })),
+      )
 
   function updateMember(index: number, patch: Partial<EditableMember>) {
     setMembers((prev) =>
@@ -679,6 +695,29 @@ function EditGroupForm({
 
   function removeMember(index: number) {
     setMembers((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function setParamDraft(key: string, draft: ParamDraft | null) {
+    setParamDrafts((prev) => {
+      const next = { ...prev }
+      if (draft === null) delete next[key]
+      else next[key] = draft
+      return next
+    })
+  }
+
+  function toggleParams(key: string) {
+    setExpandedParams((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  function isOpenCodeProfile(profileId: string): boolean {
+    return (
+      kind === 'agent' &&
+      (harnesses.data ?? []).some(
+        (profile) =>
+          profile.id === profileId && profile.harness_kind === 'opencode',
+      )
+    )
   }
 
   function appendMember() {
@@ -748,110 +787,149 @@ function EditGroupForm({
             <ol className="member-edit-list">
               {members.map((member, index) => (
                 <li key={member.key}>
-                  <span className="member-index">{index + 1}</span>
-                  {kind === 'agent' ? (
-                    <select
-                      aria-label="Harness-профиль"
-                      value={member.profileId}
-                      onChange={(event) =>
-                        updateMember(index, { profileId: event.target.value })
-                      }
-                    >
-                      {!harnesses.data?.some(
-                        (profile) => profile.id === member.profileId,
-                      ) ? (
-                        <option value={member.profileId}>
-                          Недоступен · {member.profileId || 'выберите профиль'}
-                        </option>
-                      ) : null}
-                      {(harnesses.data ?? []).map((profile) => (
-                        <option key={profile.id} value={profile.id}>
-                          {profile.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <select
-                      aria-label="LLM-подключение"
-                      value={member.connectionId}
-                      onChange={(event) =>
-                        updateMember(index, {
-                          connectionId: event.target.value,
-                        })
-                      }
-                    >
-                      {!connections.data?.some(
-                        (connection) => connection.id === member.connectionId,
-                      ) ? (
-                        <option value={member.connectionId}>
-                          Недоступно ·{' '}
-                          {member.connectionId || 'выберите подключение'}
-                        </option>
-                      ) : null}
-                      {(connections.data ?? []).map((connection) => (
-                        <option key={connection.id} value={connection.id}>
-                          {connection.name}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <input
-                    aria-label="ID модели"
-                    value={member.modelId}
-                    spellCheck={false}
-                    onChange={(event) =>
-                      updateMember(index, { modelId: event.target.value })
-                    }
-                  />
-                  <label className="enabled-toggle">
+                  <div className="member-row">
+                    <span className="member-index">{index + 1}</span>
+                    {kind === 'agent' ? (
+                      <select
+                        aria-label="Harness-профиль"
+                        value={member.profileId}
+                        onChange={(event) =>
+                          updateMember(index, { profileId: event.target.value })
+                        }
+                      >
+                        {!harnesses.data?.some(
+                          (profile) => profile.id === member.profileId,
+                        ) ? (
+                          <option value={member.profileId}>
+                            Недоступен ·{' '}
+                            {member.profileId || 'выберите профиль'}
+                          </option>
+                        ) : null}
+                        {(harnesses.data ?? []).map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        aria-label="LLM-подключение"
+                        value={member.connectionId}
+                        onChange={(event) =>
+                          updateMember(index, {
+                            connectionId: event.target.value,
+                          })
+                        }
+                      >
+                        {!connections.data?.some(
+                          (connection) => connection.id === member.connectionId,
+                        ) ? (
+                          <option value={member.connectionId}>
+                            Недоступно ·{' '}
+                            {member.connectionId || 'выберите подключение'}
+                          </option>
+                        ) : null}
+                        {(connections.data ?? []).map((connection) => (
+                          <option key={connection.id} value={connection.id}>
+                            {connection.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <input
-                      type="checkbox"
-                      checked={member.enabled}
+                      aria-label="ID модели"
+                      value={member.modelId}
+                      spellCheck={false}
                       onChange={(event) =>
-                        updateMember(index, { enabled: event.target.checked })
+                        updateMember(index, { modelId: event.target.value })
                       }
                     />
-                    активен
-                  </label>
-                  <div className="member-actions">
-                    <button
-                      type="button"
-                      className="quiet"
-                      aria-label="Выше"
-                      onClick={() => moveMember(index, -1)}
-                      disabled={index === 0}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className="quiet"
-                      aria-label="Ниже"
-                      onClick={() => moveMember(index, 1)}
-                      disabled={index === members.length - 1}
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      className="quiet danger"
-                      onClick={() => removeMember(index)}
-                    >
-                      Удалить
-                    </button>
+                    <label className="enabled-toggle">
+                      <input
+                        type="checkbox"
+                        checked={member.enabled}
+                        onChange={(event) =>
+                          updateMember(index, { enabled: event.target.checked })
+                        }
+                      />
+                      активен
+                    </label>
+                    <div className="member-actions">
+                      <button
+                        type="button"
+                        className="quiet"
+                        aria-expanded={Boolean(expandedParams[member.key])}
+                        onClick={() => toggleParams(member.key)}
+                      >
+                        Параметры
+                        {Object.keys(member.params).length > 0
+                          ? ` (${Object.keys(member.params).length})`
+                          : ''}
+                      </button>
+                      <button
+                        type="button"
+                        className="quiet"
+                        aria-label="Выше"
+                        onClick={() => moveMember(index, -1)}
+                        disabled={index === 0}
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        className="quiet"
+                        aria-label="Ниже"
+                        onClick={() => moveMember(index, 1)}
+                        disabled={index === members.length - 1}
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        className="quiet danger"
+                        onClick={() => removeMember(index)}
+                      >
+                        Удалить
+                      </button>
+                    </div>
                   </div>
+                  {expandedParams[member.key] ? (
+                    <MemberParamsEditor
+                      memberKey={member.key}
+                      params={member.params}
+                      drafts={paramDrafts}
+                      openCodeHint={
+                        Object.keys(member.params).length > 0 &&
+                        isOpenCodeProfile(member.profileId)
+                      }
+                      onParams={(next, removed) => {
+                        updateMember(index, { params: next })
+                        if (removed) {
+                          setParamDraft(`${member.key}:${removed}`, null)
+                        }
+                      }}
+                      onDraft={setParamDraft}
+                    />
+                  ) : null}
                 </li>
               ))}
             </ol>
           )}
         </div>
         <p className="hint">
-          «Сохранить кандидатов» сохраняет порядок и состав; «Сохранить» —
-          название и описание. Остальные правки остаются в форме. Для
-          копирования сначала сохраните правки. Параметры моделей пока
-          сохраняются без изменения; их редактор появится после проверки
-          поддержки конкретных моделей.
+          «Сохранить кандидатов» сохраняет порядок, состав и параметры;
+          «Сохранить» — название и описание. Остальные правки остаются в форме.
+          Для копирования сначала сохраните правки. Поддержка параметров
+          конкретной моделью не подтверждена. Перед запуском сервер проверяет
+          общий набор и ограничения адаптера; наличие поля в редакторе не
+          гарантирует поддержку провайдером. Изменения группы применятся только
+          к новым Run.
         </p>
+        {!paramsValid ? (
+          <p className="error" role="alert">
+            Исправьте параметры кандидатов перед сохранением.
+          </p>
+        ) : null}
         {[
           rename.error,
           replaceMembers.error,

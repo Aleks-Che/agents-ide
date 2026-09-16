@@ -1088,14 +1088,16 @@ footer span {
   gap: 6px;
 }
 .member-edit-list li {
-  display: grid;
-  grid-template-columns: auto minmax(100px, 1fr) minmax(120px, 1fr);
-  gap: 8px;
-  align-items: center;
   background: #141c1e;
   border: 1px solid #2a363a;
   border-radius: 6px;
   padding: 6px 10px;
+}
+.member-row {
+  display: grid;
+  grid-template-columns: auto minmax(100px, 1fr) minmax(120px, 1fr);
+  gap: 8px;
+  align-items: center;
 }
 .member-edit-list input,
 .member-edit-list select {
@@ -1105,6 +1107,49 @@ footer span {
   padding: 6px 8px;
   border-radius: 5px;
   font-size: 12px;
+}
+.member-edit-list textarea {
+  background: #10191c;
+  border: 1px solid #405054;
+  color: #e8edeb;
+  padding: 6px 8px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-family: inherit;
+  resize: vertical;
+}
+.member-params {
+  margin-top: 8px;
+  border-top: 1px solid #2a363a;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.param-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) minmax(120px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.param-row .param-name {
+  font-size: 12px;
+  color: #d4e4da;
+}
+.param-row .param-error {
+  grid-column: 2;
+  color: #e8a1a1;
+  font-size: 11px;
+}
+.param-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.param-add select {
+  flex: 1 1 200px;
+  min-width: 0;
 }
 .member-actions {
   display: flex;
@@ -1164,8 +1209,28 @@ footer span {
   .shell:not(.workspace-shell) .sidebar > :not(.brand) {
     display: none;
   }
-  .member-edit-list li {
+  .member-row {
     grid-template-columns: auto minmax(0, 1fr);
+  }
+  .member-row > select {
+    grid-column: 2;
+  }
+  .member-row > input,
+  .member-row > .enabled-toggle,
+  .member-row > .member-actions {
+    grid-column: 1 / -1;
+  }
+  .member-actions {
+    flex-wrap: wrap;
+  }
+  .param-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .param-row .param-name {
+    grid-column: 1 / -1;
+  }
+  .param-row .param-error {
+    grid-column: 1 / -1;
   }
   header {
     padding: 19px 22px;
