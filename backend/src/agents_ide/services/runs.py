@@ -145,6 +145,11 @@ def start_run(session: Session, payload: RunStart) -> Run:
     )
     if existing is not None:
         return _replay_start(existing, request_hash_value)
+    from agents_ide.operations.maintenance import ensure_available
+    from agents_ide.operations.storage import check_capacity, settings_for
+
+    ensure_available(settings_for(session))
+    check_capacity(session)
     registered = get_or_404(session, ProjectModel, payload.project_id)
     # Git/volume probes finish before the short write transaction.
     _, normalized, dev, ino, git = collect_workspace(registered.workspace_entered_path)

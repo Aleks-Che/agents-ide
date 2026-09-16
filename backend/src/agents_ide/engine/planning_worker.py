@@ -157,6 +157,9 @@ def _prepare(
         job = _owned(session, claim)
         if job.state not in ACTIVE:
             return None
+        from agents_ide.operations.storage import check_capacity
+
+        check_capacity(session)
         if not simulated:
             try:
                 service.require_real_council_supported(session, job)

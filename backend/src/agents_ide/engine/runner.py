@@ -418,6 +418,11 @@ class Runner:
                 )
             if not has_work and not has_process:
                 with self._write() as (session, run):
+                    if target.get("restored_backup"):
+                        run.resume_target_json = to_json(
+                            {"action": "dispatch_next", "blockers": []}
+                        )
+                        return self._state(session, run, "paused")
                     run.state, run.resume_target_json = "queued", None
                     run.state_version += 1
                     self._event(
@@ -498,6 +503,10 @@ class Runner:
             run.resume_target_json = to_json(target)
             if failed := self._recover_saved_failure(session, run):
                 return failed
+            if target.get("restored_backup"):
+                target.pop("restored_backup", None)
+                run.resume_target_json = to_json(target)
+                return self._state(session, run, "paused")
             self._state(session, run, "running")
         return self._continue_loop()
 
@@ -569,6 +578,12 @@ class Runner:
                 "schema_unsupported", {"errors": [e.to_dict() for e in report.errors]}
             )
         try:
+            from agents_ide.operations.storage import check_capacity
+
+            if maintenance := self._maintenance_pause():
+                return maintenance
+            with self.session_factory() as session:
+                check_capacity(session, self.run_id)
             self._workspace_check()
             paused_hash = self.runtime.get("git_paused_workspace_hash")
             if paused_hash:
@@ -589,6 +604,10 @@ class Runner:
             while self.runtime.get("next_node_id") is not None:
                 if control := self._controls():
                     return control
+                if maintenance := self._maintenance_pause():
+                    return maintenance
+                with self.session_factory() as session:
+                    check_capacity(session, self.run_id)
                 node = self.nodes[self.runtime["next_node_id"]]
                 with self.session_factory() as session:
                     run = session.get(Run, self.run_id)
@@ -734,6 +753,17 @@ class Runner:
         except AppError as exc:
             if exc.code in {"queue_job_lost", "database_unavailable"}:
                 raise
+            if exc.code == "limit_exceeded":
+                from agents_ide.services.run_controls import unsettled_attempts
+
+                with self.session_factory() as session:
+                    quota_run = session.get(Run, self.run_id)
+                    unsettled = bool(quota_run and unsettled_attempts(session, quota_run))
+                if unsettled:
+                    # An external call may have completed before its result hit
+                    # the quota. Keep its durable intent for recovery, never replay.
+                    raise
+                return self._waiting("limit_exceeded", exc.details or {})
             return self._waiting(
                 exc.code
                 if exc.code
@@ -743,6 +773,7 @@ class Runner:
                     "missing_data",
                     "no_progress",
                     "signing_required",
+                    "limit_exceeded",
                 }
                 else "workspace_conflict"
                 if exc.code in {"workspace_conflict", "path_invalid", "path_unavailable"}
@@ -995,6 +1026,25 @@ class Runner:
             cycle_id=self.runtime["cycle_id"],
             scope=self.runtime["work"]["scope"],
         )
+
+    def _maintenance_pause(self) -> RunnerResult | None:
+        if not (self.data_dir / "runtime/maintenance-request").exists():
+            return None
+        self._close_harness_live()
+        if self.runtime.get("git") and not self.simulated:
+            from agents_ide.engine.context_sources import workspace_hash
+
+            checkpoint_hash = workspace_hash(Path(self.snapshot["workspace"]["workspace_path"]))
+            if checkpoint_hash is None:
+                raise AppError("missing_data", "Workspace checkpoint unavailable", 409)
+            self.runtime["git_paused_workspace_hash"] = checkpoint_hash
+        with self._write() as (session, run):
+            target = json.loads(run.resume_target_json or "{}")
+            target.setdefault("action", "dispatch_next")
+            target.setdefault("node_id", self.runtime.get("next_node_id"))
+            target.setdefault("blockers", [])
+            run.resume_target_json = to_json(target)
+            return self._state(session, run, "paused")
 
     def _controls(self, *, allow_pause: bool = True) -> RunnerResult | None:
         if not self._stop_processes_if_requested():

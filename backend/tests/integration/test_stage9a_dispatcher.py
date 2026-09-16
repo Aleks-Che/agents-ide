@@ -288,7 +288,9 @@ def test_cancel_interrupts_active_call_and_preserves_cancelled(
         future = pool.submit(
             dispatch_planning_job, client.app.state.session_factory, job["id"], simulated=True
         )
-        assert entered.wait(3)
+        # This is fixture startup, not the cancellation deadline. On a loaded
+        # Windows host schema/SQLite preparation can take more than three seconds.
+        assert entered.wait(10)
         current = client.get(f"/api/planning_jobs/{job['id']}").json()
         response = client.post(
             f"/api/planning_jobs/{job['id']}/cancel",

@@ -4,19 +4,21 @@ import json
 import sys
 from pathlib import Path
 
-from sqlalchemy import URL, create_engine, delete, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from agents_ide.config import Settings
 from agents_ide.domain.common import utc_now
 from agents_ide.engine.artifacts import ArtifactPayload, record_artifact
 from agents_ide.engine.events import append_event
+from agents_ide.persistence.database import create_database
 from agents_ide.persistence.models import QueueJob, Run, RunEvent, WorkspaceReservation
 
 directory = Path(sys.argv[1]).resolve()
 local = Path(__file__).resolve().parents[3] / ".local"
 # This fixture may mutate only a disposable per-run Playwright database.
 assert directory.is_relative_to(local.resolve()) and directory.name.startswith("e2e-")
-engine = create_engine(URL.create("sqlite", database=str(directory / "db/agents-ide.db")))
+engine = create_database(Settings(data_dir=directory))
 with Session(engine) as session:
     session.connection().exec_driver_sql("BEGIN IMMEDIATE")
     run = session.get(Run, sys.argv[2])

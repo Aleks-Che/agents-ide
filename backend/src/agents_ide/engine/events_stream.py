@@ -92,6 +92,7 @@ def fetch_events_after(
         )
     ).one()
     highest, minimum = int(highest or 0), int(minimum or 0)
+    minimum = max(minimum, run.retention_sequence)
     if after_sequence > highest or (minimum and after_sequence < minimum - 1):
         return EventBatch([], highest, True, run.state, False, minimum)
     rows = session.scalars(
@@ -121,6 +122,8 @@ def fetch_full_history(
     minimum = (
         session.scalar(select(func.min(RunEvent.sequence)).where(RunEvent.run_id == run_id)) or 1
     )
+    run = session.get(Run, run_id)
+    minimum = max(minimum, run.retention_sequence if run else 0)
     return fetch_events_after(session, run_id, after_sequence=minimum - 1, limit=limit)
 
 
@@ -242,7 +245,7 @@ class StreamHub:
                 is_terminal(batch.final_state or "") and not batch.has_more
             ):
                 return
-            delay = 0.2 if batch.events else min(delay * 2, 2)
+            delay = 0.2 if batch.events else min(delay * 2, 0.5)
             await asyncio.sleep(0 if batch.has_more else delay)
 
     async def close(self) -> None:

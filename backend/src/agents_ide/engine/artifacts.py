@@ -91,12 +91,20 @@ def record_artifact(
         serialised = encode(
             {"truncated": True, "original_bytes": original_size, "preview": preview}
         )
+    from agents_ide.operations.storage import check_capacity
+    from agents_ide.persistence.models import Run
+
+    byte_length = len(serialised.encode("utf-8"))
+    check_capacity(session, run_id, extra=byte_length, check_events=False)
+    run = session.get(Run, run_id)
+    if run is not None:
+        run.artifact_bytes = (run.artifact_bytes or 0) + byte_length
     manifest = ArtifactManifest(
         id=new_id(),
         run_id=run_id,
         schema_type=payload.schema_type,
         body_json=serialised,
-        byte_length=len(serialised.encode("utf-8")),
+        byte_length=byte_length,
         content_hash=compute_hash(serialised),
         source_kind=source_kind,
         source_ref=None,

@@ -1,159 +1,168 @@
 # Agents IDE
 
-Локальная рабочая область для проектов, чатов и процессов с агентами. Реализованы каркас **этапа 1**, конфигурационные API **этапа 2** и группы моделей **этапа 2A**: FastAPI, независимый worker, SQLite, локальный вход, DPAPI и React-интерфейс состояния служб. Результаты реальных проверок **этапа 0** и оставшиеся `unverified` перечислены в [матрице интеграций](docs/integrations/CAPABILITIES.md).
+Локальная рабочая область для проектов, чатов, групп моделей и визуальных pipeline.
+React-интерфейс обслуживается FastAPI; отдельный Python worker сохраняет работу
+в SQLite/WAL и продолжает её без браузера.
 
-Проекты, чаты и конфигурация pipeline доступны через API. Независимый worker выполняет
-графы, сохраняет результаты/артефакты/SSE и поддерживает pause/stop/resume/recovery.
-В реальном режиме работают LLM HTTP, Command и CollectContext; fake остаётся явным режимом.
-Этап 8 добавляет [GitCommit, фиксированный план и встроенный пресет](docs/architecture/GIT_PLAN_RUNTIME.md).
-OpenCode подключён в [режиме без инструментов](docs/architecture/OPENCODE_RUNTIME.md);
-разрешённая изолированная запись и основной UI остаются этапам 6A/9 [плана](docs/IMPLEMENTATION_PLAN.md).
+Реализованы конструктор, direct/group, preset с PlanItem/Git, Council для LLM,
+наблюдение через SSE и эксплуатационные команды этапа 12. **Полная v1 ещё не
+принята:** автономная запись реальных harness, часть Codex/OpenCode и Council через
+harness остаются за capability gates. См. [план](docs/IMPLEMENTATION_PLAN.md),
+[приёмку](docs/operations/RELEASE_ACCEPTANCE.md) и [интеграции](docs/integrations/CAPABILITIES.md).
 
-[Журнал реализации](docs/IMPLEMENTATION_LOG.md): нюансы разработки, фичи, открытые блокеры, результаты проверок и заметки для следующих этапов.
+## Установка
 
-Этап 10 добавляет [визуальный конструктор](docs/architecture/GRAPH_EDITOR.md):
-**Библиотека → Новый шаблон / Конструктор**, формы узлов и условий, версии,
-импорт/экспорт и выбор подтверждённого плана Council перед запуском.
+Основная среда: Windows x64, локальный NTFS, обычный пользователь с загруженным
+Windows-профилем. Проверенная машина: Windows 10 22H2 build 19045. Нужны Python
+3.12–3.13, uv (проверен 0.9.15) и Git (проверен 2.39.1.windows.1).
+Linux используется для разработки; DPAPI там возвращает `secret_unavailable`.
 
-Этап 2 добавляет защищённые API проектов/чатов, черновики и версии pipeline, настройки подключений, снимки Run и журнал команд. [Доменный контракт](docs/architecture/DOMAIN_DATA.md) описывает API, приоритет настроек, генерацию TypeScript и обновление ранее созданных данных.
-
-Этап 2A добавляет [группы моделей](docs/architecture/MODEL_GROUPS.md): упорядоченные agent/llm-кандидаты, выбор direct/group для ролей и узлов, наследование параметров, полный снимок исполнителей и перенос определений групп. Этап 4 проверяет выбор и fallback на fake; реальные LLM-подключения добавлены этапом 7, harness остаются этапу 6.
-
-Этап 3 добавляет [схемы, AST и серверную валидацию графов](docs/architecture/GRAPH_VALIDATION.md), ограниченные циклы, импорт/экспорт, доверие итоговому hash и preflight. Серверные Git-проверки добавлены этапом 8; capability и права реального harness требуют этапа 6A.
-
-Этап 4 добавляет [движок на fake-исполнителе](docs/architecture/ENGINE_RUNTIME.md): `execution_mode=simulated`, сценарии ответов/правок в отдельном тестовом каталоге, repair-циклы, лимиты, безопасный retry/fallback, durable checkpoint и события/артефакты. Обычный Run не подменяется fake. Этап 5 добавляет [управление, восстановление и CLI](docs/architecture/CONTROL_AND_RECOVERY.md): сохранение посещения/кандидата при resume, проверку прежнего владельца, аудит лимитов и Windows ProcessSupervisor. Попытка с неизвестным исходом автоматически не повторяется.
-
-Этап 7 добавляет [LLM, команды и evidence](docs/architecture/LLM_COMMAND_EVIDENCE.md):
-ограниченный HTTP с безопасной политикой retry, журнал каждой подкоманды, сбор контекста,
-контроль актуальности доказательств и динамический фильтр разрешённых safe-команд.
-Проверен настоящий worker против локального HTTP-сервера; платные модели не вызывались.
-
-## Среда
-
-- Основная среда: Windows x64, локальный NTFS, обычная учётная запись с загруженным профилем. Проверено на Windows 10 22H2, build 19045; Windows CI включён отдельно от Linux.
-- Python **3.12–3.13**, рекомендуемый и проверенный локально **3.12.7**; `uv` **0.9.15**.
-- Node **22.12+ в ветке 22**, проверен **22.20.0**; npm **10–11**, проверен **11.10.0**. Node нужен для разработки и сборки; готовый UI отдаёт Python.
-- Git **2.39.1+**. Codex/OpenCode не нужны для запуска каркаса.
-- Linux — дополнительная среда разработки/CI. SecretStore на Linux возвращает `secret_unavailable`: plaintext-замены DPAPI нет.
-
-## Установка и запуск
-
-Из корня репозитория, PowerShell:
+Архив поставки содержит готовый `frontend/dist`, Python sources, lockfile
+и скрипты. Node для запуска такой поставки не нужен. Распакуйте архив и выполните:
 
 ```powershell
-cd backend
-uv sync --locked
-cd ../frontend
+./scripts/install.ps1
+./scripts/agents-ide.ps1 start
+./scripts/agents-ide.ps1 auth pair-code
+```
+
+`install.ps1` предназначен для новой установки. Для существующих данных используйте
+процедуру update с backup из [эксплуатационной инструкции](docs/operations/OPERATIONS.md).
+
+Если выполнение .ps1 запрещено политикой Windows, выполните команды напрямую
+из `backend`, не меняя глобальную ExecutionPolicy:
+
+```powershell
+uv sync --locked --no-dev
+uv run --locked --no-dev agents-ide migrate
+uv run --locked --no-dev agents-ide start
+uv run --locked --no-dev agents-ide auth pair-code
+```
+
+Откройте **http://127.0.0.1:8765**. Код одноразовый, действует пять минут; сессия —
+12 часов. Новый код: `auth pair-code --rotate`. Cookie/CSRF/код не передаются в URL.
+
+Для установки из checkout сначала соберите UI (Node 22.12+ в ветке 22, npm 10–11;
+проверены Node 22.20.0 и npm 11.10.0):
+
+```powershell
+cd frontend
 npm.cmd ci
 npm.cmd run build
 cd ../backend
-uv run --locked agents-ide migrate
+uv sync --locked
 uv run --locked agents-ide start
 uv run --locked agents-ide auth pair-code
 ```
 
-Откройте **http://127.0.0.1:8765** и введите выданный код. Он одноразовый и действует 5 минут. Срок сессии — 12 часов. Код отображается только командой `auth pair-code`; в журналы он не записывается.
+`start` запускает скрытые launcher/API/worker под текущим пользователем.
+Закрытие терминала не завершает их. `status` показывает состояние; `stop`
+останавливает принадлежащие приложению процессы. Занятый порт не освобождается
+принудительно. Работа после выхода из Windows не обещается. Автозапуск не устанавливается.
 
-```powershell
-uv run --locked agents-ide status
-uv run --locked agents-ide stop
-uv run --locked agents-ide auth pair-code --rotate
-```
+## Первый проект и запуск
 
-`start` запускает скрытый launcher и отдельные API/worker под текущим пользователем. Они переживают закрытие вызывающего терминала. `stop` останавливает только экземпляр из выбранного каталога данных. Автозапуск при входе в Windows не устанавливается. Работа после выхода пользователя из Windows пока не поддерживается.
+1. В настройках добавьте LLM-подключение: URL, ключ, модель. Если каталог недоступен,
+   введите ID вручную. Ключ нельзя прочитать обратно. Harness устанавливается
+   и авторизуется отдельно под тем же пользователем; укажите реальный executable
+   и выполните проверку подключения. Поддержанные версии: [интеграции](docs/integrations/CAPABILITIES.md).
+2. Создайте проект с локальной папкой вне data_dir Agents IDE, затем чат.
+3. В **Настройки → Группы моделей** создайте группы типа `agent` или `llm`.
+   Имена `heavy` и `flash` произвольны: группа содержит упорядоченные модели
+   с конкретным профилем/подключением. Первая подходящая позиция имеет высший
+   приоритет. Настройте параметры и отключите ненужные позиции.
+4. В **Библиотеке** скопируйте пресет «Разработка с планом» либо создайте граф.
+   Опубликуйте версию и binding для проекта; выберите direct/group для ролей,
+   команды проверок и разрешения. Пользовательская копия независима от обновлений пресета.
+5. В чате нажмите **Запустить**, задайте план вручную или выберите подтверждённый
+   Council. Проверьте preflight: модели, команды, пути и права. Импорт требует
+   доверия execution hash; неподтверждённые capability блокируют запуск.
+6. Экран Run показывает граф, цикл, PlanItem, попытки, фактическую модель, fallback,
+   результаты и историю. Закрытый браузер не влияет на worker.
 
-API и worker можно запустить независимо в двух терминалах из `backend`:
+Полный preset с автономной записью ограничен gates реальных harness. Для реального
+сценария используйте разрешённые LLM/Command/CollectContext или подтверждённый режим
+harness без инструментов. Simulated Run — явный тестовый режим.
 
-```powershell
-uv run --locked agents-ide api
-```
+При `model_group_exhausted` откройте причины кандидатов, восстановите доступ
+и явно продолжите Run. Изменение группы не меняет текущий snapshot. Timeout после
+отправки, невалидный JSON, failed-вердикт и запрос разрешения не разрешают
+бесконтрольный fallback.
 
-```powershell
-uv run --locked agents-ide worker
-```
-
-Ручные экземпляры завершаются через Ctrl+C. При запуске API и worker применяются миграции; отдельная `migrate` полезна для диагностики. Одновременно допускается один API и один worker на каталог данных.
-
-## Разработка frontend
-
-Для Vite укажите точный разрешённый Origin в терминале API:
-
-```powershell
-# backend
-$env:AGENTS_IDE_DEV_ORIGIN = 'http://127.0.0.1:5173'
-uv run --locked agents-ide api
-```
-
-В другом терминале:
-
-```powershell
-# frontend
-npm.cmd run dev
-```
-
-Откройте **http://127.0.0.1:5173**. Vite проксирует `/api`, включая SSE; браузер использует same-origin cookie. При смене API-порта задайте одинаковый `AGENTS_IDE_PORT` в обоих терминалах. Для разработки изменённый Python-код требует перезапуска API/worker.
-
-## Данные и конфигурация
-
-По умолчанию: `%LOCALAPPDATA%/AgentsIDE/{db,artifacts,logs,secrets,runtime,temp}`. Каталог защищён ACL текущего пользователя. Запускайте службы от одной учётной записи; DPAPI использует её Windows-профиль.
-
-| Переменная | По умолчанию | Назначение |
-| --- | --- | --- |
-| `AGENTS_IDE_DATA_DIR` | `%LOCALAPPDATA%/AgentsIDE` | Каталог данных вне управляемых репозиториев |
-| `AGENTS_IDE_PORT` | `8765` | Порт API; занятой порт не освобождается принудительно |
-| `AGENTS_IDE_HOST` | `127.0.0.1` | Другие адреса в v1 отклоняются |
-| `AGENTS_IDE_DEV_ORIGIN` | не задан | Точный Origin Vite с портом |
-| `AGENTS_IDE_FRONTEND_DIR` | `frontend/dist` в checkout | Каталог собранного UI; задайте явно при установке wheel |
-| `AGENTS_IDE_LOG_LEVEL` | `INFO` | Уровень структурированных журналов |
-
-Также доступны общие CLI-параметры **до** подкоманды:
-
-```powershell
-uv run --locked agents-ide --data-dir C:/AgentsIDE-data --port 8877 start
-uv run --locked agents-ide --data-dir C:/AgentsIDE-data --port 8877 auth pair-code
-uv run --locked agents-ide --data-dir C:/AgentsIDE-data --port 8877 stop
-```
-
-При обычном запуске используйте каталог вне Git-репозитория. `.local/` предназначен только для изолированных проверок разработки и исключён из Git. Не копируйте одну live `.db` как резервную копию WAL-базы; штатный backup запланирован на этап 12.
-
-## API каркаса
-
-| Endpoint | Доступ | Результат |
-| --- | --- | --- |
-| `GET /api/health` | Без сессии | Только факт работы HTTP API |
-| `POST /api/auth/pair` | Origin + одноразовый код в JSON | HttpOnly/SameSite=Strict cookie и CSRF-токен |
-| `GET /api/auth/session` | Сессия | Срок и CSRF-токен |
-| `POST /api/auth/logout` | Сессия + Origin + `X-CSRF-Token` | Отзыв текущей сессии |
-| `GET /api/readiness` | Сессия | 200 при готовой БД и свежем heartbeat; иначе 503 |
-| `GET /api/system/status` | Сессия | Раздельное состояние API, БД и worker |
-| `GET /api/system/events` | Сессия | SSE-снимки состояния; отзыв/истечение закрывает поток |
-| `GET /api/openapi.json` | Сессия | Схема API |
-
-`system/events` пока не является журналом Run: курсор, replay и общий poller появятся на этапе 4. Ошибки имеют форму `{code, message, details, request_id, retryable}`. Host и Origin проверяются также для pairing и SSE. Cookie применяется только к `/api`; сервер работает по HTTP на loopback, без заявления о TLS.
-
-## Проверки
+## Обслуживание
 
 Из `backend`:
 
 ```powershell
-uv run --locked ruff check src tests
-uv run --locked ruff format --check src tests
-uv run --locked mypy src
-uv run --locked pytest -q -ra
-uv build
+uv run --locked --no-dev agents-ide diagnostics
+uv run --locked --no-dev agents-ide backup C:/Backups/agents-001
+uv run --locked --no-dev agents-ide verify-backup C:/Backups/agents-001
+uv run --locked --no-dev agents-ide update --check
+uv run --locked --no-dev agents-ide update --backup-dir C:/Backups/update-001
+uv run --locked --no-dev agents-ide --data-dir C:/AgentsIDE-restored restore C:/Backups/agents-001
+uv run --locked --no-dev agents-ide pin RUN_ID
+uv run --locked --no-dev agents-ide gc
+uv run --locked --no-dev agents-ide compact
 ```
 
-Из `frontend`:
+Backup требует новый каталог вне data_dir. `--include-secrets` добавляет DPAPI
+ciphertext, привязанный к Windows-профилю. Репозитории не копируются. Restore требует
+новый data_dir и сверку checkout перед продолжением. Копирование одного live .db
+не заменяет backup. После ошибки записи update/restore gate запрещает запуск
+до завершения восстановления; `maintenance-clear` работает только при свободных locks.
+
+Подробно: [stop/resume, backup/update, квоты и диагностика](docs/operations/OPERATIONS.md).
+
+## Конфигурация
+
+Данные: `%LOCALAPPDATA%/AgentsIDE/{db,artifacts,logs,secrets,runtime,temp}`, ACL
+текущего пользователя. API/worker/launcher должны работать от одной учётной записи.
+`.local/` внутри checkout предназначен только для изолированных тестов.
+
+| Переменная | По умолчанию | Назначение |
+| --- | --- | --- |
+| `AGENTS_IDE_DATA_DIR` | `%LOCALAPPDATA%/AgentsIDE` | Отдельный локальный каталог |
+| `AGENTS_IDE_HOST` | `127.0.0.1` | Другие адреса запрещены |
+| `AGENTS_IDE_PORT` | `8765` | Порт API |
+| `AGENTS_IDE_FRONTEND_DIR` | `frontend/dist` в checkout | Путь к UI; задаётся при установке wheel |
+| `AGENTS_IDE_DEV_ORIGIN` | не задан | Точный Origin Vite |
+| `AGENTS_IDE_RUN_ARTIFACT_BYTES` | `1073741824` | Квота артефактов Run |
+| `AGENTS_IDE_DATA_BUDGET_BYTES` | `10737418240` | Общая квота данных |
+| `AGENTS_IDE_DISK_RESERVE_BYTES` | `67108864` | Запас для остановки |
+| `AGENTS_IDE_DETAILED_EVENTS_LIMIT` | `100000` | Подробные события Run |
+| `AGENTS_IDE_RETENTION_DAYS` | `30` | Срок подробной терминальной истории |
+
+`--data-dir` и `--port` стоят **до** подкоманды. После изменения env перезапустите
+службы, чтобы API и worker получили одинаковые настройки.
+
+## Разработка и проверки
+
+Из backend: `uv sync --locked`, затем `uv run --locked agents-ide api` и
+в отдельном терминале `uv run --locked agents-ide worker`. Для Vite задайте
+API-процессу `AGENTS_IDE_DEV_ORIGIN=http://127.0.0.1:5173`, из frontend выполните
+`npm.cmd run dev`. Vite проксирует /api и SSE; поставка работает только через FastAPI.
 
 ```powershell
+# backend
+uv run --locked ruff check src tests ../scripts
+uv run --locked ruff format --check src tests ../scripts
+uv run --locked mypy src
+uv run --locked python ../scripts/generate_contracts.py --check
+uv run --locked pytest -q -ra
+uv build
+
+# frontend
 npm.cmd run lint
 npm.cmd run format:check
 npm.cmd test
 npm.cmd run build
 npx.cmd playwright install chromium
 npm.cmd run test:e2e
+
+# корень: архив с готовым UI
+backend/.venv/Scripts/python.exe scripts/build_release.py --output .local/agents-ide-release.zip
 ```
 
-Windows-проверки действительно используют DPAPI, ACL, Job Objects и дочерние процессы; пропуск на Linux не считается Windows-проверкой. Playwright запускает отдельный API на порту 18767. [CI](.github/workflows/ci.yml) проверяет backend на Windows/Linux и сборку/UI на Windows. Скрипты `scripts/setup.ps1`, `scripts/check.ps1`, `scripts/agents-ide.ps1` сокращают эти команды; менять глобальную ExecutionPolicy не требуется — можно выполнить команды напрямую.
-
-Повторение платных smoke-запросов к harness выполняется отдельной явной командой, см. [CAPABILITIES](docs/integrations/CAPABILITIES.md). [Принятые решения и границы этапов](docs/architecture/FOUNDATION_DECISIONS.md) отделяют реализованные механизмы от будущего движка.
+`AGENTS_IDE_LOAD_REPORT` задаёт путь JSON-отчёта нагрузки 100 000 событий.
+Реальные model probes расходуют лимиты и запускаются явной командой.
+Fixtures и реальные проверки учитываются отдельно в [журнале](docs/IMPLEMENTATION_LOG.md).

@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     session_seconds: int = Field(default=43200, ge=1, le=43200)
     pairing_seconds: int = Field(default=300, ge=1, le=300)
     log_level: str = "INFO"
+    run_artifact_bytes: int = Field(default=1024**3, ge=1024)
+    data_budget_bytes: int = Field(default=10 * 1024**3, ge=1024)
+    disk_reserve_bytes: int = Field(default=64 * 1024**2, ge=0)
+    detailed_events_limit: int = Field(default=100_000, ge=1)
+    retention_days: int = Field(default=30, ge=1)
 
     @model_validator(mode="after")
     def validate_local(self) -> Self:

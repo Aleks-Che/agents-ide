@@ -243,6 +243,11 @@ def create_planning_job(
         if not simulated:
             require_real_council_supported(session, existing)
         return existing
+    from agents_ide.operations.maintenance import ensure_available
+    from agents_ide.operations.storage import check_capacity, settings_for
+
+    ensure_available(settings_for(session))
+    check_capacity(session)
     project = session.get(Project, payload.project_id)
     if project is None or project.archived_at is not None:
         raise AppError("project_unavailable", "Проект недоступен", 409)

@@ -689,7 +689,7 @@ def run_snapshot_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]:
     return {
         "run": run,
         "last_sequence": highest or 0,
-        "min_retained_sequence": minimum or 0,
+        "min_retained_sequence": max(minimum or 0, run_row.retention_sequence),
         "selection": selection,
         "observation": build_observation(session, run_row),
         "planning_provenance": json.loads(run_row.snapshot_json).get("planning_provenance"),
@@ -729,6 +729,8 @@ def run_artifact_endpoint(session: SessionDep, run_id: str, artifact_id: str) ->
     row = session.get(ArtifactManifest, artifact_id)
     if row is None or row.run_id != run_id:
         raise AppError("artifact_not_found", "Артефакт не найден", 404)
+    if row.purged_at is not None:
+        raise AppError("artifact_expired", "Подробный вывод удалён по retention", 410)
     return _artifact_view(row, include_body=True)
 
 
@@ -746,6 +748,8 @@ def run_artifact_content_endpoint(
     row = session.get(ArtifactManifest, artifact_id)
     if row is None or row.run_id != run_id:
         raise AppError("artifact_not_found", "Артефакт не найден", 404)
+    if row.purged_at is not None:
+        raise AppError("artifact_expired", "Подробный вывод удалён по retention", 410)
     body = json.loads(row.body_json) if row.body_json else None
     if format == "text" and isinstance(body, str):
         text = body

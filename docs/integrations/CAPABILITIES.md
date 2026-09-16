@@ -77,3 +77,20 @@ Strict fixture проверяет остальные transport/Runner сцена
 разделение ролей, pause/resume, decline approvals, unknown после stop/обрыва и
 cleanup принадлежащей группы. Эти проверки не подтверждают реальную модель,
 изолированную запись или межharness fallback. Полная приёмка 6B остаётся открытой.
+
+## Приёмка этапа 12 — 2026-09-16
+
+Повторены реальные [smoke](fixtures/2026-09-16-stage12-smoke.json) и
+[control probes](fixtures/2026-09-16-stage12-controls.json) на одноразовом Git-каталоге,
+с `gpt-5.6-sol` и `minimax-coding-plan/MiniMax-M3`.
+Оба harness вернули ответ модели. OpenCode подтвердил abort в smoke, permission/reject
+и продолжение той же завершённой сессии после перезапуска в control probe.
+Codex подтвердил read-only ответ, thread/resume, permission/decline без создания файла,
+восстановление завершённой истории и interrupt после появления delta.
+
+Быстрый Codex interrupt в smoke завершился `Empty`; исходная fixture сохранена.
+Контрольный probe ожидал фактическую delta и получил `interrupted`. Отдельный Codex
+auth probe снова завершился `Empty`: ошибка отсутствующей авторизации в этом проходе
+остаётся unverified. Ошибка Basic auth локального OpenCode server не доказывает
+отказ credentials его provider. Автономная запись, восстановление незавершённого
+внешнего действия и реальный межharness fallback этими probes не подтверждены.

@@ -1,4 +1,4 @@
-name: Foundation checks
+name: Product and release checks
 
 on:
   push:
@@ -32,6 +32,14 @@ jobs:
         working-directory: backend
       - run: uv run --locked pytest -q -ra
         working-directory: backend
+        env:
+          AGENTS_IDE_LOAD_REPORT: ../stage12-load-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: load-${{ matrix.os }}-${{ matrix.python }}
+          path: stage12-load-report.json
+          if-no-files-found: ignore
 
   frontend:
     runs-on: windows-latest
@@ -62,3 +70,11 @@ jobs:
         working-directory: frontend
       - run: npm run test:e2e
         working-directory: frontend
+      - run: backend/.venv/Scripts/python.exe scripts/build_release.py --output .local/agents-ide-release.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agents-ide-release
+          path: |
+            .local/agents-ide-release.zip
+            .local/stage12-browser-load.json
+          include-hidden-files: true

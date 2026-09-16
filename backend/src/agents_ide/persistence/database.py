@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import nullcontext
 from pathlib import Path
 
 import portalocker
@@ -8,7 +9,7 @@ from sqlalchemy import URL, Engine, create_engine, event
 
 from agents_ide.config import Settings
 
-SCHEMA_REVISION = "0016_council_single_member"
+SCHEMA_REVISION = "0017_operations"
 
 
 def create_database(settings: Settings) -> Engine:
@@ -23,12 +24,24 @@ def create_database(settings: Settings) -> Engine:
         connection.execute("PRAGMA busy_timeout=5000")
         connection.execute("PRAGMA synchronous=FULL")
 
+    @event.listens_for(engine, "engine_connect")
+    def settings_context(connection: object) -> None:
+        from sqlalchemy import Connection
+
+        assert isinstance(connection, Connection)
+        connection.info["storage_settings"] = settings
+
     return engine
 
 
-def migrate(settings: Settings) -> None:
+def migrate(settings: Settings, *, lock_held: bool = False) -> None:
     # Launcher/API/worker can start simultaneously; migration has one owner.
-    with portalocker.Lock(str(settings.data_dir / "runtime/migrate.lock"), timeout=30):
+    guard = (
+        nullcontext()
+        if lock_held
+        else portalocker.Lock(str(settings.data_dir / "runtime/migrate.lock"), timeout=30)
+    )
+    with guard:
         engine = create_database(settings)
         try:
             with engine.connect() as connection:

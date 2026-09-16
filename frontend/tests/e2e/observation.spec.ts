@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Page } from '@playwright/test'
 import { api, expect, pair, test, workspace } from './support'
@@ -87,6 +88,68 @@ async function open(page: Page, projectName: string, runId: string) {
     .click()
   await expect(page.getByLabel('Граф выполнения')).toBeVisible()
 }
+
+test('100k events keep the UI bounded and deliver persisted events within the p95 target', async ({
+  page,
+}) => {
+  test.setTimeout(120000)
+  await pair(page)
+  const { project, run } = await createRun(page)
+  fixture('seed_load', run.id, 'load')
+  await open(page, project.name, run.id)
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('Поток: open', { exact: false })).toBeVisible()
+  await expect(dialog.locator('.timeline-rows li')).toHaveCount(12)
+  const samples: number[] = []
+  for (let i = 0; i < 25; i++) {
+    // Exercise both immediate polling and the idle backoff on a real EventSource.
+    await page.waitForTimeout(550 + (i % 3) * 200)
+    await dialog.locator('.timeline-rows').evaluate((element, label) => {
+      const state = window as typeof window & { stage12VisibleAt: number }
+      state.stage12VisibleAt = 0
+      const observer = new MutationObserver(() => {
+        if (element.textContent?.includes(label)) {
+          state.stage12VisibleAt = Date.now()
+          observer.disconnect()
+        }
+      })
+      observer.observe(element, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      })
+    }, `tick-${i}`)
+    const persisted = Number(fixture('seed_load', run.id, `tick-${i}`))
+    await expect(dialog.locator('.timeline-rows')).toContainText(`tick-${i}`)
+    const visibleAt = await page.evaluate(
+      () =>
+        (window as typeof window & { stage12VisibleAt: number })
+          .stage12VisibleAt,
+    )
+    expect(visibleAt).toBeGreaterThan(0)
+    samples.push(visibleAt - persisted)
+    await expect(dialog.locator('.timeline-rows li')).toHaveCount(12)
+  }
+  const p95 = [...samples].sort((a, b) => a - b)[
+    Math.ceil(samples.length * 0.95) - 1
+  ]
+  writeFileSync(
+    '../.local/stage12-browser-load.json',
+    JSON.stringify(
+      {
+        events: 100000,
+        samples_ms: samples,
+        p95_persisted_to_visible_ms: p95,
+        dom_rows: 12,
+        browser: 'Chromium',
+        transport: 'real FastAPI SSE',
+      },
+      null,
+      2,
+    ),
+  )
+  expect(p95).toBeLessThan(1000)
+})
 
 test('virtual history, server filters, artifact chunks and disconnected API preserve Run state', async ({
   page,

@@ -1,0 +1,248 @@
+{
+  "observed_at": "2026-09-16T17:37:46.866256+00:00",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "python": "3.12.7",
+  "fixture_version": 1,
+  "codex": {
+    "version": "codex-cli 0.153.4",
+    "capabilities": {
+      "transport": "supported",
+      "list_models": "supported",
+      "create_session": "supported",
+      "model_result": "supported",
+      "stream_events": "supported",
+      "resume_session": "supported",
+      "interrupt": "unverified",
+      "permission_request": "unverified",
+      "auth_failure": "unverified",
+      "transport_recovery": "unverified",
+      "process_recovery": "unverified",
+      "write_isolation": "unverified"
+    },
+    "observations": [
+      {
+        "capability": "transport",
+        "method": "initialize",
+        "accepted": true
+      },
+      {
+        "capability": "list_models",
+        "method": "model/list",
+        "count": 5
+      },
+      {
+        "capability": "create_session",
+        "method": "thread/start",
+        "id_present": true
+      },
+      {
+        "capability": "model_result",
+        "method": "turn/completed",
+        "status": "completed",
+        "error_present": false
+      },
+      {
+        "capability": "resume_session",
+        "method": "thread/resume",
+        "same_id": true
+      },
+      {
+        "capability": "stream_events",
+        "observed_count": 27
+      }
+    ],
+    "transport_gate": "go",
+    "autonomous_write_gate": "no-go",
+    "models": [
+      "gpt-6-astra",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.5"
+    ],
+    "model": "gpt-5.6-sol",
+    "probe_error": "Empty",
+    "events": [
+      {
+        "method": "remoteControl/status/changed"
+      },
+      {
+        "method": "thread/started"
+      },
+      {
+        "method": "mcpServer/startupStatus/updated",
+        "count": 5
+      },
+      {
+        "method": "thread/status/changed"
+      },
+      {
+        "method": "turn/started",
+        "turn_status": "inProgress",
+        "error_present": false
+      },
+      {
+        "method": "item/started",
+        "item_type": "userMessage"
+      },
+      {
+        "method": "item/completed",
+        "item_type": "userMessage"
+      },
+      {
+        "method": "item/started",
+        "item_type": "agentMessage"
+      },
+      {
+        "method": "item/agentMessage/delta",
+        "delta_present": true,
+        "count": 3
+      },
+      {
+        "method": "item/completed",
+        "item_type": "agentMessage"
+      },
+      {
+        "method": "thread/tokenUsage/updated"
+      },
+      {
+        "method": "account/rateLimits/updated"
+      },
+      {
+        "method": "thread/status/changed"
+      },
+      {
+        "method": "turn/completed",
+        "turn_status": "completed",
+        "error_present": false
+      },
+      {
+        "method": "deprecationNotice"
+      },
+      {
+        "method": "thread/tokenUsage/updated"
+      },
+      {
+        "method": "thread/goal/cleared"
+      },
+      {
+        "method": "thread/status/changed"
+      },
+      {
+        "method": "turn/started",
+        "turn_status": "inProgress",
+        "error_present": false
+      },
+      {
+        "method": "item/started",
+        "item_type": "userMessage"
+      },
+      {
+        "method": "item/completed",
+        "item_type": "userMessage"
+      },
+      {
+        "method": "item/started",
+        "item_type": "reasoning"
+      },
+      {
+        "method": "item/completed",
+        "item_type": "reasoning"
+      },
+      {
+        "method": "item/started",
+        "item_type": "agentMessage"
+      },
+      {
+        "method": "item/agentMessage/delta",
+        "delta_present": true,
+        "count": 69
+      },
+      {
+        "method": "mcpServer/startupStatus/updated",
+        "count": 3
+      },
+      {
+        "method": "item/agentMessage/delta",
+        "delta_present": true,
+        "count": 541
+      }
+    ]
+  },
+  "opencode": {
+    "version": "1.18.30",
+    "capabilities": {
+      "transport": "supported",
+      "list_models": "supported",
+      "create_session": "supported",
+      "model_result": "supported",
+      "stream_events": "supported",
+      "resume_session": "unverified",
+      "interrupt": "supported",
+      "permission_request": "unverified",
+      "auth_failure": "supported",
+      "transport_recovery": "unverified",
+      "process_recovery": "unverified",
+      "write_isolation": "unverified"
+    },
+    "observations": [
+      {
+        "capability": "transport",
+        "endpoint": "/global/health",
+        "status_code": 200
+      },
+      {
+        "capability": "auth_failure",
+        "endpoint": "/global/health",
+        "status_code": 401,
+        "scope": "local_server"
+      },
+      {
+        "capability": "list_models",
+        "endpoint": "/provider",
+        "selected_model_present": true
+      },
+      {
+        "capability": "create_session",
+        "endpoint": "/session",
+        "status_code": 200
+      },
+      {
+        "capability": "stream_events",
+        "endpoint": "/event",
+        "first_type": "server.connected"
+      },
+      {
+        "capability": "model_result",
+        "endpoint": "/session/:id/message",
+        "status_code": 200,
+        "text_present": true,
+        "error_type": null
+      },
+      {
+        "capability": "interrupt",
+        "endpoint": "/session/:id/abort",
+        "idle_after_abort": true
+      }
+    ],
+    "transport_gate": "go",
+    "autonomous_write_gate": "no-go",
+    "protocol_paths": [
+      "/event",
+      "/provider",
+      "/session",
+      "/session/{sessionID}/message",
+      "/session/{sessionID}/abort"
+    ],
+    "connected_provider_count": 14,
+    "model": "minimax-coding-plan/MiniMax-M3",
+    "events": [
+      {
+        "type": "server.connected"
+      }
+    ],
+    "session_readback_same_id": true,
+    "continuation_accepted": true,
+    "abort_accepted": true
+  }
+}

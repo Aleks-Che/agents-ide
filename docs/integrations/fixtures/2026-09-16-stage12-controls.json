@@ -1,0 +1,49 @@
+{
+  "fixture_version": 1,
+  "observed_at": "2026-09-16T17:41:54.097213+00:00",
+  "codex": {
+    "model": "gpt-5.6-sol",
+    "permission": "supported",
+    "auth_failure": "unverified",
+    "completed_session_recovery": "supported",
+    "active_turn_recovery": "unverified",
+    "interrupt": "supported",
+    "write_isolation": "unverified",
+    "invalid_session_error": -32600,
+    "approval_method": "item/commandExecution/requestApproval",
+    "reply": "decline",
+    "permission_turn_status": "completed",
+    "file_written_after_decline": false,
+    "persisted_turn_count": 1,
+    "resumed_same_id": true,
+    "recovered_turn_count": 1,
+    "interrupt_acknowledged": true,
+    "interrupted_status": "interrupted",
+    "auth_probe_error": "Empty"
+  },
+  "opencode": {
+    "model": "minimax-coding-plan/MiniMax-M3",
+    "permission": "supported",
+    "resume_session": "supported",
+    "completed_session_recovery": "supported",
+    "active_turn_recovery": "unverified",
+    "write_isolation": "unverified",
+    "permission_paths": [
+      "/permission",
+      "/permission/{requestID}/reply",
+      "/session/{sessionID}/permissions/{permissionID}",
+      "/api/permission/request",
+      "/api/permission/saved",
+      "/api/permission/saved/{id}",
+      "/api/session/{sessionID}/permission",
+      "/api/session/{sessionID}/permission/{requestID}",
+      "/api/session/{sessionID}/permission/{requestID}/reply"
+    ],
+    "permission_kind": "bash",
+    "reply_status": 200,
+    "first_response_ok": true,
+    "same_id_after_restart": true,
+    "history_message_count": 2,
+    "second_response_ok": true
+  }
+}

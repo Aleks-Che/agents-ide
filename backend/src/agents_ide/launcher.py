@@ -74,7 +74,10 @@ def check_port(settings: Settings) -> None:
 
 
 def start(settings: Settings) -> dict[str, Any]:
+    from agents_ide.operations.maintenance import ensure_available
+
     with portalocker.Lock(str(settings.data_dir / "runtime/start.lock"), timeout=5):
+        ensure_available(settings)
         current = status(settings)
         if resolve_process(current.get("launcher", {})):
             return current

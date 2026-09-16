@@ -138,6 +138,21 @@ def append_event(
 
     if type_ not in EVENT_TYPES:
         raise ValueError(f"Uncatalogued event: {type_}")
+    from agents_ide.errors import AppError
+    from agents_ide.operations.storage import DETAIL_TYPES, settings_for
+    from agents_ide.persistence.models import Run
+
+    if type_ in DETAIL_TYPES:
+        run = session.get(Run, run_id)
+        if run is not None:
+            if (run.detailed_event_count or 0) >= settings_for(session).detailed_events_limit:
+                raise AppError(
+                    "limit_exceeded",
+                    "Лимит подробных событий Run",
+                    409,
+                    {"limit": "detailed_events_limit"},
+                )
+            run.detailed_event_count = (run.detailed_event_count or 0) + 1
     cleaned: dict[str, Any] = sanitize(
         {**payload, "source": "simulated" if simulated else "engine"}
     )

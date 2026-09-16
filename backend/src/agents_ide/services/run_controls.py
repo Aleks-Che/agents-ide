@@ -199,6 +199,16 @@ def _check_resume(session: Session, run: Run) -> None:
                 json.loads(run.waiting_reason_json or "{}") or runtime.get("waiting_reason") or {}
             )
             key = reason.get("details", {}).get("limit")
+            if key in {
+                "run_artifact_bytes",
+                "data_budget_bytes",
+                "disk_free_bytes",
+                "detailed_events_limit",
+            }:
+                from agents_ide.operations.storage import check_capacity
+
+                check_capacity(session, run.id)
+                continue
             used = {
                 "max_calls": runtime.get("external_calls", 0),
                 "max_node_visits": runtime.get("visits", 0),

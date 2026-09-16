@@ -72,6 +72,9 @@ def run_worker(settings: Settings) -> None:
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopping.set())
     with portalocker.Lock(str(settings.data_dir / "runtime/worker.lock"), timeout=0):
+        from agents_ide.operations.maintenance import ensure_available, requested
+
+        ensure_available(settings)
         migrate(settings)
         engine = create_database(settings)
         factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -84,6 +87,7 @@ def run_worker(settings: Settings) -> None:
             pending: list[Future[bool]] = []
             planning_pending: list[Future[bool]] = []
             last_heartbeat = 0.0
+            last_gc = time.monotonic()
             db_failures = 0
             while not stopping.is_set():
                 from agents_ide.launcher import stop_requested
@@ -129,7 +133,26 @@ def run_worker(settings: Settings) -> None:
                             future.result()
                         except Exception:
                             logger.exception("worker.planning_dispatch_error")
-                while len(pending) < 2 and db_failures == 0 and not stopping.is_set():
+                if (
+                    not pending
+                    and not planning_pending
+                    and not requested(settings)
+                    and not db_failures
+                    and time.monotonic() - last_gc >= 60
+                ):
+                    from agents_ide.operations.storage import collect_garbage
+
+                    try:
+                        collect_garbage(factory)
+                    except Exception:
+                        logger.warning("worker.retention_failed")
+                    last_gc = time.monotonic()
+                while (
+                    len(pending) < 2
+                    and db_failures == 0
+                    and not stopping.is_set()
+                    and not requested(settings)
+                ):
                     pending.append(
                         pool.submit(
                             dispatch_once,
@@ -140,7 +163,12 @@ def run_worker(settings: Settings) -> None:
                             registry,
                         )
                     )
-                while len(planning_pending) < 2 and db_failures == 0 and not stopping.is_set():
+                while (
+                    len(planning_pending) < 2
+                    and db_failures == 0
+                    and not stopping.is_set()
+                    and not requested(settings)
+                ):
                     planning_pending.append(
                         planning_pool.submit(
                             dispatch_planning_once,
@@ -175,8 +203,11 @@ def dispatch_planning_once(
     stopping: threading.Event | None = None,
 ) -> bool:
     from agents_ide.engine.planning_worker import claim_planning_job
+    from agents_ide.operations.maintenance import requested
     from agents_ide.security.secrets import SecretStore
 
+    if requested(settings):
+        return False
     owned_engine = create_database(settings) if session_factory is None else None
     factory = session_factory or sessionmaker(bind=owned_engine, expire_on_commit=False)
     try:
@@ -203,6 +234,10 @@ def dispatch_once(
     stopping: threading.Event | None = None,
     registry: ProcessRegistry | None = None,
 ) -> bool:
+    from agents_ide.operations.maintenance import requested
+
+    if requested(settings):
+        return False
     owned_engine = create_database(settings) if session_factory is None else None
     factory = session_factory or sessionmaker(bind=owned_engine, expire_on_commit=False)
     try:

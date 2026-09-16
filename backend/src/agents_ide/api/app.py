@@ -120,6 +120,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise AppError("origin_invalid", "Межсайтовый запрос запрещён", 403)
             if request.method not in {"GET", "HEAD", "OPTIONS"} and not origins:
                 raise AppError("origin_invalid", "Для изменения данных требуется Origin", 403)
+            if request.method not in {"GET", "HEAD", "OPTIONS"}:
+                from agents_ide.operations.maintenance import ensure_available
+
+                ensure_available(settings)
             response = await call_next(request)
         except AppError as error:
             response = error_response(error, request_id)

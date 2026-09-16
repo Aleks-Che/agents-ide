@@ -1,0 +1,59 @@
+{
+  "observed_date": "2026-09-16",
+  "backend": {
+    "profile": {
+      "os": "Windows-10-10.0.19045-SP0",
+      "python": "3.12.7",
+      "processor": "AMD64 Family 26 Model 68 Stepping 0, AuthenticAMD",
+      "storage": "C: Samsung SSD 990 PRO 4TB, NVMe; verified with Get-Partition/Get-Disk"
+    },
+    "event_fixture": 100000,
+    "large_output_input_bytes": 12000000,
+    "samples": 25,
+    "p95_ms": {
+      "snapshot": 13.655400020070374,
+      "history_first_page": 15.817500010598451,
+      "artifact_chunk": 5.631699983496219,
+      "persisted_to_subscription": 82.54989999113604
+    },
+    "buffers": {
+      "limit_bytes": 1048576,
+      "slow_reset": true
+    },
+    "delivery_scope": "API StreamHub subscription; browser render timing is separate"
+  },
+  "browser": {
+    "events": 100000,
+    "samples_ms": [
+      317.113037109375,
+      46.59716796875,
+      270.25390625,
+      218.371826171875,
+      75.1650390625,
+      268.987060546875,
+      310.97998046875,
+      89.197021484375,
+      372.866943359375,
+      219.698974609375,
+      62.60693359375,
+      334.44189453125,
+      327.422119140625,
+      514.801025390625,
+      53.680908203125,
+      309.132080078125,
+      470.88916015625,
+      395.73681640625,
+      211.73486328125,
+      139.990966796875,
+      375.611083984375,
+      190.8681640625,
+      41.572021484375,
+      372.779052734375,
+      315.39599609375
+    ],
+    "p95_persisted_to_visible_ms": 470.88916015625,
+    "dom_rows": 12,
+    "browser": "Chromium",
+    "transport": "real FastAPI SSE"
+  }
+}

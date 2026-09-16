@@ -252,6 +252,10 @@ class Run(Base):
     updated_at: Mapped[float] = mapped_column(Float, default=_utcnow)
     started_at: Mapped[float | None] = mapped_column(Float)
     finished_at: Mapped[float | None] = mapped_column(Float)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    retention_sequence: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    detailed_event_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    artifact_bytes: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
 
 
 class StepExecution(Base):
@@ -382,6 +386,8 @@ class ArtifactManifest(Base):
     truncation_json: Mapped[str | None] = mapped_column(Text)
     omissions_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
+    tombstoned_at: Mapped[float | None] = mapped_column(Float)
+    purged_at: Mapped[float | None] = mapped_column(Float)
 
 
 class QueueJob(Base):
