@@ -2957,6 +2957,7 @@ class Runner:
             truth: str | None = None
             if node["type"] == "Condition":
                 truth = evaluate_truth(ASTNode.from_json(node["expression"]), context).value
+                execution.decision = truth
                 edges = [e for e in edges if e.get("when") == truth]
                 self._event(
                     session,
@@ -3095,6 +3096,14 @@ class Runner:
                 self.runtime["cycle_id"] += 1
                 self.runtime["work"]["cycle_id"] = self.runtime["cycle_id"]
             self.runtime["next_node_id"] = target
+            self.runtime["last_transition"] = {
+                "edge_id": edge.get("id") or edge.get("edge_id"),
+                "source_node_id": node["id"],
+                "target": target,
+                "backward": bool(loop),
+                "reason": truth or "single_edge",
+                "cycle_id": self.runtime["cycle_id"],
+            }
             run.resume_target_json = to_json(
                 {"action": "dispatch_next", "node_id": target, "blockers": []}
             )

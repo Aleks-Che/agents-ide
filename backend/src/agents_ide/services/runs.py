@@ -489,13 +489,17 @@ def submit_command(session: Session, run_id: str, payload: RunCommand) -> Comman
     )
 
 
-def list_command_journal(session: Session, run_id: str) -> list[CommandAccepted]:
+def list_command_journal(
+    session: Session, run_id: str, *, offset: int = 0, limit: int = 100
+) -> list[CommandAccepted]:
     if session.get(RunModel, run_id) is None:
         raise AppError("run_not_found", "Run не найден", 404)
     stmt = (
         select(CommandJournalModel)
         .where(CommandJournalModel.run_id == run_id)
         .order_by(CommandJournalModel.sequence.asc())
+        .offset(offset)
+        .limit(limit)
     )
     return [
         CommandAccepted(

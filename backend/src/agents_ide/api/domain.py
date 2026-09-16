@@ -101,6 +101,7 @@ from agents_ide.domain.schemas import (
 )
 from agents_ide.engine.events import event_catalog
 from agents_ide.engine.events_stream import (
+    ArtifactContent,
     ArtifactView,
     EventBatchResponse,
     RunSnapshot,
@@ -122,6 +123,7 @@ from agents_ide.services import (
     runs,
     templates,
 )
+from agents_ide.services.run_observation import HistoryCategory, HistoryPage, read_history
 
 router = APIRouter(prefix="/api", tags=["domain"])
 
@@ -580,8 +582,13 @@ def submit_command_endpoint(
 
 
 @router.get("/runs/{run_id}/commands", response_model=list[CommandAccepted])
-def list_command_journal_endpoint(session: SessionDep, run_id: str) -> list[CommandAccepted]:
-    return runs.list_command_journal(session, run_id)
+def list_command_journal_endpoint(
+    session: SessionDep,
+    run_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+) -> list[CommandAccepted]:
+    return runs.list_command_journal(session, run_id, offset=offset, limit=limit)
 
 
 class ReservationCleanupRequest(ApiModel):
@@ -665,6 +672,7 @@ def run_snapshot_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]:
 
     from agents_ide.persistence.models import Run as RunModel
     from agents_ide.persistence.models import RunEvent
+    from agents_ide.services.run_observation import build_observation
     from agents_ide.services.run_selection import build_selection_summary
 
     session.connection().exec_driver_sql("BEGIN")
@@ -683,13 +691,20 @@ def run_snapshot_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]:
         "last_sequence": highest or 0,
         "min_retained_sequence": minimum or 0,
         "selection": selection,
+        "observation": build_observation(session, run_row),
         "planning_provenance": json.loads(run_row.snapshot_json).get("planning_provenance"),
     }
 
 
 @router.get("/runs/{run_id}/artifacts", response_model=list[ArtifactView])
-def run_artifacts_endpoint(session: SessionDep, run_id: str) -> list[dict[str, Any]]:
+def run_artifacts_endpoint(
+    session: SessionDep,
+    run_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+) -> list[dict[str, Any]]:
     from sqlalchemy import select
+    from sqlalchemy.orm import defer
 
     from agents_ide.persistence.models import ArtifactManifest
 
@@ -698,8 +713,11 @@ def run_artifacts_endpoint(session: SessionDep, run_id: str) -> list[dict[str, A
         _artifact_view(row, include_body=False)
         for row in session.scalars(
             select(ArtifactManifest)
+            .options(defer(ArtifactManifest.body_json))
             .where(ArtifactManifest.run_id == run_id)
             .order_by(ArtifactManifest.created_at, ArtifactManifest.id)
+            .offset(offset)
+            .limit(limit)
         )
     ]
 
@@ -712,6 +730,39 @@ def run_artifact_endpoint(session: SessionDep, run_id: str, artifact_id: str) ->
     if row is None or row.run_id != run_id:
         raise AppError("artifact_not_found", "Артефакт не найден", 404)
     return _artifact_view(row, include_body=True)
+
+
+@router.get("/runs/{run_id}/artifacts/{artifact_id}/content", response_model=ArtifactContent)
+def run_artifact_content_endpoint(
+    session: SessionDep,
+    run_id: str,
+    artifact_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=16000, ge=1, le=16000),
+    format: Literal["text", "json"] = "text",
+) -> dict[str, Any]:
+    from agents_ide.persistence.models import ArtifactManifest
+
+    row = session.get(ArtifactManifest, artifact_id)
+    if row is None or row.run_id != run_id:
+        raise AppError("artifact_not_found", "Артефакт не найден", 404)
+    body = json.loads(row.body_json) if row.body_json else None
+    if format == "text" and isinstance(body, str):
+        text = body
+    elif format == "text" and isinstance(body, dict):
+        text = "\n\n".join(
+            f"{key}:\n"
+            + (value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
+            for key, value in body.items()
+        )
+    else:
+        text = json.dumps(body, ensure_ascii=False, indent=2)
+    return {
+        "artifact": _artifact_view(row, include_body=False),
+        "text": text[offset : offset + limit],
+        "offset": offset,
+        "total_chars": len(text),
+    }
 
 
 def _artifact_view(row: Any, *, include_body: bool) -> dict[str, Any]:
@@ -757,6 +808,27 @@ def replay_run_events_endpoint(
 
     batch = fetch_full_history(session, run_id, limit=limit)
     return asdict(batch)
+
+
+@router.get("/runs/{run_id}/history", response_model=HistoryPage)
+def run_history_endpoint(
+    session: SessionDep,
+    run_id: str,
+    before: int | None = Query(default=None, ge=1, le=2**63 - 1),
+    limit: int = Query(default=200, ge=1, le=200),
+    category: HistoryCategory = "all",
+    node_id: str | None = Query(default=None, max_length=64),
+    execution_id: str | None = Query(default=None, max_length=32),
+) -> HistoryPage:
+    return read_history(
+        session,
+        run_id,
+        before=before,
+        limit=limit,
+        category=category,
+        node_id=node_id,
+        execution_id=execution_id,
+    )
 
 
 @router.get("/runs/{run_id}/stream")

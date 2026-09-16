@@ -256,11 +256,11 @@ test('Run screen selects the requested run, replays retained events, resolves an
     .getByRole('button', { name: 'Открыть', exact: true })
     .click()
   await expect(dialog.getByText('Поток: open', { exact: false })).toBeVisible()
-  await expect(dialog.locator('.event-log > li')).toHaveCount(400)
+  await expect(dialog.locator('.timeline-rows > li')).toHaveCount(12)
   await expect(
     dialog.getByText('Курсор недоступен:', { exact: false }),
   ).toBeVisible()
-  expect(streamRequests).toHaveLength(2)
+  expect(streamRequests).toHaveLength(1)
   const alpha = dialog
     .locator('.artifact-list > li')
     .filter({ hasText: 'review_alpha' })
@@ -310,7 +310,7 @@ test('Run screen selects the requested run, replays retained events, resolves an
   expect(requests).toHaveLength(2)
   expect(requests[0]).toEqual(requests[1])
   expect((await api(page, 'GET', `/runs/${second.id}/commands`)).length).toBe(2)
-  expect(streamRequests).toHaveLength(2)
+  expect(streamRequests).toHaveLength(1)
   await page.screenshot({ path: '../.local/stage9-run-review.png' })
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)

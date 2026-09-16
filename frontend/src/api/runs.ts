@@ -8,6 +8,10 @@ export type EventEnvelope = ApiSchemas['EventEnvelope']
 export type EventBatchResponse = ApiSchemas['EventBatchResponse']
 export type ArtifactView = ApiSchemas['ArtifactView']
 export type RunSnapshot = ApiSchemas['RunSnapshot']
+export type RunObservation = ApiSchemas['RunObservation']
+export type HistoryPage = ApiSchemas['HistoryPage']
+export type HistoryCategory =
+  'all' | 'steps' | 'messages' | 'tools' | 'models' | 'commands' | 'checks'
 export type WaitingReason = ApiSchemas['WaitingReason']
 export type SelectionSummary = NonNullable<
   ApiSchemas['RunSnapshot']['selection']
@@ -81,6 +85,32 @@ export const MODEL_GROUP_EVENT_TYPES: ReadonlySet<string> = new Set([
 ])
 
 export const runsApi = {
+  artifactContent(
+    runId: string,
+    artifactId: string,
+    offset: number,
+    format: 'text' | 'json',
+  ): Promise<ApiSchemas['ArtifactContent']> {
+    return request(
+      `/runs/${runId}/artifacts/${artifactId}/content?offset=${offset}&limit=16000&format=${format}`,
+    )
+  },
+  history(
+    runId: string,
+    query: {
+      before?: number
+      category?: HistoryCategory
+      nodeId?: string
+      executionId?: string
+    } = {},
+  ): Promise<HistoryPage> {
+    const params = new URLSearchParams({ limit: '200' })
+    if (query.before !== undefined) params.set('before', String(query.before))
+    if (query.category) params.set('category', query.category)
+    if (query.nodeId) params.set('node_id', query.nodeId)
+    if (query.executionId) params.set('execution_id', query.executionId)
+    return request(`/runs/${runId}/history?${params}`)
+  },
   replay(runId: string): Promise<EventBatchResponse> {
     return request<EventBatchResponse>(`/runs/${runId}/events/replay`)
   },
@@ -112,8 +142,10 @@ export const runsApi = {
   diagnostics(runId: string): Promise<RunDiagnostics> {
     return request<RunDiagnostics>(`/runs/${runId}/diagnostics`)
   },
-  artifacts(runId: string): Promise<ArtifactView[]> {
-    return request<ArtifactView[]>(`/runs/${runId}/artifacts`)
+  artifacts(runId: string, offset = 0): Promise<ArtifactView[]> {
+    return request<ArtifactView[]>(
+      `/runs/${runId}/artifacts?offset=${offset}&limit=50`,
+    )
   },
   artifact(runId: string, artifactId: string): Promise<ArtifactView> {
     return request<ArtifactView>(`/runs/${runId}/artifacts/${artifactId}`)
@@ -130,8 +162,10 @@ export const runsApi = {
       `/runs/${runId}/events${search ? `?${search}` : ''}`,
     )
   },
-  commandJournal(runId: string): Promise<CommandAccepted[]> {
-    return request<CommandAccepted[]>(`/runs/${runId}/commands`)
+  commandJournal(runId: string, offset = 0): Promise<CommandAccepted[]> {
+    return request<CommandAccepted[]>(
+      `/runs/${runId}/commands?offset=${offset}&limit=50`,
+    )
   },
   submitCommand(
     runId: string,

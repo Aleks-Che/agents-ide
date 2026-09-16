@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, request } from '../api/client'
-import { runsApi, type EventEnvelope } from '../api/runs'
+import { runsApi, type EventEnvelope, type RunSnapshot } from '../api/runs'
 
 export type SseStreamState =
   'idle' | 'connecting' | 'open' | 'closed' | 'reset_required' | 'auth_expired'
@@ -16,6 +16,7 @@ export interface UseRunEventSourceOptions {
   onEvent: (event: EventEnvelope) => void
   onStatus?: (status: SseStatus) => void
   onReset?: (reason: string) => void
+  onSnapshot?: (snapshot: RunSnapshot) => void | Promise<void>
   onFinalState?: (state: string) => void
 }
 
@@ -25,6 +26,7 @@ export function connectRunStream(
   options: Omit<UseRunEventSourceOptions, 'enabled'>,
 ): () => void {
   let disposed = false
+  let ended = false
   let source: EventSource | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let sequence = options.after
@@ -46,7 +48,9 @@ export function connectRunStream(
   }
   const failed = (error: unknown) => {
     if (disposed) return
+    clearTimeout(timer)
     if (error instanceof ApiError && error.status === 401) {
+      ended = true
       status('auth_expired')
       return
     }
@@ -67,18 +71,13 @@ export function connectRunStream(
     status('reset_required', reason)
     options.onReset?.(reason)
     try {
-      // Refresh the authoritative state, then replay from the oldest retained event.
-      await runsApi.snapshot(options.runId)
-      let batch = await runsApi.replay(options.runId)
+      // Jump to an atomic snapshot, then fetch only a bounded tail for display.
+      // Old history stays available through REST pagination, even for a slow client.
+      const snapshot = await runsApi.snapshot(options.runId)
       if (disposed) return
-      sequence = Math.max(0, (batch.min_retained_sequence ?? 1) - 1)
-      while (!disposed) {
-        if (batch.reset_required)
-          throw new Error('History changed during replay')
-        for (const event of batch.events) accept(event)
-        if (!batch.has_more) break
-        batch = await runsApi.events(options.runId, { after: sequence })
-      }
+      await options.onSnapshot?.(snapshot)
+      if (disposed) return
+      sequence = snapshot.last_sequence
       if (!disposed) open()
     } catch (error) {
       failed(error)
@@ -86,6 +85,7 @@ export function connectRunStream(
   }
   const open = () => {
     if (disposed) return
+    source?.close()
     status('connecting')
     const current = new EventSource(
       `/api/runs/${encodeURIComponent(options.runId)}/stream?after=${sequence}`,
@@ -132,12 +132,14 @@ export function connectRunStream(
       if (!active()) return
       current.close()
       source = undefined
+      ended = true
       status('auth_expired')
     })
     current.addEventListener('stream.closed', (message) => {
       if (!active()) return
       current.close()
       source = undefined
+      ended = true
       status('closed')
       try {
         const payload = JSON.parse((message as MessageEvent).data)
@@ -147,11 +149,20 @@ export function connectRunStream(
       }
     })
   }
+  const offline = () => {
+    if (disposed || ended) return
+    source?.close()
+    source = undefined
+    failed(new Error('Browser offline'))
+  }
+  if (typeof window !== 'undefined') window.addEventListener('offline', offline)
   open()
   return () => {
     disposed = true
     source?.close()
     clearTimeout(timer)
+    if (typeof window !== 'undefined')
+      window.removeEventListener('offline', offline)
   }
 }
 
@@ -178,6 +189,7 @@ export function useRunEventSource(
         handlers.current.onStatus?.(next)
       },
       onReset: (reason) => handlers.current.onReset?.(reason),
+      onSnapshot: (snapshot) => handlers.current.onSnapshot?.(snapshot),
       onFinalState: (state) => handlers.current.onFinalState?.(state),
     })
   }, [runId, enabled, after])

@@ -47,6 +47,29 @@ afterEach(() => {
 })
 
 describe('Run event transport', () => {
+  it('closes a live connection on browser offline and removes the listener on disposal', async () => {
+    const browser = new EventTarget()
+    vi.stubGlobal('window', browser)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({})))
+    const onStatus = vi.fn()
+    dispose = connectRunStream({
+      runId: 'r1',
+      after: 17,
+      onEvent: vi.fn(),
+      onStatus,
+    })
+    browser.dispatchEvent(new Event('offline'))
+    expect(FakeSource.instances[0].closed).toBe(true)
+    expect(onStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ state: 'connecting', lastSequence: 17 }),
+    )
+    await vi.advanceTimersByTimeAsync(500)
+    expect(FakeSource.instances[1].url).toMatch(/after=17$/)
+    dispose()
+    browser.dispatchEvent(new Event('offline'))
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(FakeSource.instances).toHaveLength(2)
+  })
   it('keeps one stream, drops duplicates and reconnects from the last received cursor', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({})))
     const onEvent = vi.fn(),
@@ -67,27 +90,24 @@ describe('Run event transport', () => {
     await vi.advanceTimersByTimeAsync(10000)
     expect(FakeSource.instances).toHaveLength(2)
   })
-  it('refreshes snapshot and paginates retained history on reset, without accepting a supplied URL', async () => {
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(json({}))
-      .mockResolvedValueOnce(
-        json({ events: [event(7)], min_retained_sequence: 7, has_more: true }),
-      )
-      .mockResolvedValueOnce(json({ events: [event(8)], has_more: false }))
+  it('resets to a snapshot cursor without replaying unbounded history or trusting a supplied URL', async () => {
+    const snapshot = { last_sequence: 90000, min_retained_sequence: 70000 }
+    const fetch = vi.fn().mockResolvedValueOnce(json(snapshot))
     vi.stubGlobal('fetch', fetch)
     const onEvent = vi.fn(),
       onStatus = vi.fn(),
-      onReset = vi.fn()
+      onReset = vi.fn(),
+      onSnapshot = vi.fn()
     dispose = connectRunStream({
       runId: 'r1',
       after: 2,
       onEvent,
       onStatus,
       onReset,
+      onSnapshot,
     })
     FakeSource.instances[0].emit('stream.reset_required', {
-      reason: 'cursor_unavailable',
+      reason: 'slow_consumer',
       snapshot_url: 'https://untrusted.invalid/',
     })
     await vi.advanceTimersByTimeAsync(0)
@@ -95,13 +115,54 @@ describe('Run event transport', () => {
       expect.objectContaining({ state: 'reset_required' }),
     )
     expect(onReset).toHaveBeenCalledOnce()
+    expect(onSnapshot).toHaveBeenCalledWith(snapshot)
     expect(fetch.mock.calls.map((args) => args[0])).toEqual([
       '/api/runs/r1/snapshot',
-      '/api/runs/r1/events/replay',
-      '/api/runs/r1/events?after=7',
     ])
-    expect(onEvent.mock.calls.map((args) => args[0].sequence)).toEqual([7, 8])
-    expect(FakeSource.instances[1].url).toMatch(/after=8$/)
+    expect(onEvent).not.toHaveBeenCalled()
+    expect(FakeSource.instances[1].url).toMatch(/after=90000$/)
+    FakeSource.instances[1].emit('run.event', event(90001))
+    FakeSource.instances[1].emit('run.event', event(90001))
+    expect(onEvent).toHaveBeenCalledOnce()
+  })
+  it('recovers after a prolonged API outage with bounded backoff and the original cursor', async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error('offline'))
+    vi.stubGlobal('fetch', fetch)
+    const onEvent = vi.fn()
+    dispose = connectRunStream({ runId: 'r1', after: 42, onEvent })
+    FakeSource.instances[0].emit('error')
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000)
+    expect(fetch.mock.calls.length).toBeLessThan(40)
+    expect(FakeSource.instances).toHaveLength(1)
+    fetch.mockResolvedValue(json({}))
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(FakeSource.instances[1].url).toMatch(/after=42$/)
+    FakeSource.instances[1].emit('run.event', event(43))
+    expect(onEvent).toHaveBeenCalledOnce()
+  })
+  it('does not revive a disposed connection after an in-flight reset', async () => {
+    let resolve!: (value: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockReturnValue(
+        new Promise<Response>((done) => {
+          resolve = done
+        }),
+      ),
+    )
+    const onSnapshot = vi.fn()
+    dispose = connectRunStream({
+      runId: 'r1',
+      after: 1,
+      onEvent: vi.fn(),
+      onSnapshot,
+    })
+    FakeSource.instances[0].emit('stream.reset_required')
+    dispose()
+    resolve(json({ last_sequence: 99 }))
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(onSnapshot).not.toHaveBeenCalled()
+    expect(FakeSource.instances).toHaveLength(1)
   })
   it('exposes explicit session expiration and closes the source', () => {
     const onStatus = vi.fn()

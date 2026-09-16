@@ -794,6 +794,94 @@ footer span {
   flex-direction: column;
   gap: 16px;
 }
+.run-graph {
+  height: 360px;
+  width: 100%;
+  border: 1px solid #3b4c52;
+  border-radius: 8px;
+}
+.run-graph .observed-node {
+  width: 190px;
+  font-size: 12px;
+  background: #192225;
+  color: #dfebe5;
+}
+.run-graph .observed-node.current {
+  border: 3px solid #dcca86;
+}
+.run-graph .status-succeeded {
+  border-color: #6da98e;
+}
+.run-graph .status-failed,
+.run-graph .status-waiting_input {
+  border-color: #d39286;
+}
+.observed-detail {
+  padding: 12px;
+  background: #192225;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.observation-filters {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: end;
+}
+.observation-filters label {
+  flex: 1;
+  min-width: 150px;
+}
+.timeline-viewport {
+  height: 380px;
+  overflow-y: auto;
+  overflow-anchor: none;
+  background: #141c1e;
+  border: 1px solid #3b4c52;
+  border-radius: 8px;
+}
+.timeline-rows {
+  list-style: none;
+  position: relative;
+  margin: 0;
+  padding: 0;
+}
+.timeline-rows li {
+  position: absolute;
+  width: 100%;
+  padding: 3px 6px;
+  box-sizing: border-box;
+}
+.timeline-rows button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: stretch;
+  text-align: left;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  background: #192225;
+  color: #cad7d3;
+}
+.timeline-rows button > * {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.timeline-rows button span {
+  font-size: 11px;
+}
+.page-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+.artifact-detail {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
 .binding-editor > header,
 .run-screen > header {
   position: sticky;

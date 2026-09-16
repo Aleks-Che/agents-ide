@@ -90,7 +90,9 @@ describe('runsApi', () => {
     const fetch = captureFetch()
     fetch.mockResolvedValueOnce(stubJsonResponse(200, []))
     await runsApi.artifacts('r1')
-    expect(fetch.mock.calls[0][0]).toBe('/api/runs/r1/artifacts')
+    expect(fetch.mock.calls[0][0]).toBe(
+      '/api/runs/r1/artifacts?offset=0&limit=50',
+    )
     fetch.mockResolvedValueOnce(stubJsonResponse(200, { id: 'a1' }))
     await runsApi.artifact('r1', 'a1')
     expect(fetch.mock.calls[1][0]).toBe('/api/runs/r1/artifacts/a1')

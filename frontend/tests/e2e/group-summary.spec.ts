@@ -137,9 +137,13 @@ test('group diagnostics, safe event text, resume and durable executor after reop
   await expect(node.locator('tbody tr').nth(1)).toContainText('quota_1')
   await expect(node.locator('tbody tr').nth(2)).toContainText('quota_2')
   await expect(node.locator('[data-state="current"]')).toHaveCount(0)
+  await dialog.getByLabel('Фильтр событий').selectOption('models')
   await expect(
-    dialog.locator('.event-summary').filter({ hasText: markup }).first(),
-  ).toBeVisible()
+    dialog
+      .locator('.timeline-rows')
+      .getByText(markup, { exact: false })
+      .first(),
+  ).toBeVisible({ timeout: 10000 })
   await expect(dialog.locator('[data-untrusted]')).toHaveCount(0)
   await expect(summary).toContainText(
     'Изменения группы применятся только к новым Run',

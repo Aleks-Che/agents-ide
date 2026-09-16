@@ -1,21 +1,22 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
 import {
   runsApi,
   describeRunError,
-  MODEL_GROUP_EVENT_TYPES,
   type RunCommand,
   type RunRecord,
-  type EventEnvelope,
   type ArtifactView,
 } from '../../api/runs'
 import { useCsrfToken } from '../../app/session'
 import { formatDateTime, shortHash } from '../../app/format'
-import { useRunEventSource } from '../../app/useRunStream'
 import { Modal } from '../../app/Modal'
 import { allowedCommands, resolutionPayload } from './controls'
 import { GroupSummarySection } from './GroupSummarySection'
+import { RunTimeline } from './RunTimeline'
+import { ArtifactDetail } from './ArtifactDetail'
+import { duration, stateDescriptions, waitingDescriptions } from './observation'
+const RunGraph = lazy(() => import('./RunGraph'))
 
 export function RunScreen({
   runId,
@@ -26,6 +27,10 @@ export function RunScreen({
 }) {
   const csrf = useCsrfToken()
   const client = useQueryClient()
+  const [nodeId, setNodeId] = useState('')
+  const [artifactOffset, setArtifactOffset] = useState(0)
+  const [commandOffset, setCommandOffset] = useState(0)
+  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null)
   const run = useQuery({
     queryKey: ['run', runId],
     queryFn: () => runsApi.get(runId),
@@ -37,8 +42,9 @@ export function RunScreen({
     refetchInterval: 6000,
   })
   const artifacts = useQuery({
-    queryKey: ['run_artifacts', runId],
-    queryFn: () => runsApi.artifacts(runId),
+    queryKey: ['run_artifacts', runId, artifactOffset],
+    queryFn: () => runsApi.artifacts(runId, artifactOffset),
+    gcTime: 0,
     refetchInterval: 6000,
   })
   const diagnostics = useQuery({
@@ -47,8 +53,9 @@ export function RunScreen({
     refetchInterval: 4000,
   })
   const journal = useQuery({
-    queryKey: ['run_commands', runId],
-    queryFn: () => runsApi.commandJournal(runId),
+    queryKey: ['run_commands', runId, commandOffset],
+    queryFn: () => runsApi.commandJournal(runId, commandOffset),
+    gcTime: 0,
     refetchInterval: 5000,
   })
   const snapshot = useQuery({
@@ -56,8 +63,6 @@ export function RunScreen({
     queryFn: () => runsApi.snapshot(runId),
     refetchInterval: 6000,
   })
-  const [events, setEvents] = useState<EventEnvelope[]>([])
-  const [resetNotice, setResetNotice] = useState(false)
   const [resolutionOpen, setResolutionOpen] = useState(false)
   const refresh = () => {
     for (const queryKey of [
@@ -72,38 +77,6 @@ export function RunScreen({
       void client.invalidateQueries({ queryKey })
     }
   }
-  const stream = useRunEventSource({
-    runId,
-    enabled: true,
-    after: 0,
-    onEvent: (event) => {
-      setEvents((previous) =>
-        previous.some((item) => item.sequence === event.sequence)
-          ? previous
-          : [...previous, event]
-              .sort((a, b) => a.sequence - b.sequence)
-              .slice(-400),
-      )
-      if (
-        ['run.state_changed', 'control.applied', 'control.requested'].includes(
-          event.type,
-        )
-      )
-        refresh()
-      if (MODEL_GROUP_EVENT_TYPES.has(event.type))
-        void client.invalidateQueries({ queryKey: ['run_snapshot', runId] })
-    },
-    onReset: () => {
-      setResetNotice(true)
-      setEvents([])
-      refresh()
-    },
-    onFinalState: refresh,
-    onStatus: (next) => {
-      if (next.state === 'auth_expired')
-        void client.invalidateQueries({ queryKey: ['session'] })
-    },
-  })
   const command = useMutation({
     mutationFn: (payload: RunCommand) =>
       runsApi.submitCommand(runId, payload, csrf),
@@ -120,15 +93,23 @@ export function RunScreen({
     type: RunCommand['command_type'],
     payload: Record<string, unknown> = {},
   ) => {
-    if (!run.data || command.isPending || uncertain) return
+    if (!data || command.isPending || uncertain) return
     command.mutate({
       command_id: crypto.randomUUID(),
       command_type: type,
-      expected_state_version: run.data.state_version,
+      expected_state_version: data.state_version,
       payload,
     })
   }
-  const data = run.data
+  const data =
+    snapshot.data &&
+    (!run.data || snapshot.data.run.state_version > run.data.state_version)
+      ? snapshot.data.run
+      : run.data
+  const observation = snapshot.data?.observation
+  const observedNode = observation?.nodes?.find(
+    (node) => node.id === (nodeId || observation.current_node_id),
+  )
   const waiting =
     data?.waiting_reason ??
     (data?.runtime?.waiting_reason as RunRecord['waiting_reason'])
@@ -188,6 +169,8 @@ export function RunScreen({
                   <dt>Состояние</dt>
                   <dd>
                     {data.state} · v{data.state_version}
+                    <br />
+                    {stateDescriptions[data.state]}
                   </dd>
                 </div>
                 <div>
@@ -204,7 +187,8 @@ export function RunScreen({
                   <dt>Текущий узел / цикл</dt>
                   <dd>
                     {String(
-                      data.runtime?.current_node_id ??
+                      observation?.current_node_id ??
+                        data.runtime?.current_node_id ??
                         diagnostics.data?.resume_target.node_id ??
                         '—',
                     )}{' '}
@@ -245,15 +229,13 @@ export function RunScreen({
             {waiting ? (
               <section aria-label="Причина ожидания">
                 <h4>{waiting.code}</h4>
+                <p>
+                  {waitingDescriptions[waiting.code] ??
+                    'Предоставьте недостающие данные, указанные в причине ожидания.'}
+                </p>
                 <pre>{JSON.stringify(waiting.details, null, 2)}</pre>
                 <p>Доступные действия: {waiting.allowed_actions.join(', ')}</p>
               </section>
-            ) : null}
-            {snapshot.data?.selection ? (
-              <GroupSummarySection
-                selection={snapshot.data.selection}
-                waiting={snapshot.data.run.waiting_reason}
-              />
             ) : null}
             <section className="run-controls" aria-label="Управление Run">
               {(['pause', 'stop', 'resume', 'cancel', 'resolve'] as const).map(
@@ -321,6 +303,86 @@ export function RunScreen({
             ) : null}
           </>
         ) : null}
+        {observation ? (
+          <section aria-label="Позиция выполнения">
+            <h4>Граф и текущий шаг</h4>
+            <Suspense fallback={<p>Загружаем граф…</p>}>
+              <RunGraph
+                observation={observation}
+                selected={nodeId}
+                onSelect={setNodeId}
+              />
+            </Suspense>
+            <p>
+              Последняя выбранная связь:{' '}
+              {observation.last_transition
+                ? `${String(observation.last_transition.source_node_id)} → ${String(observation.last_transition.target)} · ${String(observation.last_transition.reason)}`
+                : '—'}
+            </p>
+            <label>
+              Подробности узла
+              <select
+                value={nodeId}
+                onChange={(event) => setNodeId(event.target.value)}
+              >
+                <option value="">Текущий узел</option>
+                {observation.nodes?.map((node) => (
+                  <option key={node.id}>{node.id}</option>
+                ))}
+              </select>
+            </label>
+            {observedNode ? (
+              <div className="observed-detail">
+                <strong>
+                  {observedNode.label} · {observedNode.status}
+                </strong>
+                <p>
+                  Посещение {observedNode.visit_index} · цикл{' '}
+                  {observedNode.cycle_id ?? '—'} · попыток{' '}
+                  {observedNode.attempt_count} · время{' '}
+                  {duration(observedNode.started_at, observedNode.finished_at)}
+                </p>
+                <p>
+                  Модель: {observedNode.model_id ?? '—'} · агент / подключение:{' '}
+                  {observedNode.resource_id ?? '—'}
+                </p>
+                <p>
+                  Результат проверки:{' '}
+                  {observedNode.decision ?? 'не предоставлен'}
+                </p>
+                {observedNode.result_ref ? (
+                  <button
+                    onClick={() =>
+                      setSelectedArtifact(observedNode.result_ref!)
+                    }
+                  >
+                    Открыть результат шага
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+        <RunTimeline
+          runId={runId}
+          nodeId={nodeId}
+          onNodeChange={setNodeId}
+          nodes={observation?.nodes?.map((node) => node.id) ?? []}
+          onRefresh={refresh}
+          onArtifact={setSelectedArtifact}
+        />
+        {selectedArtifact ? (
+          <section aria-label="Выбранный артефакт">
+            <button onClick={() => setSelectedArtifact(null)}>
+              Закрыть артефакт
+            </button>
+            <ArtifactDetail
+              key={selectedArtifact}
+              runId={runId}
+              artifactId={selectedArtifact}
+            />
+          </section>
+        ) : null}
         <section aria-label="Состояние процессов">
           <h4>Процессы</h4>
           {diagnostics.isLoading ? (
@@ -345,6 +407,12 @@ export function RunScreen({
             )
           ) : null}
         </section>
+        {snapshot.data?.selection ? (
+          <GroupSummarySection
+            selection={snapshot.data.selection}
+            waiting={snapshot.data.run.waiting_reason}
+          />
+        ) : null}
         <section className="run-plan" aria-label="План">
           <h4>
             Пункты плана{' '}
@@ -373,6 +441,12 @@ export function RunScreen({
         </section>
         <section className="run-artifacts" aria-label="Артефакты">
           <h4>Артефакты</h4>
+          <PageControls
+            offset={artifactOffset}
+            count={artifacts.data?.length ?? 0}
+            busy={artifacts.isFetching}
+            onChange={setArtifactOffset}
+          />
           {artifacts.isLoading ? (
             <p role="status">Загружаем артефакты…</p>
           ) : artifacts.data?.length ? (
@@ -385,38 +459,14 @@ export function RunScreen({
             <p>Артефактов пока нет.</p>
           ) : null}
         </section>
-        <section className="run-events" aria-label="События">
-          <h4>События Run</h4>
-          <p role="status">
-            Поток: {stream.state} · курсор {stream.lastSequence}
-          </p>
-          {resetNotice ? (
-            <p role="status">
-              Курсор недоступен: состояние обновлено, история загружается с
-              первой сохранённой записи. Удалённые сервером события недоступны.
-            </p>
-          ) : null}
-          <p className="hint">
-            В окне последние 400 событий. После разрыва соединения подписка
-            продолжится с последнего полученного события.
-          </p>
-          <ol className="event-log">
-            {events.map((event) => (
-              <li key={event.sequence}>
-                <strong>{event.type}</strong> · #{event.sequence}{' '}
-                {event.node_id ?? ''}
-                {MODEL_GROUP_EVENT_TYPES.has(event.type) &&
-                event.payload &&
-                typeof event.payload === 'object' ? (
-                  <ModelGroupEventSummary event={event} />
-                ) : null}
-                <pre>{JSON.stringify(event.payload, null, 2)}</pre>
-              </li>
-            ))}
-          </ol>
-        </section>
         <section className="run-command-journal" aria-label="Журнал команд">
           <h4>Журнал команд</h4>
+          <PageControls
+            offset={commandOffset}
+            count={journal.data?.length ?? 0}
+            busy={journal.isFetching}
+            onChange={setCommandOffset}
+          />
           {journal.isLoading ? (
             <p role="status">Загружаем журнал…</p>
           ) : journal.data?.length ? (
@@ -442,11 +492,6 @@ export function RunScreen({
 
 function Artifact({ artifact }: { artifact: ArtifactView }) {
   const [open, setOpen] = useState(false)
-  const detail = useQuery({
-    queryKey: ['run_artifact', artifact.run_id, artifact.id],
-    queryFn: () => runsApi.artifact(artifact.run_id, artifact.id),
-    enabled: open,
-  })
   return (
     <li className="profile-item">
       <strong>{artifact.schema_type}</strong>
@@ -458,27 +503,7 @@ function Artifact({ artifact }: { artifact: ArtifactView }) {
         {open ? 'Скрыть' : 'Открыть'}
       </button>
       {open ? (
-        detail.isLoading ? (
-          <p role="status">Загружаем артефакт…</p>
-        ) : detail.error ? (
-          <p role="alert" className="error">
-            {describeRunError(detail.error)}
-          </p>
-        ) : (
-          <>
-            <pre className="artifact-body">
-              {JSON.stringify(detail.data?.body ?? null, null, 2)}
-            </pre>
-            {detail.data?.redaction.length ? (
-              <p>Скрыто: {detail.data.redaction.join(', ')}</p>
-            ) : null}
-            {detail.data?.truncation ? (
-              <p>
-                Содержимое усечено: {JSON.stringify(detail.data.truncation)}
-              </p>
-            ) : null}
-          </>
-        )
+        <ArtifactDetail runId={artifact.run_id} artifactId={artifact.id} />
       ) : null}
     </li>
   )
@@ -579,40 +604,32 @@ function ResolutionForm({
   )
 }
 
-function ModelGroupEventSummary({ event }: { event: EventEnvelope }) {
-  const payload = event.payload as Record<string, unknown>
-  const modelId = typeof payload.model_id === 'string' ? payload.model_id : null
-  const reason = typeof payload.reason === 'string' ? payload.reason : null
-  const previous =
-    typeof payload.previous_member_id === 'string'
-      ? payload.previous_member_id
-      : null
-  const memberIndex =
-    typeof payload.member_index === 'number' ? payload.member_index : null
+function PageControls({
+  offset,
+  count,
+  busy,
+  onChange,
+}: {
+  offset: number
+  count: number
+  busy: boolean
+  onChange: (value: number) => void
+}) {
   return (
-    <span className="event-summary">
-      {modelId ? (
-        <>
-          {' '}
-          · модель <code>{modelId}</code>
-        </>
-      ) : null}
-      {memberIndex !== null ? ` · позиция ${memberIndex + 1}` : ''}
-      {reason ? (
-        <>
-          {' '}
-          · причина <code>{reason}</code>
-        </>
-      ) : null}
-      {previous ? (
-        <>
-          {' '}
-          · предыдущий кандидат <code>{previous}</code>
-        </>
-      ) : null}
-      {typeof payload.history_length === 'number'
-        ? ` · диагностик ${payload.history_length}`
-        : ''}
-    </span>
+    <div className="page-controls">
+      <button
+        disabled={!offset || busy}
+        onClick={() => onChange(Math.max(0, offset - 50))}
+      >
+        Предыдущие
+      </button>
+      <span>Страница {offset / 50 + 1}</span>
+      <button
+        disabled={count < 50 || busy}
+        onClick={() => onChange(offset + 50)}
+      >
+        Следующие
+      </button>
+    </div>
   )
 }

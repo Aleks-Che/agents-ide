@@ -18,6 +18,7 @@ from agents_ide.domain.schemas import Run as RunSchema
 from agents_ide.engine.events import EventEnvelope
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import Run, RunEvent
+from agents_ide.services.run_observation import RunObservation
 from agents_ide.services.run_selection import SelectionSummary
 
 MAX_EVENTS_PER_BATCH = 200
@@ -39,6 +40,7 @@ class RunSnapshot(BaseModel):
     min_retained_sequence: int
     selection: SelectionSummary | None = None
     planning_provenance: PlanningProvenance | None = None
+    observation: RunObservation | None = None
 
 
 class ArtifactView(BaseModel):
@@ -53,6 +55,13 @@ class ArtifactView(BaseModel):
     body: Any = None
     redaction: list[str]
     truncation: dict[str, Any] | None
+
+
+class ArtifactContent(BaseModel):
+    artifact: ArtifactView
+    text: str
+    offset: int
+    total_chars: int
 
 
 @dataclass(frozen=True)
