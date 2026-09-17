@@ -71,6 +71,17 @@ export const templatesApi = {
       csrf,
     )
   },
+  copy(
+    templateId: string,
+    body: ApiSchemas['PipelineTemplateCopy'],
+    csrf: string,
+  ): Promise<PipelineTemplate> {
+    return request<PipelineTemplate>(
+      `/templates/${templateId}/copy`,
+      { method: 'POST', body: JSON.stringify(body) },
+      csrf,
+    )
+  },
   archive(
     templateId: string,
     expectedVersion: number,

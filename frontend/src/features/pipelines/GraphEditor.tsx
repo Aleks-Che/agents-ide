@@ -36,6 +36,7 @@ import {
 import { useCsrfToken } from '../../app/session'
 import { Modal } from '../../app/Modal'
 import { ModelSelectionEditor } from './ModelSelectionEditor'
+import { GitCommitMessageEditor } from './GitCommitMessageEditor'
 import { useEditorResources, type EditorResources } from './resources'
 import {
   connectionError,
@@ -126,14 +127,39 @@ export function GraphEditor({
     queryFn: graphsApi.capabilities,
   })
   const resources = useEditorResources()
+  const needsPublishedVersion = Boolean(
+    template.data &&
+    !initialVersion &&
+    !Object.keys(template.data.draft.graph ?? {}).length,
+  )
+  const versions = useQuery({
+    queryKey: ['template_versions', { templateId }],
+    queryFn: () => templatesApi.listVersions(templateId),
+    enabled: needsPublishedVersion,
+    refetchOnMount: 'always',
+  })
+  const latestVersion = needsPublishedVersion
+    ? versions.data?.reduce<PipelineVersion | undefined>(
+        (latest, version) =>
+          !latest || version.version_number > latest.version_number
+            ? version
+            : latest,
+        undefined,
+      )
+    : undefined
   const error =
-    template.error ?? schemas.error ?? capabilities.error ?? resources.error
+    template.error ??
+    schemas.error ??
+    capabilities.error ??
+    resources.error ??
+    versions.error
   if (
     !template.data ||
     !template.isFetchedAfterMount ||
     !schemas.data ||
     !capabilities.data ||
-    !resources.data
+    !resources.data ||
+    (needsPublishedVersion && (!versions.data || !versions.isFetchedAfterMount))
   )
     return (
       <Modal onClose={onClose} label="Конструктор графа">
@@ -154,7 +180,7 @@ export function GraphEditor({
   return (
     <GraphEditorForm
       template={template.data}
-      initialVersion={initialVersion}
+      initialVersion={initialVersion ?? latestVersion}
       schemas={schemas.data}
       capabilities={capabilities.data}
       resources={resources.data}
@@ -832,6 +858,12 @@ function GraphEditorForm({
                         label="Конфигурация"
                         references={refs}
                         exclude={[
+                          'generate_message',
+                          'message_generation',
+                          ...(selectedNode.type === 'GitCommit' &&
+                          selectedNode.config?.generate_message === true
+                            ? ['message']
+                            : []),
                           'model_selection',
                           'expected_kind',
                           'connection_id',
@@ -844,6 +876,16 @@ function GraphEditorForm({
                         }
                       />
                     )}
+                    {selectedNode.type === 'GitCommit' ? (
+                      <GitCommitMessageEditor
+                        key={selectedNode.id}
+                        config={selectedNode.config ?? {}}
+                        connections={resources.connections}
+                        onChange={(config) =>
+                          updateNode({ ...selectedNode, config })
+                        }
+                      />
+                    ) : null}
                     {['AgentTask', 'LLMRequest'].includes(
                       selectedNode.type,
                     ) && (

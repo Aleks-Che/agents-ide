@@ -10,6 +10,24 @@ export interface HarnessQuery {
 }
 
 export const harnessApi = {
+  discover(csrf: string): Promise<HarnessProfile[]> {
+    return request<HarnessProfile[]>(
+      '/harnesses/discover',
+      { method: 'POST' },
+      csrf,
+    )
+  },
+  refreshCatalog(
+    id: string,
+    csrf: string,
+    force = false,
+  ): Promise<HarnessProfileCatalog> {
+    return request<HarnessProfileCatalog>(
+      `/harness_profiles/${id}/models/refresh${force ? '?force=true' : ''}`,
+      { method: 'POST' },
+      csrf,
+    )
+  },
   list(query: HarnessQuery = {}): Promise<HarnessProfile[]> {
     const params = new URLSearchParams()
     if (query.includeArchived) params.set('include_archived', 'true')

@@ -111,6 +111,86 @@
         "title": "ActualSelection",
         "type": "object"
       },
+      "ApplicationLogEntry": {
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          },
+          "level": {
+            "title": "Level",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "level",
+          "service",
+          "message"
+        ],
+        "title": "ApplicationLogEntry",
+        "type": "object"
+      },
+      "ApplicationLogs": {
+        "properties": {
+          "current_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Started At"
+          },
+          "directory": {
+            "title": "Directory",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ApplicationLogEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "scope": {
+            "default": "all",
+            "enum": [
+              "current",
+              "all"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "directory",
+          "entries",
+          "truncated"
+        ],
+        "title": "ApplicationLogs",
+        "type": "object"
+      },
       "ArtifactContent": {
         "properties": {
           "artifact": {
@@ -483,6 +563,46 @@
           "status"
         ],
         "title": "CommandAccepted",
+        "type": "object"
+      },
+      "CommitMessageSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "default": "",
+            "maxLength": 64,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "language": {
+            "default": "ru",
+            "enum": [
+              "ru",
+              "en"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "model": {
+            "default": "",
+            "maxLength": 256,
+            "title": "Model",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "prompt": {
+            "default": "Write a Git commit message based only on the staged diff provided. Describe the actual changes and their purpose when evident. Do not invent tests, issue numbers, motivation, or changes absent from the diff. Use a single-line summary, preferably at most 72 characters, without a trailing period. Include a useful description explaining the main changes. Use type(scope): summary; omit scope if unclear. Choose an appropriate type from feat, fix, docs, refactor, perf, test, build, ci, chore, revert. Keep type/scope in English. Mark breaking changes only when proven by the diff. Use concise bullet points in the description.",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "title": "CommitMessageSettings",
         "type": "object"
       },
       "DirectAgentSelection": {
@@ -974,6 +1094,22 @@
           }
         },
         "title": "FakeScenarioSpec",
+        "type": "object"
+      },
+      "GeneralSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "commit_message": {
+            "$ref": "#/components/schemas/CommitMessageSettings"
+          },
+          "revision": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "title": "GeneralSettings",
         "type": "object"
       },
       "GraphImportRequest": {
@@ -1828,6 +1964,16 @@
             "additionalProperties": true,
             "title": "Params",
             "type": "object"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1880,6 +2026,21 @@
             "minimum": 1.0,
             "title": "Expected Revision",
             "type": "integer"
+          },
+          "members": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ModelGroupAgentMemberCreate"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Members"
           },
           "name": {
             "anyOf": [
@@ -2096,6 +2257,16 @@
           "provider_connection_id": {
             "title": "Provider Connection Id",
             "type": "string"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -2148,6 +2319,21 @@
             "minimum": 1.0,
             "title": "Expected Revision",
             "type": "integer"
+          },
+          "members": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ModelGroupLLMMemberCreate"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Members"
           },
           "name": {
             "anyOf": [
@@ -2219,6 +2405,16 @@
             "title": "Revision",
             "type": "integer"
           },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -2237,6 +2433,45 @@
           "updated_at"
         ],
         "title": "ModelGroupMember",
+        "type": "object"
+      },
+      "ModelSchedule": {
+        "additionalProperties": false,
+        "properties": {
+          "days": {
+            "items": {
+              "items": {
+                "type": "boolean"
+              },
+              "type": "array"
+            },
+            "maxItems": 7,
+            "minItems": 1,
+            "title": "Days",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "same_every_day": {
+            "default": false,
+            "title": "Same Every Day",
+            "type": "boolean"
+          },
+          "timezone": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone",
+          "days"
+        ],
+        "title": "ModelSchedule",
         "type": "object"
       },
       "NodeSelection": {
@@ -3102,6 +3337,28 @@
         "title": "PipelineTemplate",
         "type": "object"
       },
+      "PipelineTemplateCopy": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "expected_version"
+        ],
+        "title": "PipelineTemplateCopy",
+        "type": "object"
+      },
       "PipelineTemplateCreate": {
         "additionalProperties": false,
         "properties": {
@@ -3485,6 +3742,27 @@
           "confirmed_at"
         ],
         "title": "PlanningConfirmed",
+        "type": "object"
+      },
+      "PlanningCouncilDefaults": {
+        "additionalProperties": false,
+        "properties": {
+          "participants": {
+            "items": {
+              "$ref": "#/components/schemas/PlanningMemberSpec"
+            },
+            "maxItems": 4,
+            "title": "Participants",
+            "type": "array"
+          },
+          "revision": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "title": "PlanningCouncilDefaults",
         "type": "object"
       },
       "PlanningDraftView": {
@@ -4582,6 +4860,16 @@
             "minLength": 1,
             "title": "Resource Ref",
             "type": "string"
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -5082,6 +5370,17 @@
             "format": "date-time",
             "title": "Tested At",
             "type": "string"
+          },
+          "tested_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tested Model"
           }
         },
         "required": [
@@ -7799,6 +8098,58 @@
         ]
       }
     },
+    "/api/harness_profiles/{harness_id}/models/refresh": {
+      "post": {
+        "operationId": "refresh_harness_models_endpoint_api_harness_profiles__harness_id__models_refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "harness_id",
+            "required": true,
+            "schema": {
+              "title": "Harness Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HarnessProfileCatalog"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Harness Models Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
     "/api/harness_profiles/{harness_id}/test": {
       "post": {
         "operationId": "harness_test_endpoint_api_harness_profiles__harness_id__test_post",
@@ -7836,6 +8187,31 @@
           }
         },
         "summary": "Harness Test Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/harnesses/discover": {
+      "post": {
+        "operationId": "discover_harnesses_endpoint_api_harnesses_discover_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HarnessProfile"
+                  },
+                  "title": "Response Discover Harnesses Endpoint Api Harnesses Discover Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Discover Harnesses Endpoint",
         "tags": [
           "domain"
         ]
@@ -10593,6 +10969,126 @@
         ]
       }
     },
+    "/api/settings/general": {
+      "get": {
+        "operationId": "general_settings_endpoint_api_settings_general_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeneralSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "General Settings Endpoint",
+        "tags": [
+          "domain"
+        ]
+      },
+      "put": {
+        "operationId": "save_general_settings_endpoint_api_settings_general_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeneralSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeneralSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save General Settings Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/settings/planning-council": {
+      "get": {
+        "operationId": "get_council_defaults_endpoint_api_settings_planning_council_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningCouncilDefaults"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Council Defaults Endpoint",
+        "tags": [
+          "domain"
+        ]
+      },
+      "put": {
+        "operationId": "save_council_defaults_endpoint_api_settings_planning_council_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanningCouncilDefaults"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanningCouncilDefaults"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Council Defaults Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
     "/api/system/events": {
       "get": {
         "operationId": "events_api_system_events_get",
@@ -10607,6 +11103,97 @@
           }
         },
         "summary": "Events"
+      }
+    },
+    "/api/system/logs": {
+      "get": {
+        "operationId": "application_logs_api_system_logs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "all",
+                "launcher",
+                "api",
+                "worker",
+                "start",
+                "stop",
+                "migrate",
+                "auth"
+              ],
+              "title": "Role",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "level",
+            "required": false,
+            "schema": {
+              "default": "WARNING",
+              "enum": [
+                "INFO",
+                "WARNING",
+                "ERROR"
+              ],
+              "title": "Level",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "current",
+                "all"
+              ],
+              "title": "Scope",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplicationLogs"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Application Logs"
       }
     },
     "/api/system/status": {
@@ -10854,6 +11441,58 @@
           }
         },
         "summary": "Archive Template Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/templates/{template_id}/copy": {
+      "post": {
+        "operationId": "copy_template_endpoint_api_templates__template_id__copy_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineTemplateCopy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineTemplate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Copy Template Endpoint",
         "tags": [
           "domain"
         ]

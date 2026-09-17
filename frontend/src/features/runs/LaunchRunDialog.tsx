@@ -362,8 +362,7 @@ export function LaunchRunDialog({
             !bindingsError &&
             !bindings.some((binding) => !binding.archived) ? (
               <p className="hint">
-                Нет доступных привязок. Создайте привязку из версии в
-                Библиотеке.
+                Нет доступных привязок. Создайте привязку из версии в Шаблонах.
               </p>
             ) : null}
             {bindingId && !selectedBinding ? (

@@ -127,6 +127,8 @@ def update_group(
         model.name = payload.name
     if payload.description is not None:
         model.description = payload.description
+    if payload.members is not None:
+        _replace_members(session, model, list(payload.members))
     _changed(model)
     session.flush()
     return _output(model)
@@ -156,6 +158,7 @@ def _member_input(member: MemberRow, *, keep_id: bool = True) -> MemberInput:
         enabled=member.enabled,
         model_id=member.model_id,
         params=_params(member.params_json),
+        schedule=json.loads(member.schedule_json) if member.schedule_json else None,
     )
     if member.harness_profile_id is not None:
         return ModelGroupAgentMemberCreate(harness_profile_id=member.harness_profile_id, **fields)
@@ -276,7 +279,14 @@ def _replace_members(session: Session, group: GroupRow, payloads: list[MemberInp
     # Vacate all positions before applying a permutation; SQLite checks UNIQUE row by row.
     old_indexes = {m.id: m.member_index for m in existing.values()}
     old_values = {
-        m.id: (m.enabled, m.harness_profile_id, m.provider_connection_id, m.model_id, m.params_json)
+        m.id: (
+            m.enabled,
+            m.harness_profile_id,
+            m.provider_connection_id,
+            m.model_id,
+            m.params_json,
+            m.schedule_json,
+        )
         for m in existing.values()
     }
     offset = max(old_indexes.values(), default=0) + len(payloads) + 1
@@ -294,7 +304,14 @@ def _replace_members(session: Session, group: GroupRow, payloads: list[MemberInp
             if isinstance(payload, ModelGroupLLMMemberCreate)
             else None
         )
-        values = (payload.enabled, profile, connection, payload.model_id, to_json(payload.params))
+        values = (
+            payload.enabled,
+            profile,
+            connection,
+            payload.model_id,
+            to_json(payload.params),
+            to_json(payload.schedule.model_dump()) if payload.schedule is not None else None,
+        )
         previous = old_values.get(member.id)
         if member.id in existing and (old_indexes[member.id] != index or values != previous):
             member.revision += 1
@@ -306,6 +323,7 @@ def _replace_members(session: Session, group: GroupRow, payloads: list[MemberInp
             member.provider_connection_id,
             member.model_id,
             member.params_json,
+            member.schedule_json,
         ) = values
         session.add(member)
     session.flush()
@@ -324,6 +342,7 @@ def export_group(session: Session, group_id: str) -> ModelGroupExport:
                 model_id=m.model_id,
                 enabled=m.enabled,
                 params=_params(m.params_json),
+                schedule=json.loads(m.schedule_json) if m.schedule_json else None,
             )
             for m in sorted(model.members, key=lambda m: m.member_index)
         ],
@@ -348,6 +367,7 @@ def import_group(session: Session, payload: ModelGroupImport) -> ModelGroup:
                 "model_id": m.model_id,
                 "enabled": m.enabled,
                 "params": m.params,
+                "schedule": m.schedule.model_dump() if m.schedule is not None else None,
             }
             for m in definition.members
         ],
@@ -378,6 +398,7 @@ def _output(model: GroupRow) -> ModelGroup:
                 provider_connection_id=m.provider_connection_id,
                 model_id=m.model_id,
                 params=_params(m.params_json),
+                schedule=json.loads(m.schedule_json) if m.schedule_json else None,
                 revision=m.revision,
                 updated_at=datetime.fromtimestamp(m.updated_at, UTC),
             )

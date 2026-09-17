@@ -217,20 +217,37 @@ def model_catalog(session: Session, connection_id: str) -> dict[str, Any]:
 def build_test_result(
     session: Session,
     connection_id: str,
-    models: list[str],
+    models: list[str] | None,
     detail: str | None = None,
+    *,
+    tested_model: str | None = None,
 ) -> ProviderTest:
     record_test_result(session, connection_id, "ok", models, detail)
-    return ProviderTest(status="ok", models=models, detail=detail, tested_at=datetime.now(tz=UTC))
+    return ProviderTest(
+        status="ok",
+        models=models or [],
+        tested_model=tested_model,
+        detail=detail,
+        tested_at=datetime.now(tz=UTC),
+    )
 
 
 def failed_test(
     session: Session,
     connection_id: str,
     detail: str,
+    *,
+    tested_model: str | None = None,
+    models: list[str] | None = None,
 ) -> ProviderTest:
     record_test_result(session, connection_id, "failed", None, detail)
-    return ProviderTest(status="failed", models=[], detail=detail, tested_at=datetime.now(tz=UTC))
+    return ProviderTest(
+        status="failed",
+        models=models or [],
+        tested_model=tested_model,
+        detail=detail,
+        tested_at=datetime.now(tz=UTC),
+    )
 
 
 def test_connection(
@@ -261,10 +278,18 @@ def test_connection(
     if model.version != expected_version or model.archived_at is not None:
         raise AppError("version_conflict", "Подключение изменилось во время проверки", 409)
     if probe.ok:
-        catalog = [*probe.models] or [str(item) for item in manual]
+        catalog = list(probe.models) if probe.catalog_available else None
         detail = f"{probe.detail} ({probe.elapsed_seconds:.2f}s)"
-        return build_test_result(session, connection_id, catalog, detail)
-    return failed_test(session, connection_id, probe.detail)
+        return build_test_result(
+            session, connection_id, catalog, detail, tested_model=probe.tested_model
+        )
+    return failed_test(
+        session,
+        connection_id,
+        probe.detail,
+        tested_model=probe.tested_model,
+        models=list(probe.models),
+    )
 
 
 def connection_payload_for_export(

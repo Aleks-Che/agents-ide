@@ -386,9 +386,13 @@ footer span {
   gap: 5px;
   cursor: pointer;
 }
-.panel-item:hover {
+.panel-item:hover:not(:disabled) {
   background: #1c262a;
   border-color: #2c383c;
+  color: #e8edeb;
+}
+.panel-item.selected:hover:not(:disabled) {
+  background: #293b34;
 }
 .panel-item.selected {
   background: #26312f;
@@ -586,6 +590,62 @@ footer span {
 .quiet.danger:hover:not(:disabled) {
   background: #382525;
 }
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 220px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid #405054;
+  border-radius: 9px;
+  background: #192225;
+  box-shadow: 0 12px 32px #00000060;
+}
+.context-menu .quiet {
+  margin-left: 0;
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 13px;
+}
+.context-menu .quiet:focus-visible {
+  outline-offset: -2px;
+}
+.general-settings-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.commit-message-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.commit-message-fields > label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.commit-message-fields input,
+.commit-message-fields select,
+.commit-message-fields textarea {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  color: #e8edeb;
+  background: #10191c;
+  border: 1px solid #405054;
+  padding: 10px;
+  border-radius: 6px;
+}
+.commit-message-fields textarea {
+  resize: vertical;
+}
 .messages {
   list-style: none;
   margin: 0;
@@ -693,18 +753,57 @@ footer span {
   opacity: 0.5;
   cursor: default;
 }
-.settings-grid {
+.settings-layout {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
-  gap: 18px;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
 }
-.settings-grid .panel,
+.settings-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: sticky;
+  top: 24px;
+}
+.settings-menu button.quiet {
+  margin-left: 0;
+  text-align: left;
+  font-size: 13px;
+  color: #c2ceca;
+  border: 1px solid transparent;
+  padding: 12px 14px;
+}
+.settings-menu button.quiet:hover {
+  background: #26312f;
+  color: #f0f5f2;
+}
+.settings-menu button[aria-pressed='true'] {
+  background: #263b32;
+  border-color: #486554;
+  color: #d8f0e1;
+}
+.settings-content {
+  min-width: 0;
+}
+.settings-content .panel,
 .library-grid .panel {
   min-width: 0;
   border: 1px solid #2c383c;
   border-radius: 12px;
   padding: 18px;
   background: #161e21;
+}
+@media (max-width: 1000px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .settings-menu {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
 }
 .library-grid {
   display: grid;
@@ -1082,6 +1181,20 @@ footer span {
   line-height: 1.6;
   color: #9faeb3;
 }
+.profile-item.harness-item {
+  padding: 0;
+}
+.harness-item .harness-installation {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 16px;
+  text-align: left;
+  min-width: 0;
+  font-weight: normal;
+}
 .profile-item > header {
   display: flex;
   align-items: center;
@@ -1187,6 +1300,13 @@ footer span {
   gap: 8px;
   align-items: center;
 }
+.harness-model-select {
+  min-width: 0;
+}
+.harness-model-select select {
+  width: 100%;
+  min-width: 0;
+}
 .member-edit-list input,
 .member-edit-list select {
   background: #10191c;
@@ -1213,6 +1333,115 @@ footer span {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.model-schedule {
+  margin-top: 10px;
+  border-top: 1px solid #2a363a;
+  padding-top: 10px;
+  min-width: 0;
+}
+.council-default-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.council-default-fields > label select {
+  margin-left: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.model-schedule .enabled-toggle {
+  font-size: 12px;
+}
+.model-schedule input[type='checkbox'] {
+  width: auto;
+  accent-color: #63c49b;
+}
+.schedule-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.schedule-editor .hint {
+  margin: 0;
+}
+.schedule-timezone,
+.schedule-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+.schedule-timezone select {
+  min-width: 0;
+  max-width: 100%;
+}
+.schedule-tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 0;
+}
+.schedule-tools button[aria-pressed='true'] {
+  outline: 1px solid #9dd9c0;
+}
+.schedule-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: #303c40;
+  border: 1px solid #56666a;
+}
+.schedule-swatch.allowed,
+button.schedule-hour.allowed {
+  background: #357859;
+  border-color: #69b98c;
+  color: #effff6;
+}
+.schedule-scroll {
+  overflow-x: auto;
+}
+.schedule-grid {
+  width: 100%;
+  min-width: 590px;
+  table-layout: fixed;
+  border-spacing: 2px 4px;
+  user-select: none;
+}
+.schedule-grid th {
+  font-size: 10px;
+  font-weight: 500;
+  color: #b1ccc1;
+  text-align: center;
+}
+.schedule-grid th:first-child {
+  width: 52px;
+  text-align: left;
+}
+.schedule-grid td {
+  padding: 0;
+}
+button.schedule-hour {
+  display: block;
+  width: 100%;
+  height: 28px;
+  padding: 0;
+  border-radius: 3px;
+  background: #253034;
+  border: 1px solid #465458;
+  color: #a3b1b5;
+  font-size: 11px;
+}
+button.schedule-hour:hover,
+button.schedule-hour:focus-visible {
+  outline: 2px solid #e5f6ed;
+  outline-offset: 1px;
 }
 .param-row {
   display: grid;
@@ -1242,6 +1471,7 @@ footer span {
 .member-actions {
   display: flex;
   gap: 4px;
+  grid-column: 2 / -1;
 }
 .enabled-toggle {
   display: flex;
@@ -1252,6 +1482,16 @@ footer span {
 }
 .dialog.wide {
   width: min(680px, 95vw);
+}
+.group-settings-dialog > header {
+  position: sticky;
+  top: -24px;
+  z-index: 3;
+  margin: -24px -24px 0;
+  padding: 18px 24px;
+  background: #192225;
+  border-bottom: 1px solid #354342;
+  flex-shrink: 0;
 }
 @media (max-width: 1100px) {
   .subpanel {
@@ -1304,6 +1544,7 @@ footer span {
     grid-column: 2;
   }
   .member-row > input,
+  .member-row > .harness-model-select,
   .member-row > .enabled-toggle,
   .member-row > .member-actions {
     grid-column: 1 / -1;
@@ -1715,4 +1956,42 @@ button.primary {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.application-logs {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.log-filters label {
+  display: grid;
+  gap: 6px;
+}
+.log-directory {
+  overflow-wrap: anywhere;
+}
+.log-entries {
+  list-style: none;
+  padding: 0;
+  max-height: 400px;
+  overflow: auto;
+}
+.log-entries li {
+  padding: 12px;
+  border-bottom: 1px solid #344147;
+  overflow-wrap: anywhere;
+}
+.log-entries .log-error {
+  border-left: 3px solid #ef9690;
+}
+.log-entries pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.log-meta {
+  color: #9faeaa;
+  font-size: 12px;
 }

@@ -7,10 +7,11 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -26,6 +27,14 @@ from agents_ide.persistence.database import check_database, create_database, mig
 from agents_ide.security.auth import COOKIE_NAME, AuthService, Session
 from agents_ide.security.filesystem import prepare_data_dir
 from agents_ide.security.secrets import SecretStore
+from agents_ide.services.application_logs import (
+    ApplicationLogs,
+    LogLevel,
+    LogRole,
+    LogScope,
+    current_launch_started_at,
+    read_application_logs,
+)
 from agents_ide.worker.main import worker_status
 
 
@@ -51,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        app.state.started_at = datetime.now(UTC)
         prepare_data_dir(settings.data_dir)
         await asyncio.to_thread(migrate, settings)
         engine = create_database(settings)
@@ -240,6 +250,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/system/status", dependencies=[Depends(current_session)])
     def status() -> dict[str, Any]:
         return readiness_data()
+
+    @app.get("/api/system/logs", dependencies=[Depends(current_session)])
+    def application_logs(
+        role: LogRole = "all",
+        level: LogLevel = "WARNING",
+        limit: Annotated[int, Query(ge=1, le=500)] = 100,
+        scope: LogScope = "all",
+    ) -> ApplicationLogs:
+        return read_application_logs(
+            settings.data_dir / "logs",
+            role=role,
+            level=level,
+            limit=limit,
+            scope=scope,
+            current_started_at=current_launch_started_at(settings.data_dir, app.state.started_at),
+        )
 
     @app.get("/api/system/events")
     async def events(

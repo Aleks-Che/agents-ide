@@ -10,7 +10,10 @@ import { chatsApi, projectsApi, type Project } from '../api/projects'
 import { ProjectsPanel } from '../features/projects/ProjectsPanel'
 import { ChatsPanel } from '../features/chats/ChatsPanel'
 import { ChatView } from '../features/chats/ChatView'
-import { SettingsView } from '../features/settings/SettingsView'
+import {
+  SettingsView,
+  type SettingsSection,
+} from '../features/settings/SettingsView'
 import { LibraryView } from '../features/bindings/LibraryView'
 import { RunsView } from '../features/runs/RunsView'
 
@@ -137,7 +140,8 @@ export function App() {
               {connectionError ? (
                 <p className="error" role="alert">
                   API недоступен. Запустите локальные службы и повторите
-                  попытку.
+                  попытку. Журнал ошибок:{' '}
+                  <code>./scripts/agents-ide.ps1 logs</code>
                 </p>
               ) : null}
             </section>
@@ -202,6 +206,8 @@ function SignedInShell({
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [view, setView] = useState<MainView>('chats')
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSection>('harnesses')
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const chats = useQuery({
     queryKey: [
@@ -230,6 +236,17 @@ function SignedInShell({
         <span className="section-label">РАБОЧАЯ ОБЛАСТЬ</span>
         <ProjectsPanel
           selectedId={selectedProject?.id ?? null}
+          onRenamed={(project) => {
+            setSelectedProject((selected) =>
+              selected?.id === project.id ? project : selected,
+            )
+          }}
+          onRemoved={(projectId) => {
+            if (selectedProject?.id !== projectId) return
+            setSelectedProject(null)
+            setSelectedChatId(null)
+            if (view === 'runs') setView('chats')
+          }}
           onSelect={(project) => {
             setSelectedProject(project)
             if (project.id !== selectedProject?.id) setSelectedChatId(null)
@@ -252,7 +269,7 @@ function SignedInShell({
             aria-pressed={view === 'library'}
             onClick={() => setView('library')}
           >
-            Библиотека
+            Шаблоны
           </button>
           <button
             type="button"
@@ -293,7 +310,7 @@ function SignedInShell({
             {view === 'settings'
               ? 'Настройки'
               : view === 'library'
-                ? 'Библиотека'
+                ? 'Шаблоны'
                 : view === 'runs'
                   ? selectedProject
                     ? `Запуски · ${selectedProject.name}`
@@ -316,15 +333,38 @@ function SignedInShell({
           {systemError ? (
             <p role="status" className="error">
               Связь со службами: {systemError}. Сохранённый экран остаётся
-              доступен.
+              доступен.{' '}
+              <button
+                type="button"
+                className="quiet"
+                onClick={() => {
+                  setSettingsSection('logs')
+                  setView('settings')
+                }}
+              >
+                Журнал приложения
+              </button>
             </p>
           ) : system && system.worker.status !== 'running' ? (
             <p role="status" className="hint">
-              Исполнитель недоступен. Задания ожидают запуска службы.
+              Исполнитель недоступен. Задания ожидают запуска службы.{' '}
+              <button
+                type="button"
+                className="quiet"
+                onClick={() => {
+                  setSettingsSection('logs')
+                  setView('settings')
+                }}
+              >
+                Журнал приложения
+              </button>
             </p>
           ) : null}
           {view === 'settings' ? (
-            <SettingsView />
+            <SettingsView
+              section={settingsSection}
+              onSectionChange={setSettingsSection}
+            />
           ) : view === 'library' ? (
             <LibraryView
               key={selectedProject?.id ?? 'library'}
@@ -449,7 +489,7 @@ function WelcomePane({ system, loading, error }: WelcomePaneProps) {
         </div>
         <p>
           В настройках доступны профили, подключения и группы моделей. В
-          библиотеке можно скопировать пресет и создать привязку проекта.
+          шаблонах можно скопировать пресет и создать привязку проекта.
         </p>
         <div className="future-items">
           <span>01 &nbsp; Настройки</span>

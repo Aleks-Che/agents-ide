@@ -37,6 +37,7 @@ from agents_ide.domain.planning import (
     PlanningAnswersSubmit,
     PlanningCancelRequest,
     PlanningConfirmRequest,
+    PlanningCouncilDefaults,
     PlanningJobCreate,
     PlanningJobView,
     PlanningPromoteSingle,
@@ -55,6 +56,7 @@ from agents_ide.domain.schemas import (
     ChatUpdate,
     CommandAccepted,
     DraftPublish,
+    GeneralSettings,
     HarnessProbe,
     HarnessProfile,
     HarnessProfileCatalog,
@@ -79,6 +81,7 @@ from agents_ide.domain.schemas import (
     PipelineBindingUpdate,
     PipelineDraftUpdate,
     PipelineTemplate,
+    PipelineTemplateCopy,
     PipelineTemplateCreate,
     PipelineTemplateUpdate,
     PipelineVersion,
@@ -116,6 +119,8 @@ from agents_ide.security.secrets import SecretStore
 from agents_ide.services import (
     chats,
     connections,
+    council_defaults,
+    general_settings,
     groups,
     harness,
     planning,
@@ -131,6 +136,18 @@ router = APIRouter(prefix="/api", tags=["domain"])
 SessionDep = Annotated[Session, Depends(get_session, scope="function")]
 SecretDep = Annotated[SecretStore, Depends(get_secret_store)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+@router.get("/settings/general", response_model=GeneralSettings)
+def general_settings_endpoint(session: SessionDep) -> GeneralSettings:
+    return general_settings.get_settings(session)
+
+
+@router.put("/settings/general", response_model=GeneralSettings)
+def save_general_settings_endpoint(
+    session: SessionDep, payload: GeneralSettings
+) -> GeneralSettings:
+    return general_settings.save_settings(session, payload)
 
 
 @router.get("/presets")
@@ -331,6 +348,13 @@ def get_template_endpoint(session: SessionDep, template_id: str) -> PipelineTemp
     return templates.get_template(session, template_id)
 
 
+@router.post("/templates/{template_id}/copy", response_model=PipelineTemplate, status_code=201)
+def copy_template_endpoint(
+    session: SessionDep, template_id: str, payload: PipelineTemplateCopy
+) -> PipelineTemplate:
+    return templates.copy_template(session, template_id, payload)
+
+
 @router.patch("/templates/{template_id}", response_model=PipelineTemplate)
 def update_template_endpoint(
     session: SessionDep, template_id: str, payload: PipelineTemplateUpdate
@@ -507,6 +531,18 @@ def model_catalog_endpoint(session: SessionDep, connection_id: str) -> dict[str,
 
 
 # ----------------------------------------------------------------------------- Harness profiles
+
+
+@router.post("/harnesses/discover", response_model=list[HarnessProfile])
+def discover_harnesses_endpoint(session: SessionDep) -> list[HarnessProfile]:
+    return harness.discover_harnesses(session)
+
+
+@router.post("/harness_profiles/{harness_id}/models/refresh", response_model=HarnessProfileCatalog)
+def refresh_harness_models_endpoint(
+    session: SessionDep, harness_id: str, force: bool = Query(default=False)
+) -> HarnessProfileCatalog:
+    return harness.refresh_model_catalog(session, harness_id, force)
 
 
 @router.get("/harness_profiles", response_model=list[HarnessProfile])
@@ -1151,6 +1187,18 @@ def event_schemas() -> dict[str, Any]:
 
 
 # ----------------------------------------------------------------------------- Planning (Council)
+
+
+@router.get("/settings/planning-council", response_model=PlanningCouncilDefaults)
+def get_council_defaults_endpoint(session: SessionDep) -> PlanningCouncilDefaults:
+    return council_defaults.get_defaults(session)
+
+
+@router.put("/settings/planning-council", response_model=PlanningCouncilDefaults)
+def save_council_defaults_endpoint(
+    session: SessionDep, payload: PlanningCouncilDefaults
+) -> PlanningCouncilDefaults:
+    return council_defaults.save_defaults(session, payload)
 
 
 @router.get("/planning_jobs", response_model=list[PlanningJobView])

@@ -22,6 +22,22 @@ class Base(DeclarativeBase):
     pass
 
 
+class GeneralSettings(Base):
+    __tablename__ = "general_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    settings_json: Mapped[str] = mapped_column(Text, default="{}")
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PlanningCouncilDefaults(Base):
+    __tablename__ = "planning_council_defaults"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    participants_json: Mapped[str] = mapped_column(Text, default="[]")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
 def _utcnow() -> float:
     return _dt.datetime.now(_dt.UTC).timestamp()
 
@@ -511,6 +527,7 @@ class ModelGroupMember(Base):
     )
     model_id: Mapped[str] = mapped_column(String(256))
     params_json: Mapped[str] = mapped_column(Text, default="{}")
+    schedule_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     revision: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[float] = mapped_column(Float, default=_utcnow)
     updated_at: Mapped[float] = mapped_column(Float, default=_utcnow)

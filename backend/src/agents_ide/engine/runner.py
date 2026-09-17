@@ -1360,8 +1360,12 @@ class Runner:
         }
 
     def _availability(self, candidate: dict[str, Any]) -> str | None:
+        from agents_ide.domain.model_schedule import schedule_unavailability
+
         if not candidate.get("enabled", True):
             return "disabled"
+        if reason := schedule_unavailability(candidate.get("schedule")):
+            return reason
         if candidate.get("unavailable_reason"):
             return str(candidate["unavailable_reason"])
         agent = bool(candidate.get("harness_profile_id"))
@@ -1609,6 +1613,8 @@ class Runner:
                 return result
             if metadata.get("kind") == "git_commit" and result.error:
                 code = result.error.code
+                if code == "limit_exceeded":
+                    return self._waiting("limit_exceeded", {"limit": "max_calls"}, visit)
                 if code in {"external_change_detected", "git_index_dirty", "path_violation"}:
                     return self._waiting(
                         "external_change_detected", {"reason": code, **result.error.details}, visit
@@ -2172,6 +2178,9 @@ class Runner:
                     with self._write() as (session, run):
                         self.runtime["candidate_history"].append(diagnostics[-1])
                         self.runtime["next_candidate_index"] = candidate["member_index"] + 1
+                        self._event(
+                            session, "model_group.candidate_skipped", diagnostics[-1], visit
+                        )
                         self._persist(run)
                     break
                 try:
@@ -2883,7 +2892,12 @@ class Runner:
                     result.cost_estimated,
                     result.budget_quality or "unknown",
                 )
-                if self.nodes[visit.node_id]["type"] in {"LLMRequest", "AgentTask"}:
+                if self.nodes[visit.node_id]["type"] in {"LLMRequest", "AgentTask"} or (
+                    self.nodes[visit.node_id]["type"] == "GitCommit"
+                    and self.snapshot["dependencies"]["nodes"][visit.node_id].get(
+                        "generate_message"
+                    )
+                ):
                     self.runtime["tokens_used"] += result.tokens_used or 0
                     self.runtime["cost_estimated"] += result.cost_estimated or 0
                     self.runtime["budget_quality"] = (

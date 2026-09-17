@@ -248,6 +248,10 @@ def _prepare(
                 elif resource.version != current["connection"]["version"]:
                     reason = "resource_changed"
                 resource_id = current["provider_connection_id"]
+            if reason is None:
+                from agents_ide.domain.model_schedule import schedule_unavailability
+
+                reason = schedule_unavailability(current.get("schedule"))
             if reason:
                 service._record_event(
                     session,

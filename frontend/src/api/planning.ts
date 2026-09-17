@@ -23,6 +23,7 @@ export type PlanningConfirmationHash = {
 }
 export type PlanningModelSelection = PlanningMemberSpec['selection']
 export type PlanningSource = ApiSchemas['PlanningSource']
+export type PlanningCouncilDefaults = ApiSchemas['PlanningCouncilDefaults']
 
 export interface PlanningQuery {
   projectId?: string
@@ -31,6 +32,19 @@ export interface PlanningQuery {
 }
 
 export const planningApi = {
+  defaults(): Promise<PlanningCouncilDefaults> {
+    return request<PlanningCouncilDefaults>('/settings/planning-council')
+  },
+  saveDefaults(
+    body: PlanningCouncilDefaults,
+    csrf: string,
+  ): Promise<PlanningCouncilDefaults> {
+    return request<PlanningCouncilDefaults>(
+      '/settings/planning-council',
+      { method: 'PUT', body: JSON.stringify(body) },
+      csrf,
+    )
+  },
   list(query: PlanningQuery = {}): Promise<PlanningJobView[]> {
     const params = new URLSearchParams()
     if (query.projectId) params.set('project_id', query.projectId)

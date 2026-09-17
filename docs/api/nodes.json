@@ -1118,6 +1118,9 @@
                         }
                       ]
                     },
+                    "generate_message": {
+                      "type": "boolean"
+                    },
                     "hook_policy": {
                       "enum": [
                         "allow_pre_configured",
@@ -1127,6 +1130,34 @@
                     "message": {
                       "maxLength": 512,
                       "type": "string"
+                    },
+                    "message_generation": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "connection_id": {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        "language": {
+                          "enum": [
+                            "ru",
+                            "en"
+                          ]
+                        },
+                        "model": {
+                          "maxLength": 256,
+                          "type": "string"
+                        },
+                        "params": {
+                          "type": "object"
+                        },
+                        "prompt": {
+                          "maxLength": 8000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
                     },
                     "no_changes_is_progress": {
                       "type": "boolean"
@@ -2017,6 +2048,9 @@
                 }
               ]
             },
+            "generate_message": {
+              "type": "boolean"
+            },
             "hook_policy": {
               "enum": [
                 "allow_pre_configured",
@@ -2026,6 +2060,34 @@
             "message": {
               "maxLength": 512,
               "type": "string"
+            },
+            "message_generation": {
+              "additionalProperties": false,
+              "properties": {
+                "connection_id": {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                "language": {
+                  "enum": [
+                    "ru",
+                    "en"
+                  ]
+                },
+                "model": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "params": {
+                  "type": "object"
+                },
+                "prompt": {
+                  "maxLength": 8000,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "type": "object"
             },
             "no_changes_is_progress": {
               "type": "boolean"

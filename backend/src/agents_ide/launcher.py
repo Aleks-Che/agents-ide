@@ -114,8 +114,12 @@ def start(settings: Settings) -> dict[str, Any]:
             process = resolve_process(current.get("launcher", {}))
             if process:
                 wait_stopped([process], 15)
+        logging.error("launcher.startup_timeout", extra={"status": current.get("status")})
         raise AppError(
-            "startup_failed", "Launcher не запустился; проверьте logs/launcher.jsonl", 503
+            "startup_failed",
+            f"Службы не запустились. Журнал: {settings.data_dir / 'logs'}. "
+            "Просмотр: agents-ide logs",
+            503,
         )
 
 
@@ -175,6 +179,14 @@ def run_launcher(settings: Settings) -> None:
                         # old role's Job before restarting it; other roles stay alive.
                         groups[role].close()
                         retries[role] += 1
+                        logging.warning(
+                            "launcher.child_exited",
+                            extra={
+                                "service": role,
+                                "pid": children[role].pid,
+                                "retries": retries[role],
+                            },
+                        )
                         if retries[role] > 3:
                             raise AppError(
                                 "startup_failed", f"{role}: исчерпан лимит перезапусков", 503
@@ -204,9 +216,10 @@ def run_launcher(settings: Settings) -> None:
                 state["status"] = "running" if ready else "starting"
                 atomic_write(registry, json.dumps(state).encode())
                 time.sleep(0.25)
-        except Exception:
+        except Exception as error:
             failed = True
-            logging.error("launcher.failed")
+            state["error_code"] = error.code if isinstance(error, AppError) else "internal_error"
+            logging.exception("launcher.failed")
         finally:
             atomic_write(settings.data_dir / "runtime/stop-request", launch_id.encode())
             wait_stopped(list(children.values()), 10)

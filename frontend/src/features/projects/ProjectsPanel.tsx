@@ -1,6 +1,11 @@
 import { Modal } from '../../app/Modal'
 import { EditorError } from '../settings/EditorError'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
+import {
+  contextMenuHandlers,
+  type ContextMenuTarget,
+} from '../../app/context_menu'
+import { ContextMenu } from '../../app/ContextMenu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
 import { describeError, projectsApi, type Project } from '../../api/projects'
@@ -12,18 +17,51 @@ import {
 import { basename, formatDateTime, shortHash } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
 
+interface ProjectMenuTarget extends ContextMenuTarget {
+  project: Project
+}
+
 interface ProjectsPanelProps {
   selectedId: string | null
   onSelect: (project: Project) => void
+  onRenamed: (project: Project) => void
+  onRemoved: (projectId: string) => void
 }
 
-export function ProjectsPanel({ selectedId, onSelect }: ProjectsPanelProps) {
+export function ProjectsPanel({
+  selectedId,
+  onSelect,
+  onRenamed,
+  onRemoved,
+}: ProjectsPanelProps) {
   const client = useQueryClient()
+  const csrf = useCsrfToken()
   const [createOpen, setCreateOpen] = useState(false)
   const [editing, setEditing] = useState<Project | null>(null)
+  const [menu, setMenu] = useState<ProjectMenuTarget | null>(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
   const projects = useQuery({
     queryKey: ['projects', { includeArchived: false }],
     queryFn: () => projectsApi.list({ includeArchived: false }),
+  })
+  const remove = useMutation({
+    mutationFn: (project: Project) =>
+      projectsApi.archive(
+        project.id,
+        { archive: true, expected_version: project.version },
+        csrf,
+      ),
+    onSuccess: (removed) => {
+      client.setQueryData<Project[]>(
+        ['projects', { includeArchived: false }],
+        (previous = []) => previous.filter((item) => item.id !== removed.id),
+      )
+      void client.invalidateQueries({ queryKey: ['projects'] })
+      onRemoved(removed.id)
+    },
+    onError: () => {
+      void client.invalidateQueries({ queryKey: ['projects'] })
+    },
   })
 
   return (
@@ -47,21 +85,45 @@ export function ProjectsPanel({ selectedId, onSelect }: ProjectsPanelProps) {
         error={projects.error ? describeError(projects.error) : null}
         selectedId={selectedId}
         onSelect={onSelect}
+        onContextMenu={(target) => {
+          if (!remove.isPending) remove.reset()
+          setMenu(target)
+        }}
         onRetry={() => void projects.refetch()}
       />
-      {selectedId ? (
-        <button
-          type="button"
-          className="quiet"
-          onClick={() =>
-            setEditing(
-              projects.data?.find((project) => project.id === selectedId) ??
-                null,
-            )
-          }
-        >
-          Переименовать проект
-        </button>
+      {menu ? (
+        <ContextMenu
+          target={menu}
+          label={`Действия с проектом «${menu.project.name}»`}
+          onClose={closeMenu}
+          items={[
+            {
+              label: 'Переименовать',
+              onSelect: () => setEditing(menu.project),
+            },
+            {
+              label: 'Удалить из списка',
+              onSelect: () => remove.mutate(menu.project),
+              disabled: remove.isPending || !csrf,
+              danger: true,
+              title: 'Файлы проекта на диске сохранятся',
+            },
+          ]}
+        />
+      ) : null}
+      {remove.isPending ? (
+        <p className="panel-empty" role="status">
+          Удаляем проект из списка…
+        </p>
+      ) : null}
+      {remove.error ? (
+        <p className="panel-empty error" role="alert">
+          Не удалось удалить «{remove.variables?.name}» из списка.{' '}
+          {remove.error instanceof ApiError &&
+          remove.error.body.code === 'project_has_active_runs'
+            ? 'Сначала завершите активные запуски проекта.'
+            : describeError(remove.error)}
+        </p>
       ) : null}
       {editing ? (
         <EditProjectDialog
@@ -77,7 +139,7 @@ export function ProjectsPanel({ selectedId, onSelect }: ProjectsPanelProps) {
                 ),
             )
             void client.invalidateQueries({ queryKey: ['projects'] })
-            onSelect(updated)
+            onRenamed(updated)
           }}
         />
       ) : null}
@@ -101,6 +163,7 @@ interface ProjectsListProps {
   error: string | null
   selectedId: string | null
   onSelect: (project: Project) => void
+  onContextMenu: (target: ProjectMenuTarget) => void
   onRetry: () => void
 }
 
@@ -110,6 +173,7 @@ function ProjectsList({
   error,
   selectedId,
   onSelect,
+  onContextMenu,
   onRetry,
 }: ProjectsListProps) {
   if (loading) {
@@ -148,6 +212,9 @@ function ProjectsList({
               aria-selected={selected}
               className={`panel-item${selected ? ' selected' : ''}`}
               onClick={() => onSelect(project)}
+              {...contextMenuHandlers((target) =>
+                onContextMenu({ ...target, project }),
+              )}
             >
               <strong>{project.name}</strong>
               <span className="muted" title={project.workspace.normalized_path}>

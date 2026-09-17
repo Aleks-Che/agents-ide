@@ -1,6 +1,8 @@
+import json
 import logging
 import os
 import subprocess
+import sys
 
 import pytest
 from pydantic import ValidationError
@@ -32,6 +34,23 @@ def test_redaction_at_log_boundary():
     )
     output = JsonFormatter().format(record)
     assert "abc" not in output and "def" not in output and "example-secret-value" not in output
+
+
+def test_exception_logs_keep_locations_without_exception_bodies_or_locals():
+    try:
+        try:
+            raise OSError(5, "sensitive body")
+        except OSError as error:
+            raise RuntimeError("unregistered private prompt") from error
+    except RuntimeError:
+        record = logging.LogRecord("test", 40, "", 0, "request.failed", (), sys.exc_info())
+    output = JsonFormatter().format(record)
+    details = json.loads(output)["exception"]
+    assert [item["type"] for item in details] == ["RuntimeError", "OSError"]
+    assert details[1]["errno"] == 5
+    assert details[0]["frames"][0]["file"] == "test_security.py"
+    assert details[0]["frames"][0]["line"] > 0
+    assert "sensitive body" not in output and "unregistered private prompt" not in output
 
 
 @pytest.mark.windows

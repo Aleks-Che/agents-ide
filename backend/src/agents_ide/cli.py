@@ -19,6 +19,7 @@ from agents_ide.logging import configure_logging
 from agents_ide.persistence.database import create_database, migrate
 from agents_ide.security.auth import AuthService
 from agents_ide.security.filesystem import prepare_data_dir
+from agents_ide.services.application_logs import LOG_ROLES, read_application_logs
 from agents_ide.worker.main import run_worker
 
 
@@ -61,6 +62,10 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("api", "worker", "migrate", "start", "status", "stop", "_launcher"):
         subparsers.add_parser(command)
+    logs = subparsers.add_parser("logs", help="Read application logs without a running server")
+    logs.add_argument("--role", choices=("all", *LOG_ROLES), default="all")
+    logs.add_argument("--level", choices=("INFO", "WARNING", "ERROR"), default="WARNING")
+    logs.add_argument("--limit", type=int, choices=range(1, 501), metavar="1..500", default=100)
     auth = subparsers.add_parser("auth")
     auth.add_argument("action", choices=["pair-code"])
     auth.add_argument("--rotate", action="store_true")
@@ -78,6 +83,20 @@ def main() -> None:
         if args.port is not None:
             overrides["port"] = args.port
         settings = Settings(**overrides)
+        if args.command == "logs":
+            report = read_application_logs(
+                settings.data_dir / "logs", role=args.role, level=args.level, limit=args.limit
+            )
+            print(f"Logs: {report.directory}")
+            for entry in reversed(report.entries):
+                print(f"{entry.at} {entry.level} [{entry.service}] {entry.message}")
+                if entry.details:
+                    print(json.dumps(entry.details, ensure_ascii=False, indent=2))
+            if not report.entries:
+                print("No matching log entries.")
+            if report.truncated:
+                print("Showing recent entries only; full logs are in the directory above.")
+            return
         prepare_data_dir(settings.data_dir)
         configure_logging(settings.data_dir / "logs", args.command.lstrip("_"), settings.log_level)
         match args.command:
@@ -121,17 +140,24 @@ def main() -> None:
 
                 execute_operation(settings, args)
     except AppError as error:
-        logging.error(error.code)
+        logging.exception(error.code)
         print(f"{error.code}: {error.message}", file=sys.stderr)
         raise SystemExit(1) from None
     except portalocker.LockException:
+        logging.exception("service_busy")
         print("service_busy: another instance holds the service lock", file=sys.stderr)
         raise SystemExit(1) from None
     except OSError:
+        logging.exception("storage_unavailable")
         print("storage_unavailable: проверьте диск, права доступа и diagnostics", file=sys.stderr)
         raise SystemExit(1) from None
     except (SQLAlchemyError, sqlite3.Error):
+        logging.exception("database_unavailable")
         print("database_unavailable: проверьте БД, диск и backup", file=sys.stderr)
+        raise SystemExit(1) from None
+    except Exception:
+        logging.exception("service.unexpected_error")
+        print("internal_error: служба остановлена. Подробности: agents-ide logs", file=sys.stderr)
         raise SystemExit(1) from None
 
 

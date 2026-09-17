@@ -8,6 +8,7 @@ under its lock only after verifying that nobody staged anything during the call.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import tempfile
@@ -462,6 +463,7 @@ def execute(
     *,
     recover_only: bool = False,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
+    generate_message: Callable[[dict[str, Any]], str] | None = None,
 ) -> CommitResult:
     if recover_only:
         if (
@@ -514,6 +516,14 @@ def execute(
         intent.manifest_hash = manifest_hash(manifest)
         intent.user_index_hash = initial_index
         intent.baseline_ref = baseline.refs.get("baseline", "")
+        if generate_message and tree != current_tree_sha(workspace, intent.parent_sha):
+            intent.message = safe_generated_message(
+                generate_message(staged_message_diff(workspace, index, intent.parent_sha))
+            )
+            if manifest_hash(file_manifest(workspace)) != intent.manifest_hash:
+                raise GitCommitError(
+                    "external_change_detected", "Files changed during message generation"
+                )
         intent.message_hash = content_hash(intent.formatted_message())
         if on_event:
             on_event("git.commit_intent_saved", asdict(intent))
@@ -598,6 +608,42 @@ def list_run_commits(workspace: Path, run_id: str, limit: int = 1000) -> list[di
     if len(result) > limit:
         raise GitCommitError("git_history_limit", "Run history exceeds the context limit")
     return result
+
+
+def staged_message_diff(workspace: Path, index: Path, parent: str) -> dict[str, Any]:
+    """Use the exact private staging index, omitting deleted file contents."""
+    env = {"GIT_INDEX_FILE": str(index)}
+    common = ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color"]
+    patch = run_git(workspace, [*common, "--diff-filter=d", parent, "--"], env=env)
+    deleted = run_git(
+        workspace, [*common, "--diff-filter=D", "--name-only", "-z", parent, "--"], env=env
+    )
+    result = {
+        "staged_diff": patch.decode("utf-8", "replace"),
+        "deleted_files": [name.decode("utf-8", "replace") for name in deleted.split(b"\0") if name],
+    }
+    if len(json.dumps(result, ensure_ascii=False).encode()) > 512 * 1024:
+        raise GitCommitError(
+            "commit_diff_too_large", "Staged diff exceeds the message generation limit (512 KiB)"
+        )
+    return result
+
+
+def safe_generated_message(text: str) -> str:
+    value = text.replace("\r\n", "\n").strip()
+    if value.startswith("```") and value.endswith("```"):
+        value = "\n".join(value.splitlines()[1:-1]).strip()
+    if (
+        not value
+        or len(value) > 8192
+        or any(ord(char) < 32 and char not in "\n\t" for char in value)
+    ):
+        raise GitCommitError(
+            "commit_message_invalid", "LLM returned an empty or invalid commit message"
+        )
+    if re.search(rf"(?im)^\s*{INTENT_TRAILER}\s*:", value):
+        raise GitCommitError("commit_message_invalid", "LLM returned a reserved commit trailer")
+    return value
 
 
 def safe_message(text: str) -> str:

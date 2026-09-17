@@ -1,4 +1,9 @@
-import { lazy, Suspense, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import {
+  contextMenuHandlers,
+  type ContextMenuTarget,
+} from '../../app/context_menu'
+import { ContextMenu } from '../../app/ContextMenu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
 import {
@@ -109,6 +114,18 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
     projects.find((p) => p.id === selectedProjectId) ?? null
   const [openBindingId, setOpenBindingId] = useState<string | null>(null)
   const [copyPreset, setCopyPreset] = useState<PresetSummary | null>(null)
+  const [copyTemplate, setCopyTemplate] = useState<PipelineTemplate | null>(
+    null,
+  )
+  const [menu, setMenu] = useState<
+    | (ContextMenuTarget & {
+        template: PipelineTemplate
+        preset?: PresetSummary
+      })
+    | null
+  >(null)
+  const closeMenu = useCallback(() => setMenu(null), [])
+  const [editPreset, setEditPreset] = useState(false)
   const [openTemplate, setOpenTemplate] = useState<PipelineTemplate | null>(
     null,
   )
@@ -130,11 +147,63 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
   const copyPresetMutation = useMutation({
     mutationFn: ({ preset, name }: { preset: PresetSummary; name: string }) =>
       presetsApi.copy(preset.id, csrf, name),
-    onSuccess: () => {
+    onSuccess: (created) => {
       setCopyPreset(null)
+      void client.invalidateQueries({ queryKey: ['templates'] })
+      if (editPreset) setEditor({ templateId: created.id })
+      setEditPreset(false)
+    },
+  })
+  const copyTemplateMutation = useMutation({
+    mutationFn: ({
+      template,
+      name,
+    }: {
+      template: PipelineTemplate
+      name: string
+    }) =>
+      templatesApi.copy(
+        template.id,
+        { name, expected_version: template.version },
+        csrf,
+      ),
+    onSuccess: (created) => {
+      setCopyTemplate(null)
+      void client.invalidateQueries({ queryKey: ['templates'] })
+      if (editPreset) setEditor({ templateId: created.id })
+      setEditPreset(false)
+    },
+  })
+  const removeTemplate = useMutation({
+    mutationFn: (template: PipelineTemplate) =>
+      templatesApi.archive(template.id, template.version, csrf),
+    onSuccess: (removed) => {
+      client.setQueryData<PipelineTemplate[]>(
+        ['templates', { includeArchived: false }],
+        (previous = []) => previous.filter((item) => item.id !== removed.id),
+      )
+      void client.invalidateQueries({ queryKey: ['templates'] })
+    },
+    onError: () => {
       void client.invalidateQueries({ queryKey: ['templates'] })
     },
   })
+  const openMenu = (
+    target: ContextMenuTarget,
+    template: PipelineTemplate,
+    preset?: PresetSummary,
+  ) => {
+    if (!removeTemplate.isPending) removeTemplate.reset()
+    setMenu({ ...target, template, preset })
+  }
+  const beginCopy = (edit: boolean) => {
+    if (!menu) return
+    setEditPreset(edit)
+    copyPresetMutation.reset()
+    copyTemplateMutation.reset()
+    if (menu.preset) setCopyPreset(menu.preset)
+    else setCopyTemplate(menu.template)
+  }
 
   const templatesData = (templates.data ?? []) as PipelineTemplate[]
   const presetsData = (presets.data ?? []) as PresetSummary[]
@@ -144,7 +213,7 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
     <section className="main-pane" aria-labelledby="library-title">
       <header className="main-header">
         <div>
-          <span className="eyebrow">БИБЛИОТЕКА</span>
+          <span className="eyebrow">ШАБЛОНЫ</span>
           <h2 id="library-title">Шаблоны, версии и привязки</h2>
           <span className="muted">
             Копируйте встроенный пресет в пользовательский шаблон,
@@ -180,7 +249,7 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
           </header>
           {templates.isLoading || presets.isLoading ? (
             <p role="status" className="panel-empty">
-              Загружаем библиотеку…
+              Загружаем шаблоны…
             </p>
           ) : templates.error || presets.error ? (
             <div className="panel-empty">
@@ -201,7 +270,17 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
           ) : (
             <ol className="panel-list">
               {presetsData.map((preset) => (
-                <li key={preset.id} className="profile-item">
+                <li
+                  key={preset.id}
+                  className="profile-item"
+                  tabIndex={0}
+                  {...contextMenuHandlers((target) => {
+                    const template = templatesData.find(
+                      (item) => item.id === preset.template_id,
+                    )
+                    if (template) openMenu(target, template, preset)
+                  })}
+                >
                   <header>
                     <strong>{preset.name}</strong>
                     <span className="pill">встроенный</span>
@@ -214,19 +293,24 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
                       Роли: {Object.keys(preset.roles).join(', ') || '—'} ·
                       версия {shortHash(preset.preset_version, 12)}
                     </span>
-                    <button
-                      type="button"
-                      className="quiet"
-                      onClick={() => setCopyPreset(preset)}
-                      disabled={!csrf || copyPresetMutation.isPending}
-                    >
-                      Копировать
-                    </button>
                   </span>
                 </li>
               ))}
               {templatesData.map((tpl) => (
-                <li key={tpl.id} className="profile-item">
+                <li
+                  key={tpl.id}
+                  className="profile-item"
+                  tabIndex={0}
+                  {...contextMenuHandlers((target) =>
+                    openMenu(
+                      target,
+                      tpl,
+                      presetsData.find(
+                        (preset) => preset.template_id === tpl.id,
+                      ),
+                    ),
+                  )}
+                >
                   <header>
                     <strong>{tpl.name}</strong>
                     <span className="pill">
@@ -241,22 +325,6 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
                       Обновлён {formatDateTime(tpl.updated_at)} · ревизия{' '}
                       {tpl.version}
                     </span>
-                    <button
-                      type="button"
-                      className="quiet"
-                      onClick={() => setOpenTemplate(tpl)}
-                    >
-                      Версии…
-                    </button>
-                    {tpl.kind !== 'system' && (
-                      <button
-                        type="button"
-                        className="quiet"
-                        onClick={() => setEditor({ templateId: tpl.id })}
-                      >
-                        Конструктор
-                      </button>
-                    )}
                   </span>
                 </li>
               ))}
@@ -268,6 +336,15 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
               ) : null}
             </ol>
           )}
+          {removeTemplate.isPending ? (
+            <p role="status">Удаляем шаблон…</p>
+          ) : null}
+          {removeTemplate.error ? (
+            <p role="alert" className="error">
+              Не удалось удалить «{removeTemplate.variables?.name}».{' '}
+              {renderLibraryError(removeTemplate.error)}
+            </p>
+          ) : null}
         </section>
         <section className="panel" aria-labelledby="bindings-heading">
           <header className="panel-header">
@@ -337,15 +414,66 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
           )}
         </section>
       </div>
+      {menu ? (
+        <ContextMenu
+          target={menu}
+          label={`Действия с шаблоном «${menu.template.name}»`}
+          onClose={closeMenu}
+          items={[
+            {
+              label: 'Копировать',
+              onSelect: () => beginCopy(false),
+              disabled: !csrf,
+            },
+            {
+              label: 'Редактировать',
+              onSelect: () => {
+                if (menu.template.kind === 'system') beginCopy(true)
+                else setEditor({ templateId: menu.template.id })
+              },
+              disabled: !csrf,
+            },
+            { label: 'Версии', onSelect: () => setOpenTemplate(menu.template) },
+            {
+              label: 'Удалить',
+              onSelect: () => removeTemplate.mutate(menu.template),
+              danger: true,
+              disabled:
+                !csrf ||
+                removeTemplate.isPending ||
+                menu.template.kind === 'system',
+              title:
+                menu.template.kind === 'system'
+                  ? 'Встроенный шаблон нельзя удалить'
+                  : 'Убрать шаблон из списка; существующие привязки сохранятся',
+            },
+          ]}
+        />
+      ) : null}
       {copyPreset ? (
-        <PresetCopyDialog
-          preset={copyPreset}
+        <TemplateCopyDialog
+          editAfterCopy={editPreset}
+          sourceName={copyPreset.name}
+          isPreset
           csrf={csrf}
           pending={copyPresetMutation.isPending}
           error={copyPresetMutation.error}
           onClose={() => setCopyPreset(null)}
           onSubmit={(name) =>
             copyPresetMutation.mutate({ preset: copyPreset, name })
+          }
+        />
+      ) : null}
+      {copyTemplate ? (
+        <TemplateCopyDialog
+          editAfterCopy={editPreset}
+          sourceName={copyTemplate.name}
+          csrf={csrf}
+          pending={copyTemplateMutation.isPending}
+          error={copyTemplateMutation.error}
+          onClose={() => setCopyTemplate(null)}
+          onSubmit={(name) =>
+            copyTemplateMutation.mutate({ template: copyTemplate, name })
           }
         />
       ) : null}
@@ -441,8 +569,10 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
   )
 }
 
-interface PresetCopyDialogProps {
-  preset: PresetSummary
+interface TemplateCopyDialogProps {
+  editAfterCopy?: boolean
+  sourceName: string
+  isPreset?: boolean
   csrf: string
   pending: boolean
   error: unknown
@@ -450,15 +580,17 @@ interface PresetCopyDialogProps {
   onSubmit: (name: string) => void
 }
 
-function PresetCopyDialog({
-  preset,
+function TemplateCopyDialog({
+  editAfterCopy,
+  sourceName,
+  isPreset = false,
   csrf,
   pending,
   error,
   onClose,
   onSubmit,
-}: PresetCopyDialogProps) {
-  const [name, setName] = useState(`${preset.name.slice(0, 112)} - копия`)
+}: TemplateCopyDialogProps) {
+  const [name, setName] = useState(`${sourceName.slice(0, 112)} - копия`)
   return (
     <Modal onClose={onClose} busy={pending} labelledBy="copy-preset-title">
       <form
@@ -470,15 +602,22 @@ function PresetCopyDialog({
         }}
       >
         <header>
-          <h3 id="copy-preset-title">Копировать пресет</h3>
+          <h3 id="copy-preset-title">
+            {editAfterCopy
+              ? 'Редактировать шаблон'
+              : isPreset
+                ? 'Копировать пресет'
+                : 'Копировать шаблон'}
+          </h3>
           <button type="button" className="quiet" onClick={onClose}>
             ×
           </button>
         </header>
         <p className="hint">
-          Будет создан пользовательский шаблон и одна неизменяемая версия с
-          графом и настройками пресета {preset.name}. Дальнейшие правки
-          относятся к вашей копии.
+          {isPreset
+            ? `Будет создан пользовательский шаблон с графом и настройками пресета «${sourceName}».`
+            : `Будет скопирован шаблон «${sourceName}»: сохранённый черновик и последняя опубликованная версия, если она есть.`}{' '}
+          Дальнейшие правки относятся к вашей копии.
         </p>
         <label htmlFor="copy-preset-name">Название шаблона</label>
         <input
@@ -497,8 +636,12 @@ function PresetCopyDialog({
           <button type="button" className="quiet" onClick={onClose}>
             Отмена
           </button>
-          <button type="submit" disabled={pending || !csrf}>
-            {pending ? 'Копируем…' : 'Копировать'}
+          <button type="submit" disabled={pending || !csrf || !name.trim()}>
+            {pending
+              ? 'Копируем…'
+              : editAfterCopy
+                ? 'Создать копию и редактировать'
+                : 'Копировать'}
           </button>
         </footer>
       </form>

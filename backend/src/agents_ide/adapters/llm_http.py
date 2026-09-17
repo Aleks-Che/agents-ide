@@ -37,6 +37,7 @@ MAX_REQUEST_BYTES = 2 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 120.0
 CONNECT_TIMEOUT_SECONDS = 10.0
 MODELS_TIMEOUT_SECONDS = 30.0
+PROBE_MAX_TOKENS = 1024
 
 _GENERATION_KEYS = (
     "reasoning_effort",
@@ -57,6 +58,8 @@ class ProviderProbe:
     models: tuple[str, ...]
     detail: str
     elapsed_seconds: float
+    tested_model: str | None = None
+    catalog_available: bool = False
 
 
 def _connection_dict(connection: dict[str, Any] | None) -> dict[str, Any]:
@@ -497,10 +500,10 @@ class HttpLLMAdapter(LLMAdapter):
                             outcome=ExternalOutcome.UNKNOWN,
                         )
                     )
+                finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
                 content = _extract_content(payload)
                 if not content.strip():
                     raise ValueError("empty_response")
-                finish_reason = payload["choices"][0].get("finish_reason")
                 if finish_reason == "content_filter" or (
                     finish_reason == "length" and not self._diagnostic
                 ):
@@ -509,7 +512,13 @@ class HttpLLMAdapter(LLMAdapter):
                 return failure(
                     *_error(
                         "invalid_provider_response",
-                        "В ответе провайдера нет содержимого",
+                        (
+                            "Ответ модели обрезан лимитом токенов до завершения генерации"
+                            if finish_reason == "length"
+                            else "Ответ модели заблокирован фильтром провайдера"
+                            if finish_reason == "content_filter"
+                            else "В ответе провайдера нет текстового содержимого"
+                        ),
                         outcome=ExternalOutcome.INVALID_FORMAT,
                         retry_safety="unsafe",
                     )
@@ -633,6 +642,7 @@ def probe_connection(
     """Bound both explicit diagnostic requests; HTTP 200 alone is not access."""
     started = time.monotonic()
     models: tuple[str, ...] = ()
+    catalog_available = False
     adapter = HttpLLMAdapter(timeout_seconds=timeout_seconds)
     diagnostic = LLMAdapterRequest(
         role="diagnostic",
@@ -656,6 +666,7 @@ def probe_connection(
         if response.status_code == 200 and isinstance(payload, dict):
             data = payload.get("data")
             if isinstance(data, list):
+                catalog_available = True
                 models = tuple(
                     item["id"]
                     for item in data
@@ -678,25 +689,34 @@ def probe_connection(
             models,
             "Catalog available" if models else "Catalog unavailable",
             time.monotonic() - started,
+            catalog_available=catalog_available,
         )
     adapter._diagnostic = True
+    tested_model = model_id or (models[0] if models else "default")
     result = adapter.run(
         LLMAdapterRequest(
             role="diagnostic",
-            model_id=model_id or (models[0] if models else "default"),
-            prompt="ping",
+            model_id=tested_model,
+            prompt="Reply with exactly OK and nothing else.",
             context_package={},
-            params={"max_tokens": 1},
+            # Reasoning models may spend the initial tokens before producing text.
+            params={"max_tokens": PROBE_MAX_TOKENS},
             connection=connection,
         )
     )
+    detail = "Проверочный запрос выполнен"
+    if result.outcome != ExternalOutcome.SUCCEEDED:
+        detail = "Проверочный запрос не выполнен: " + (
+            result.error.code if result.error else result.outcome.value
+        )
+        if result.error and result.error.code == "invalid_provider_response":
+            detail += f". {result.error.message}"
     return ProviderProbe(
         result.outcome == ExternalOutcome.SUCCEEDED,
         None,
         models,
-        "Проверочный запрос выполнен"
-        if result.outcome == ExternalOutcome.SUCCEEDED
-        else "Проверочный запрос не выполнен: "
-        + (result.error.code if result.error else result.outcome.value),
+        detail,
         time.monotonic() - started,
+        tested_model=tested_model,
+        catalog_available=catalog_available,
     )

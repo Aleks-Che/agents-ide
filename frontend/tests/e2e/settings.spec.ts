@@ -1,43 +1,44 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { test, expect, pair, api } from './support'
+import { installedHarness } from './harness-fixture'
 
 test('agent group can be created, extended, disabled, removed and archived in UI', async ({
   page,
 }) => {
   await pair(page)
   const suffix = randomUUID()
-  const harness = await api(page, 'POST', '/harness_profiles', {
-    name: `Agent source ${suffix}`,
-    harness_kind: 'opencode',
-    settings: { permission_mode: 'no_tools' },
-  })
+  const harness = await installedHarness(page)
   await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await page
+    .getByRole('navigation', { name: 'Разделы настроек' })
+    .getByRole('button', { name: 'Группы моделей', exact: true })
+    .click()
   const panel = page.getByRole('region', { name: 'Группы моделей' })
   await panel.getByRole('button', { name: '+ Новая' }).click()
   let dialog = page.getByRole('dialog')
   const name = `Agent group ${suffix}`
   await dialog.getByLabel('Название', { exact: true }).fill(name)
-  await dialog.getByLabel('Harness-профиль').selectOption(harness.id)
-  await dialog.getByLabel('ID модели').fill('test/first')
+  await dialog.getByLabel('Harness', { exact: true }).selectOption(harness.id)
+  await dialog.getByLabel('Модель harness').selectOption('test/first')
   await dialog.getByRole('button', { name: 'Создать', exact: true }).click()
   const item = panel
     .locator('.profile-item')
     .filter({ has: page.getByText(name, { exact: true }) })
-  await expect(item).toContainText(harness.name)
+  await expect(item).toContainText('OpenCode')
   await item.getByRole('button', { name: 'Параметры…' }).click()
   dialog = page.getByRole('dialog')
   await dialog.getByRole('button', { name: '+ Добавить' }).click()
-  await dialog.getByLabel('ID модели').nth(1).fill('test/second')
+  await dialog.getByLabel('Модель harness').nth(1).selectOption('test/second')
   await dialog.getByRole('checkbox').first().uncheck()
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
-  await expect(dialog.getByRole('status')).toContainText('Кандидаты сохранены')
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(dialog.getByRole('status')).toContainText('Группа сохранена')
   await page.keyboard.press('Escape')
   await expect(item).toContainText('отключён')
   await item.getByRole('button', { name: 'Параметры…' }).click()
-  await expect(dialog.getByLabel('ID модели').nth(1)).toHaveValue('test/second')
+  await expect(dialog.getByLabel('Модель harness').nth(1)).toHaveValue(
+    'test/second',
+  )
   await dialog
     .getByRole('button', { name: 'Параметры', exact: true })
     .nth(1)
@@ -45,10 +46,8 @@ test('agent group can be created, extended, disabled, removed and archived in UI
   await dialog.getByLabel('Новый параметр').selectOption('temperature')
   await dialog.getByRole('button', { name: 'Добавить параметр' }).click()
   await dialog.getByLabel('Значение temperature').fill('0.5')
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
-  await expect(dialog.getByRole('status')).toContainText('Кандидаты сохранены')
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(dialog.getByRole('status')).toContainText('Группа сохранена')
   let groups = await api(page, 'GET', '/model_groups?kind=agent')
   let saved = groups.find((group: { name: string }) => group.name === name)
   expect(
@@ -64,20 +63,16 @@ test('agent group can be created, extended, disabled, removed and archived in UI
     'Нужно число от 0 до 2',
   )
   await expect(
-    dialog.getByRole('button', { name: 'Сохранить кандидатов', exact: true }),
+    dialog.getByRole('button', { name: 'Сохранить', exact: true }),
   ).toBeDisabled()
   await dialog.getByLabel('Значение temperature').fill('0.7')
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
-  await expect(dialog.getByRole('status')).toContainText('Кандидаты сохранены')
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(dialog.getByRole('status')).toContainText('Группа сохранена')
   await dialog
     .getByRole('button', { name: 'Удалить параметр temperature' })
     .click()
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
-  await expect(dialog.getByRole('status')).toContainText('Кандидаты сохранены')
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(dialog.getByRole('status')).toContainText('Группа сохранена')
   groups = await api(page, 'GET', '/model_groups?kind=agent')
   saved = groups.find((group: { name: string }) => group.name === name)
   expect(
@@ -89,46 +84,9 @@ test('agent group can be created, extended, disabled, removed and archived in UI
     .getByRole('button', { name: 'Удалить', exact: true })
     .first()
     .click()
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
-  await expect(dialog.getByRole('status')).toContainText('Кандидаты сохранены')
-  await dialog
-    .getByRole('button', { name: 'Архивировать', exact: true })
-    .click()
-  await expect(item).toHaveCount(0)
-})
-
-test('harness creation records no_tools; test refreshes version and permits editing', async ({
-  page,
-}) => {
-  await pair(page)
-  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
-  const panel = page.getByRole('region', { name: 'Профили harness' })
-  await panel.getByRole('button', { name: '+ Новый', exact: true }).click()
-  let dialog = page.getByRole('dialog', { name: 'Новый harness-профиль' })
-  const name = `OpenCode ${randomUUID()}`
-  await dialog.getByLabel('Название').fill(name)
-  await dialog.getByRole('checkbox').check()
-  await dialog.getByRole('button', { name: 'Создать' }).click()
-  const item = panel.getByRole('listitem').filter({ hasText: name })
-  await item.getByRole('button', { name: 'Параметры…' }).click()
-  dialog = page.getByRole('dialog', { name, exact: true })
-  await expect(dialog.getByRole('checkbox')).toBeChecked()
-  await dialog.getByRole('button', { name: 'Тест', exact: true }).click()
-  await expect(dialog.getByRole('status')).toContainText('failed')
-  await dialog.getByLabel('Название').fill(`${name} edited`)
-  await expect(
-    dialog.getByRole('button', { name: 'Тест', exact: true }),
-  ).toBeDisabled()
   await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
-  await item.getByRole('button', { name: 'Параметры…' }).click()
-  await expect(page.getByRole('dialog').getByLabel('Название')).toHaveValue(
-    `${name} edited`,
-  )
-  await page
-    .getByRole('dialog')
+  await expect(dialog.getByRole('status')).toContainText('Группа сохранена')
+  await dialog
     .getByRole('button', { name: 'Архивировать', exact: true })
     .click()
   await expect(item).toHaveCount(0)
@@ -158,6 +116,10 @@ test('connection key replacement keeps manual models; test, rename and archive u
       throw new Error('Server did not bind')
     await pair(page)
     await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+    await page
+      .getByRole('navigation', { name: 'Разделы настроек' })
+      .getByRole('button', { name: 'LLM-подключения', exact: true })
+      .click()
     const panel = page.getByRole('region', { name: 'LLM-подключения' })
     await panel.getByRole('button', { name: '+ Новое' }).click()
     const name = `Local ${randomUUID()}`
@@ -213,7 +175,7 @@ test('connection key replacement keeps manual models; test, rename and archive u
   }
 })
 
-test('group saves preserve other drafts, handle conflict explicitly and show copy errors', async ({
+test('group save persists all drafts, handles conflict explicitly and shows copy errors', async ({
   page,
 }) => {
   await pair(page)
@@ -235,6 +197,10 @@ test('group saves preserve other drafts, handle conflict explicitly and show cop
     ],
   })
   await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await page
+    .getByRole('navigation', { name: 'Разделы настроек' })
+    .getByRole('button', { name: 'Группы моделей', exact: true })
+    .click()
   const panel = page.getByRole('region', { name: 'Группы моделей' })
   await panel.getByRole('tab', { name: 'llm', exact: true }).click()
   const item = panel
@@ -250,16 +216,13 @@ test('group saves preserve other drafts, handle conflict explicitly and show cop
     .getByRole('button', { name: 'Ниже', exact: true })
     .first()
     .click()
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
-  await expect(dialog.getByRole('status')).toContainText('Кандидаты сохранены')
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(dialog.getByRole('status')).toContainText('Группа сохранена')
   await expect(dialog.getByLabel('Название', { exact: true })).toHaveValue(
     `${group.name} renamed`,
   )
-  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(dialog.getByText('Название и описание сохранены.')).toBeVisible()
   const saved = await api(page, 'GET', `/model_groups/${group.id}`)
+  expect(saved.name).toBe(`${group.name} renamed`)
   expect(saved.description).toBe('')
   expect(
     saved.members.map((member: { model_id: string }) => member.model_id),
@@ -305,6 +268,10 @@ test('small viewport keeps navigation, modal controls and keyboard focus usable'
   await expect(page.getByRole('button', { name: 'Новый проект' })).toBeVisible()
   await page.getByRole('button', { name: 'Настройки', exact: true }).click()
   await page
+    .getByRole('navigation', { name: 'Разделы настроек' })
+    .getByRole('button', { name: 'LLM-подключения', exact: true })
+    .click()
+  await page
     .getByRole('region', { name: 'LLM-подключения' })
     .getByRole('button', { name: '+ Новое' })
     .click()
@@ -336,39 +303,145 @@ test('small viewport keeps navigation, modal controls and keyboard focus usable'
   })
 })
 
-test('Codex profile can opt into read_only in creation and editing', async ({
+test('installed harness settings select a native default without creating profiles', async ({
   page,
 }) => {
   await pair(page)
+  await installedHarness(page, 'codex')
   await page.getByRole('button', { name: 'Настройки', exact: true }).click()
-  const panel = page.getByRole('region', { name: 'Профили harness' })
-  await panel.getByRole('button', { name: '+ Новый', exact: true }).click()
-  const dialog = page.getByRole('dialog')
-  const name = `Codex ${randomUUID()}`
-  await dialog.getByLabel('Название').fill(name)
-  await dialog.getByLabel('Тип', { exact: true }).selectOption('codex')
+  await page
+    .getByRole('navigation', { name: 'Разделы настроек' })
+    .getByRole('button', { name: 'Агенты', exact: true })
+    .click()
+  const panel = page.getByRole('region', { name: 'Установленные harness' })
+  await expect(panel.getByRole('button', { name: '+ Новый' })).toHaveCount(0)
+  await panel.getByRole('button', { name: 'Codex', exact: true }).click()
+  let dialog = page.getByRole('dialog')
+  await expect(dialog.getByLabel('Исполняемый файл')).toHaveValue(
+    'C:/tools/codex.exe',
+  )
+  await dialog.getByLabel('Модель по умолчанию').selectOption('test/second')
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(panel).toContainText('Модель по умолчанию · test/second')
+  await panel.getByRole('button', { name: 'Обновить список' }).click()
+  await expect(panel.getByRole('listitem')).toHaveCount(1)
+  await panel.getByRole('button', { name: 'Codex', exact: true }).click()
+  await expect(page.getByLabel('Модель по умолчанию')).toHaveValue(
+    'test/second',
+  )
+  await page.keyboard.press('Escape')
+  await page
+    .getByRole('navigation', { name: 'Разделы настроек' })
+    .getByRole('button', { name: 'Группы моделей', exact: true })
+    .click()
+  await page
+    .getByRole('region', { name: 'Группы моделей' })
+    .getByRole('button', { name: '+ Новая' })
+    .click()
+  dialog = page.getByRole('dialog')
   await dialog
-    .getByRole('checkbox', { name: 'Только чтение (read_only)' })
-    .check()
+    .getByLabel('Harness', { exact: true })
+    .selectOption({ label: 'Codex' })
+  await expect(dialog.getByLabel('Модель harness')).toHaveValue('test/second')
+  await expect(
+    dialog.getByLabel('Модель harness').getByRole('option'),
+  ).toHaveCount(3)
+})
+
+test('switching harness replaces its model catalog and default', async ({
+  page,
+}) => {
+  await pair(page)
+  const opencode = await installedHarness(page)
+  const codex = await installedHarness(page, 'codex', [
+    'codex/first',
+    'codex/second',
+  ])
+  await page.route('**/api/harnesses/discover', (route) =>
+    route.fulfill({ json: [opencode, codex] }),
+  )
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await page
+    .getByRole('navigation', { name: 'Разделы настроек' })
+    .getByRole('button', { name: 'Группы моделей', exact: true })
+    .click()
+  await page
+    .getByRole('region', { name: 'Группы моделей' })
+    .getByRole('button', { name: '+ Новая' })
+    .click()
+  const dialog = page.getByRole('dialog')
+  const selector = dialog.getByLabel('Harness', { exact: true })
+  const model = dialog.getByLabel('Модель harness')
+  await selector.selectOption(opencode.id)
+  await expect(model).toHaveValue('test/first')
+  await model.selectOption('test/second')
+  await selector.selectOption(codex.id)
+  await expect(model).toHaveValue('codex/first')
+  await expect(
+    model.getByRole('option', { name: 'test/second', exact: true }),
+  ).toHaveCount(0)
+  await dialog
+    .getByLabel('Название', { exact: true })
+    .fill(`Switch ${randomUUID()}`)
+  await model.selectOption('codex/second')
   await dialog.getByRole('button', { name: 'Создать', exact: true }).click()
-  const item = panel.getByRole('listitem').filter({ hasText: name })
-  await item.getByRole('button', { name: 'Параметры…' }).click()
-  await expect(dialog.getByRole('checkbox')).toBeChecked()
-  let profiles = await api(page, 'GET', '/harness_profiles')
-  expect(
-    profiles.find((p: { name: string }) => p.name === name).settings
-      .permission_mode,
-  ).toBe('read_only')
-  await dialog.getByRole('checkbox').uncheck()
-  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await item.getByRole('button', { name: 'Параметры…' }).click()
-  await expect(dialog.getByRole('checkbox')).not.toBeChecked()
-  await dialog.getByRole('checkbox').check()
-  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  profiles = await api(page, 'GET', '/harness_profiles')
+  const groups = await api(page, 'GET', '/model_groups?kind=agent')
   expect(
-    profiles.find((p: { name: string }) => p.name === name).settings
-      .permission_mode,
-  ).toBe('read_only')
+    groups.some(
+      (group: {
+        members: { harness_profile_id: string; model_id: string }[]
+      }) =>
+        group.members.some(
+          (member) =>
+            member.harness_profile_id === codex.id &&
+            member.model_id === 'codex/second',
+        ),
+    ),
+  ).toBeTruthy()
+})
+
+test('missing installations and failed catalog have actionable states', async ({
+  page,
+}) => {
+  await pair(page)
+  const harness = await installedHarness(page)
+  await page.route('**/api/harnesses/discover', (route) =>
+    route.fulfill({ json: [] }),
+  )
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await page
+    .getByRole('navigation', { name: 'Разделы настроек' })
+    .getByRole('button', { name: 'Агенты', exact: true })
+    .click()
+  const panel = page.getByRole('region', { name: 'Установленные harness' })
+  await expect(panel).toContainText('Harness не найдены')
+  await page.unroute('**/api/harnesses/discover')
+  await page.route('**/api/harnesses/discover', (route) =>
+    route.fulfill({ json: [harness] }),
+  )
+  await panel.getByRole('button', { name: 'Обновить список' }).click()
+  await page.route(
+    `**/api/harness_profiles/${harness.id}/models/refresh*`,
+    (route) =>
+      route.fulfill({
+        status: 422,
+        json: {
+          code: 'harness_catalog_unavailable',
+          message: 'Проверьте вход в harness',
+          details: {},
+          request_id: 'fixture',
+          retryable: false,
+        },
+      }),
+  )
+  await panel.getByRole('button', { name: 'OpenCode', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('alert')).toContainText('Проверьте вход')
+  await expect(
+    dialog.getByRole('button', { name: 'Сохранить', exact: true }),
+  ).toBeDisabled()
+  await expect(
+    dialog.getByRole('button', { name: 'Обновить модели' }),
+  ).toBeEnabled()
 })

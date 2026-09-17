@@ -453,22 +453,31 @@ function EditConnectionForm({
           </ul>
           {!connection.catalog_models.length ? (
             <span className="hint">
-              Каталог не получен. Можно указать модель вручную.
+              Каталог пуст или недоступен. Можно использовать модель, указанную
+              вручную.
             </span>
           ) : null}
         </div>
         <p className="hint">
           Ключ не возвращается через API. Тест делает короткий запрос к
           сохранённому подключению и может расходовать квоту провайдера. Сначала
-          сохраните правки.
+          сохраните правки. Для теста используется первая ручная модель, а если
+          список пуст — первая модель из каталога провайдера.
         </p>
         {test.data ? (
           <p
             role="status"
             className={test.data.result.status === 'ok' ? 'hint' : 'error'}
           >
-            Тест · {test.data.result.status} {test.data.result.detail} ·{' '}
-            {test.data.result.models.length} моделей
+            Тест · {test.data.result.status}
+            {test.data.result.tested_model ? (
+              <>
+                {' '}
+                · Модель: <code>{test.data.result.tested_model}</code>
+              </>
+            ) : null}
+            {' · '}
+            {test.data.result.detail}
           </p>
         ) : connection.last_test_status ? (
           <p className="hint">

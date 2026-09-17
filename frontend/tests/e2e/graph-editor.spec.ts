@@ -8,7 +8,7 @@ const uid = () => randomUUID().slice(0, 8)
 async function openNew(page: Page) {
   await pair(page)
   await page.setViewportSize({ width: 1560, height: 1000 })
-  await page.getByRole('button', { name: 'Библиотека', exact: true }).click()
+  await page.getByRole('button', { name: 'Шаблоны', exact: true }).click()
   await page.getByRole('button', { name: 'Новый шаблон', exact: true }).click()
   const name = `Graph ${uid()}`
   await page.getByLabel('Название шаблона', { exact: true }).fill(name)
@@ -51,7 +51,9 @@ async function reopen(page: Page, name: string) {
   await page
     .locator('li.profile-item')
     .filter({ has: page.getByText(name, { exact: true }) })
-    .getByRole('button', { name: 'Конструктор', exact: true })
+    .click({ button: 'right' })
+  await page
+    .getByRole('menuitem', { name: 'Редактировать', exact: true })
     .click()
   await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
 }
@@ -554,11 +556,13 @@ test('opens a preset copy and changes reviewer from agent to LLM without alterin
   const original = (
     await api(page, 'GET', `/templates/${presets[0].template_id}/versions`)
   )[0]
-  await page.getByRole('button', { name: 'Библиотека', exact: true }).click()
+  await page.getByRole('button', { name: 'Шаблоны', exact: true }).click()
   await page
-    .getByRole('button', { name: 'Копировать', exact: true })
+    .locator('.profile-item')
+    .filter({ has: page.getByText('встроенный', { exact: true }) })
     .first()
-    .click()
+    .click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Копировать', exact: true }).click()
   const name = `Editable preset ${uid()}`
   await page.getByLabel('Название шаблона', { exact: true }).fill(name)
   await page

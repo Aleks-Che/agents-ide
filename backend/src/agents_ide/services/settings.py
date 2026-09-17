@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from agents_ide.domain.common import content_hash
 from agents_ide.domain.schemas import (
     MODEL_SELECTION,
+    CommitMessageSettings,
     DirectAgentSelection,
     GroupSelection,
     ModelSelection,
@@ -227,6 +228,9 @@ def _capture_dependencies(
                             "provider_connection_id": member.provider_connection_id,
                             "model_id": member.model_id,
                             "params": params,
+                            "schedule": (
+                                json.loads(member.schedule_json) if member.schedule_json else None
+                            ),
                             "revision": member.revision,
                             "resource_version": data["version"],
                             "unavailable_reason": "archived" if data["archived"] else None,
@@ -275,6 +279,25 @@ def _capture_dependencies(
         config = deepcopy(node.get("config", {}))
         if not isinstance(config, dict) or not isinstance(node.get("id"), str):
             raise AppError("configuration_invalid", "Неверная структура узла", 422)
+        if node.get("type") == "GitCommit" and config.get("generate_message"):
+            from agents_ide.services.general_settings import get_settings
+
+            defaults = get_settings(session).commit_message.model_dump()
+            generation = CommitMessageSettings.model_validate(
+                {**defaults, **config.get("message_generation", {})}
+            )
+            if not generation.connection_id or not generation.model:
+                raise AppError(
+                    "configuration_invalid",
+                    "Выберите LLM-подключение и модель для сообщения коммита",
+                    422,
+                    {"node_id": node["id"]},
+                )
+            provider = resource("llm", generation.connection_id)
+            config["message_generation"] = {
+                **generation.model_dump(),
+                "resource_version": provider["version"],
+            }
         role = config.get("role")
         if role is not None and not isinstance(role, str):
             raise AppError("configuration_invalid", "Роль должна быть строкой", 422)

@@ -354,6 +354,9 @@ def create_planning_job(
                         row.enabled,
                     )
                 )
+                candidates[-1]["schedule"] = (
+                    json.loads(row.schedule_json) if row.schedule_json else None
+                )
             if not any(c["enabled"] for c in candidates):
                 raise AppError("model_group_empty", "Нужен включённый кандидат", 422)
         else:

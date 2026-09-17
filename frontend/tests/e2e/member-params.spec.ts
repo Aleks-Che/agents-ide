@@ -16,33 +16,43 @@ test('native parameter choices follow model metadata and preserve an unsupported
     name: `Native metadata ${suffix}`,
     members: [{ harness_profile_id: profile.id, model_id: 'alpha' }],
   })
-  await page.route('**/api/harness_profiles*', async (route) => {
-    const response = await route.fetch()
-    const body = await response.json()
-    await route.fulfill({
-      response,
-      json: Array.isArray(body)
-        ? body.map((item) =>
-            item.id === profile.id
-              ? {
-                  ...item,
-                  model_capabilities: {
-                    alpha: {
-                      source: 'native_catalog',
-                      reasoning_efforts: ['low', 'high'],
-                    },
-                    beta: {
-                      source: 'native_catalog',
-                      reasoning_efforts: ['low'],
-                    },
-                  },
-                }
-              : item,
-          )
-        : body,
-    })
-  })
+  const metadata = {
+    ...profile,
+    catalog_models: ['alpha', 'beta'],
+    model_capabilities: {
+      alpha: { source: 'native_catalog', reasoning_efforts: ['low', 'high'] },
+      beta: { source: 'native_catalog', reasoning_efforts: ['low'] },
+    },
+  }
+  await page.route('**/api/harnesses/discover', (route) =>
+    route.fulfill({ json: [metadata] }),
+  )
+  await page.route(`**/api/harness_profiles/${profile.id}`, (route) =>
+    route.fulfill({ json: metadata }),
+  )
+  await page.route(
+    `**/api/harness_profiles/${profile.id}/models/refresh*`,
+    (route) =>
+      route.fulfill({
+        json: {
+          status: 'fresh',
+          models: Object.entries<{
+            source: string
+            reasoning_efforts: string[]
+          }>(metadata.model_capabilities).map(([id, data]) => ({
+            id,
+            ...data,
+          })),
+          fetched_at: new Date().toISOString(),
+          ttl_seconds: 900,
+        },
+      }),
+  )
   await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await page
+    .getByRole('navigation', { name: 'Разделы настроек' })
+    .getByRole('button', { name: 'Группы моделей', exact: true })
+    .click()
   const panel = page.getByRole('region', { name: 'Группы моделей' })
   await panel.getByRole('tab', { name: 'agent', exact: true }).click()
   await panel
@@ -60,16 +70,34 @@ test('native parameter choices follow model metadata and preserve an unsupported
   const effort = member.getByLabel('Значение reasoning_effort')
   await expect(effort.locator('option')).toHaveText(['low', 'high'])
   await effort.selectOption('high')
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(
-    dialog.getByText('Кандидаты сохранены.', { exact: true }),
+    dialog.getByText('Группа сохранена.', { exact: true }),
   ).toBeVisible()
   expect(
     (await api(page, 'GET', `/model_groups/${group.id}`)).members[0].params,
   ).toEqual({ reasoning_effort: 'high' })
-  await member.getByRole('textbox', { name: 'ID модели' }).fill('beta')
+  await member.getByLabel('Модель harness').selectOption('beta')
+  await expect(effort).toHaveCount(0)
+  // Existing unsupported overrides remain visible when reopening a saved group.
+  const saved = await api(page, 'GET', `/model_groups/${group.id}`)
+  await api(page, 'PATCH', `/model_groups/${group.id}/agent`, {
+    expected_revision: saved.revision,
+    members: [
+      {
+        harness_profile_id: profile.id,
+        model_id: 'beta',
+        params: { reasoning_effort: 'high' },
+      },
+    ],
+  })
+  await page.keyboard.press('Escape')
+  await panel
+    .getByRole('listitem')
+    .filter({ hasText: group.name })
+    .getByRole('button', { name: 'Параметры…' })
+    .click()
+  await member.getByRole('button', { name: /^Параметры/ }).click()
   await expect(effort).toHaveValue('high')
   await expect(effort).toHaveAttribute('aria-invalid', 'true')
   await expect(member.getByRole('alert')).toContainText(
@@ -92,6 +120,10 @@ async function editGroup(page: Page, params: Record<string, unknown>) {
     ],
   })
   await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await page
+    .getByRole('navigation', { name: 'Разделы настроек' })
+    .getByRole('button', { name: 'Группы моделей', exact: true })
+    .click()
   const panel = page.getByRole('region', { name: 'Группы моделей' })
   await panel.getByRole('tab', { name: 'llm', exact: true }).click()
   const item = panel.getByRole('listitem').filter({ hasText: group.name })
@@ -137,11 +169,9 @@ test('all parameter controls and exact stop sequences survive save, reopen and r
     if (typeof value === 'number') await control.fill(String(value))
     else await control.selectOption(String(value))
   }
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(
-    dialog.getByText('Кандидаты сохранены.', { exact: true }),
+    dialog.getByText('Группа сохранена.', { exact: true }),
   ).toBeVisible()
   expect(
     (await api(page, 'GET', `/model_groups/${group.id}`)).members[0].params,
@@ -153,22 +183,18 @@ test('all parameter controls and exact stop sequences survive save, reopen and r
     JSON.parse(await member.getByLabel('Значение stop').inputValue()),
   ).toEqual(expected.stop)
   await member.getByLabel('Значение stop').fill('[]')
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(
-    dialog.getByText('Кандидаты сохранены.', { exact: true }),
+    dialog.getByText('Группа сохранена.', { exact: true }),
   ).toBeVisible()
   expect(
     (await api(page, 'GET', `/model_groups/${group.id}`)).members[0].params
       .stop,
   ).toEqual([])
   await member.getByRole('button', { name: 'Удалить параметр stop' }).click()
-  await dialog
-    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
-    .click()
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(
-    dialog.getByText('Кандидаты сохранены.', { exact: true }),
+    dialog.getByText('Группа сохранена.', { exact: true }),
   ).toBeVisible()
   expect(
     (await api(page, 'GET', `/model_groups/${group.id}`)).members[0].params,
@@ -183,12 +209,12 @@ test('invalid drafts stay with their candidate and cannot be copied or silently 
     temperature: 0.5,
   })
   const save = dialog.getByRole('button', {
-    name: 'Сохранить кандидатов',
+    name: 'Сохранить',
     exact: true,
   })
   await save.click()
   await expect(
-    dialog.getByText('Кандидаты сохранены.', { exact: true }),
+    dialog.getByText('Группа сохранена.', { exact: true }),
   ).toBeVisible()
   const seed = member.getByLabel('Значение seed', { exact: true })
   await seed.fill('9007199254740993')
@@ -200,7 +226,7 @@ test('invalid drafts stay with their candidate and cannot be copied or silently 
     dialog.getByRole('button', { name: 'Копировать', exact: true }),
   ).toBeDisabled()
   await expect(
-    dialog.getByText('Кандидаты сохранены.', { exact: true }),
+    dialog.getByText('Группа сохранена.', { exact: true }),
   ).toHaveCount(0)
   await member.getByRole('button', { name: 'Ниже', exact: true }).click()
   await member.getByRole('button', { name: /^Параметры/ }).click()
@@ -210,8 +236,10 @@ test('invalid drafts stay with their candidate and cannot be copied or silently 
   await dialog
     .getByLabel('Описание', { exact: true })
     .fill('Preserve parameter draft')
-  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(dialog.getByText('Название и описание сохранены.')).toBeVisible()
+  await expect(save).toBeDisabled()
+  expect(
+    (await api(page, 'GET', `/model_groups/${group.id}`)).description,
+  ).toBe('')
   await expect(seed).toHaveValue('9007199254740993')
   await seed.fill('-')
   await expect(seed).toHaveValue('-')
@@ -224,7 +252,7 @@ test('invalid drafts stay with their candidate and cannot be copied or silently 
   await expect(save).toBeDisabled()
   await temperature.pressSequentially('2')
   await expect(save).toBeEnabled()
-  await page.route(`**/api/model_groups/${group.id}/llm/members`, (route) =>
+  await page.route(`**/api/model_groups/${group.id}/llm`, (route) =>
     route.fulfill({
       status: 503,
       contentType: 'application/json',
@@ -237,12 +265,13 @@ test('invalid drafts stay with their candidate and cannot be copied or silently 
   await save.click()
   await expect(dialog.getByRole('alert')).toContainText('Retry parameters')
   await expect(temperature).toHaveValue('1e-2')
-  await page.unroute(`**/api/model_groups/${group.id}/llm/members`)
+  await page.unroute(`**/api/model_groups/${group.id}/llm`)
   await save.click()
   await expect(
-    dialog.getByText('Кандидаты сохранены.', { exact: true }),
+    dialog.getByText('Группа сохранена.', { exact: true }),
   ).toBeVisible()
   const saved = await api(page, 'GET', `/model_groups/${group.id}`)
+  expect(saved.description).toBe('Preserve parameter draft')
   expect(saved.members[1].model_id).toBe('first')
   expect(saved.members[1].params).toEqual({ seed: -42, temperature: 0.01 })
   await page.setViewportSize({ width: 390, height: 844 })

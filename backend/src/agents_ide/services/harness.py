@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from sqlalchemy import select
@@ -24,6 +26,103 @@ from agents_ide.persistence.models import HarnessProfile as HarnessProfileModel
 from agents_ide.security.native_credentials import fingerprint
 from agents_ide.services.mapping import ensure_unique, get_or_404, harness_from_model
 from agents_ide.services.transactions import begin_write
+
+_catalog_locks = {kind: threading.Lock() for kind in ("codex", "opencode")}
+
+
+def discover_harnesses(session: Session) -> list[HarnessProfile]:
+    """One shared settings record per installed harness; keep legacy references intact."""
+    from agents_ide.services.harness_discovery import discover_executables, native_executable
+
+    executables = discover_executables()
+    begin_write(session)
+    rows = list(
+        session.scalars(
+            select(HarnessProfileModel).order_by(
+                HarnessProfileModel.created_at, HarnessProfileModel.id
+            )
+        )
+    )
+    discovered = []
+    for kind, name in (("codex", "Codex"), ("opencode", "OpenCode")):
+        active = [row for row in rows if row.harness_kind == kind and row.archived_at is None]
+        executable = executables.get(kind) or next(
+            (
+                r.executable_path
+                for r in active
+                if r.executable_path and native_executable(Path(r.executable_path))
+            ),
+            None,
+        )
+        if executable is None:
+            continue
+        identity = uuid5(NAMESPACE_URL, f"agents-ide:installed-harness:{kind}").hex
+        model = next((r for r in rows if r.id == identity), None)
+        if model is None and active:
+            # Stable across executable upgrades, including installations that
+            # previously had several model-specific profiles.
+            model = active[0]
+        if model is None:
+            now = utc_now()
+            used_names = {r.name for r in rows}
+            title = name
+            suffix = 1
+            while title in used_names:
+                suffix += 1
+                title = f"{name} {suffix}"
+            model = HarnessProfileModel(
+                id=identity,
+                name=title,
+                harness_kind=kind,
+                executable_path=executable,
+                settings_json=to_json(
+                    {
+                        "permission_mode": "read_only" if kind == "codex" else "no_tools",
+                    }
+                ),
+                catalog_models_json="[]",
+                catalog_metadata_json="{}",
+                catalog_fingerprint=fingerprint(kind, executable),
+                catalog_ttl_seconds=900,
+                version=1,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(model)
+        elif model.executable_path != executable or model.archived_at is not None:
+            model.executable_path = executable
+            model.archived_at = None
+            model.catalog_fingerprint = None
+        settings = json.loads(model.settings_json)
+        if settings.get("permission_mode") is None:
+            settings["permission_mode"] = "read_only" if kind == "codex" else "no_tools"
+            model.settings_json = to_json(settings)
+            model.version += 1
+            model.updated_at = utc_now()
+        invalidate_native_catalog(session, model)
+        session.flush()
+        discovered.append(harness_from_model(model))
+    return discovered
+
+
+def refresh_model_catalog(
+    session: Session, harness_id: str, force: bool = False
+) -> HarnessProfileCatalog:
+    model = get_or_404(session, HarnessProfileModel, harness_id)
+    with _catalog_locks[model.harness_kind]:
+        session.refresh(model)
+        catalog = model_catalog(session, harness_id)
+        session.commit()  # Publish invalidation before probe releases its read snapshot.
+        if force or catalog.status != "fresh":
+            probe = probe_harness(session, harness_id)
+            session.commit()
+            if probe.status != "ok":
+                raise AppError(
+                    "harness_catalog_unavailable",
+                    "Не удалось загрузить модели. Проверьте вход и настройки самой harness.",
+                    422,
+                )
+        return model_catalog(session, harness_id)
 
 
 def create_harness(session: Session, payload: HarnessProfileCreate) -> HarnessProfile:
@@ -137,14 +236,28 @@ def update_harness(
         model.last_test_status = None
         model.last_test_at = None
     if payload.settings is not None:
+        previous_settings = json.loads(model.settings_json)
+        default_model = payload.settings.get("default_model")
+        if default_model is not None and not isinstance(default_model, str):
+            raise AppError("harness_model_unavailable", "Выберите модель из каталога harness", 422)
+        if default_model is not None and default_model != previous_settings.get("default_model"):
+            catalog = model_catalog(session, harness_id)
+            if catalog.status != "fresh" or default_model not in {m.id for m in catalog.models}:
+                raise AppError(
+                    "harness_model_unavailable",
+                    "Выберите модель из актуального каталога harness",
+                    422,
+                )
         model.settings_json = to_json(payload.settings)
-        model.last_test_status = None
-        model.last_test_at = None
-        # Settings include default model parameters or auth hints; the catalog
-        # itself does not depend on the secret value, but a version bump keeps
-        # the cache honest until the next read.
-        model.catalog_models_json = "[]"
-        model.catalog_fetched_at = None
+        # IDE defaults do not change the native account or model catalog.
+        if {k: v for k, v in previous_settings.items() if k != "default_model"} != {
+            k: v for k, v in payload.settings.items() if k != "default_model"
+        }:
+            model.last_test_status = None
+            model.last_test_at = None
+            model.catalog_models_json = "[]"
+            model.catalog_metadata_json = "{}"
+            model.catalog_fetched_at = None
     if payload.catalog_ttl_seconds is not None:
         model.catalog_ttl_seconds = payload.catalog_ttl_seconds
         model.catalog_fetched_at = None

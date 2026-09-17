@@ -5,6 +5,12 @@ import type {
 } from '../../api/runs'
 import { CANDIDATE_STATE_LABELS } from '../../api/runs'
 
+function reasonLabel(reason: unknown) {
+  if (reason === 'outside_schedule') return 'Вне расписания'
+  if (reason === 'schedule_invalid') return 'Ошибка расписания'
+  return String(reason ?? '—')
+}
+
 export function GroupSummarySection({
   selection,
   waiting,
@@ -164,7 +170,7 @@ function NodeCandidateTable({
                   </span>
                 </td>
                 <td>
-                  {String(
+                  {reasonLabel(
                     reasons.get(candidate.member_index) ??
                       candidate.last_reason ??
                       '—',
@@ -193,8 +199,8 @@ function NodeCandidateTable({
                 {typeof entry.member_index === 'number'
                   ? entry.member_index + 1
                   : '—'}{' '}
-                · причина <code>{String(entry.reason ?? 'unknown')}</code> ·
-                раунд {String(entry.selection_round ?? 0)}
+                · причина <code>{reasonLabel(entry.reason)}</code> · раунд{' '}
+                {String(entry.selection_round ?? 0)}
               </li>
             ))}
           </ol>

@@ -10,6 +10,7 @@ RunStart requests pin scenarios without rewriting immutable snapshots.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -47,7 +48,7 @@ def fake_worker(authenticated, settings) -> Iterator[subprocess.Popen[bytes]]:
         while time.monotonic() < deadline:
             with engine.connect() as connection:
                 last_seen = connection.execute(
-                    text("SELECT last_seen_at FROM worker_heartbeat")
+                    text("SELECT last_seen_at FROM worker_heartbeat WHERE status='running'")
                 ).scalar()
             if last_seen:
                 break
@@ -465,7 +466,19 @@ def test_runner_writes_candidate_selection_events(fake_worker, authenticated, tm
     assert payload["model_id"] == "m"
 
 
-def test_runner_selects_first_group_member(fake_worker, authenticated, tmp_path):
+@pytest.mark.parametrize("kind", ["agent", "llm"])
+@pytest.mark.parametrize(
+    "schedule_enabled,allowed,expected_index",
+    [
+        (None, True, 0),
+        (True, True, 0),
+        (True, False, 1),
+        (False, False, 0),
+    ],
+)
+def test_runner_selects_first_group_member(
+    fake_worker, authenticated, tmp_path, kind, schedule_enabled, allowed, expected_index
+):
     """An agent group emits candidate_selected for the first enabled member."""
 
     client, headers = authenticated
@@ -486,14 +499,38 @@ def test_runner_selects_first_group_member(fake_worker, authenticated, tmp_path)
         headers=headers,
         json={"name": "p2", "harness_kind": "codex", "settings": {}},
     ).json()
+    reference = "harness_profile_id"
+    if kind == "llm":
+        reference = "provider_connection_id"
+        p1, p2 = [
+            client.post(
+                "/api/connections",
+                headers=headers,
+                json={
+                    "name": name,
+                    "base_url": "https://example.invalid",
+                },
+            ).json()
+            for name in ("c1", "c2")
+        ]
+    schedule = (
+        None
+        if schedule_enabled is None
+        else {
+            "enabled": schedule_enabled,
+            "same_every_day": True,
+            "timezone": "UTC",
+            "days": [[allowed] * 24],
+        }
+    )
     group = client.post(
-        "/api/model_groups/agent",
+        f"/api/model_groups/{kind}",
         headers=headers,
         json={
             "name": "heavy",
             "members": [
-                {"harness_profile_id": p1["id"], "model_id": "alpha"},
-                {"harness_profile_id": p2["id"], "model_id": "beta"},
+                {reference: p1["id"], "model_id": "alpha", "schedule": schedule},
+                {reference: p2["id"], "model_id": "beta"},
             ],
         },
     ).json()
@@ -503,7 +540,7 @@ def test_runner_selects_first_group_member(fake_worker, authenticated, tmp_path)
             {"id": "s", "type": "Start"},
             {
                 "id": "impl",
-                "type": "AgentTask",
+                "type": "AgentTask" if kind == "agent" else "LLMRequest",
                 "config": {
                     "role": "dev",
                     "prompt": "x",
@@ -538,12 +575,21 @@ def test_runner_selects_first_group_member(fake_worker, authenticated, tmp_path)
             "message": "go",
         },
     ).json()
-    _wait_for_terminal(client, headers, run["id"])
+    result = _wait_for_terminal(client, headers, run["id"])
+    assert result["state"] == "completed", result
     events = client.get(f"/api/runs/{run['id']}/events", headers=headers).json()
     selected = [e for e in events["events"] if e["type"] == "model_group.candidate_selected"]
     assert selected
-    assert selected[0]["payload"]["model_id"] == "alpha"
-    assert selected[0]["payload"]["member_index"] == 0
+    assert selected[0]["payload"]["model_id"] == ("alpha" if expected_index == 0 else "beta")
+    assert selected[0]["payload"]["member_index"] == expected_index
+    with client.app.state.session_factory() as session:
+        from agents_ide.persistence.models import Run
+
+        snapshot = json.loads(session.get(Run, run["id"]).snapshot_json)
+        assert snapshot["dependencies"]["nodes"]["impl"]["candidates"][0]["schedule"] == schedule
+    if expected_index == 1:
+        skipped = [e for e in events["events"] if e["type"] == "model_group.candidate_skipped"]
+        assert skipped[0]["payload"]["reason"] == "outside_schedule"
 
 
 def test_business_failure_is_a_successful_call(fake_worker, authenticated, tmp_path):

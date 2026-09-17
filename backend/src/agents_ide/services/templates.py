@@ -27,6 +27,7 @@ from agents_ide.domain.schemas import (
     PipelineDraft,
     PipelineDraftUpdate,
     PipelineTemplate,
+    PipelineTemplateCopy,
     PipelineTemplateCreate,
     PipelineTemplateUpdate,
     PipelineVersion,
@@ -156,6 +157,58 @@ def copy_preset_to_user_template(
         return template_from_model(model)
 
     return ensure_unique(session, _add)
+
+
+def copy_template(
+    session: Session, template_id: str, payload: PipelineTemplateCopy
+) -> PipelineTemplate:
+    """Copy the saved draft and latest immutable version in one transaction."""
+    begin_write(session)
+    source = get_or_404(session, PipelineTemplateModel, template_id)
+    if source.version != payload.expected_version:
+        raise AppError("version_conflict", "Шаблон изменён в другом месте", 409)
+    if source.archived_at is not None:
+        raise AppError("template_archived", "Архивный шаблон недоступен", 409)
+    assert_safe_name(payload.name)
+    now = utc_now()
+    model = PipelineTemplateModel(
+        id=new_id(),
+        name=payload.name,
+        description=source.description,
+        kind="user",
+        schema_version=source.schema_version,
+        draft_json=source.draft_json,
+        version=1,
+        created_at=now,
+        updated_at=now,
+    )
+    latest = session.scalar(
+        select(PipelineVersionModel)
+        .where(PipelineVersionModel.template_id == source.id)
+        .order_by(PipelineVersionModel.version_number.desc())
+        .limit(1)
+    )
+    session.add(model)
+    session.flush()
+    if latest is not None:
+        session.add(
+            PipelineVersionModel(
+                id=new_id(),
+                template_id=model.id,
+                version_number=1,
+                schema_version=latest.schema_version,
+                required_features_json=latest.required_features_json,
+                graph_json=latest.graph_json,
+                execution_hash=latest.execution_hash,
+                policy_hash=latest.policy_hash,
+                inputs_json=latest.inputs_json,
+                settings_json=latest.settings_json,
+                origin=latest.origin,
+                created_at=now,
+            )
+        )
+    session.flush()
+    return template_from_model(model)
 
 
 def get_template(session: Session, template_id: str) -> PipelineTemplate:

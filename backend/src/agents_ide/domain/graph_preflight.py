@@ -277,6 +277,15 @@ def preflight(
     for node in graph["nodes"]:
         node_id = node["id"]
         config = dependencies["nodes"][node_id]
+        if node["type"] == "GitCommit" and config.get("generate_message"):
+            _candidates(
+                session,
+                {**node, "type": "LLMRequest"},
+                config["message_generation"],
+                dependencies,
+                configuration,
+                report,
+            )
         if node["type"] in ("AgentTask", "LLMRequest"):
             _candidates(session, node, config, dependencies, configuration, report)
             if single_agent is not None:

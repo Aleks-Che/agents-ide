@@ -54,11 +54,13 @@ test('library copies a preset and creates a project binding from its immutable v
 }) => {
   await pair(page)
   const p = await project(page)
-  await page.getByRole('button', { name: 'Библиотека', exact: true }).click()
+  await page.getByRole('button', { name: 'Шаблоны', exact: true }).click()
   await page
-    .getByRole('button', { name: 'Копировать', exact: true })
+    .locator('.profile-item')
+    .filter({ has: page.getByText('встроенный', { exact: true }) })
     .first()
-    .click()
+    .click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Копировать', exact: true }).click()
   const dialog = page.getByRole('dialog')
   const name = `Copy ${uid()}`
   await dialog.getByLabel('Название шаблона').fill(name)
@@ -67,8 +69,8 @@ test('library copies a preset and creates a project binding from its immutable v
   await page
     .locator('li.profile-item')
     .filter({ has: page.getByText(name, { exact: true }) })
-    .getByRole('button', { name: 'Версии…' })
-    .click()
+    .click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Версии', exact: true }).click()
   await dialog.getByLabel('Название новой привязки').fill(`${name} binding`)
   await dialog.getByRole('button', { name: 'Создать привязку v1' }).click()
   await expect(dialog.getByLabel('Название', { exact: true })).toHaveValue(
@@ -109,7 +111,7 @@ test('binding editor preserves drafts on conflict and repairs an archived group'
     'POST',
     `/model_groups/${group.id}/archive?expected_revision=${group.revision}`,
   )
-  await page.getByRole('button', { name: 'Библиотека', exact: true }).click()
+  await page.getByRole('button', { name: 'Шаблоны', exact: true }).click()
   await page.getByRole('button', { name: 'Параметры…' }).click()
   const dialog = page.getByRole('dialog')
   await expect(

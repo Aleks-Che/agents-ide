@@ -14,35 +14,56 @@ import { Modal } from '../../app/Modal'
 import { useCsrfToken } from '../../app/session'
 import { launchError, uncertainStart } from '../runs/launch'
 
-const blankMember = (role: 'participant' | 'merger'): PlanningMemberSpec => ({
-  role,
-  selection: { kind: 'direct', model_id: '', provider_connection_id: '' },
-})
+import { CouncilMemberEditor } from './CouncilMemberEditor'
+import {
+  blankMember,
+  isAgentSelection,
+  validCouncilMember,
+} from './council_members'
 
-type ResourceKind = 'llm' | 'agent'
+export function CouncilPanel(props: {
+  projectId: string
+  chatId: string | null
+  open: boolean
+  onClose: () => void
+  onLaunched: (job: PlanningJobView) => void
+}) {
+  const defaults = useQuery({
+    queryKey: ['council-defaults'],
+    queryFn: planningApi.defaults,
+    refetchOnMount: 'always',
+  })
+  if (!defaults.data || !defaults.isFetchedAfterMount)
+    return (
+      <Modal onClose={props.onClose} label="Совместное планирование">
+        <div className="dialog">
+          {defaults.error ? (
+            <p role="alert">{launchError(defaults.error)}</p>
+          ) : (
+            <p role="status">Загружаем состав совета…</p>
+          )}
+          {defaults.error ? (
+            <button onClick={() => void defaults.refetch()}>
+              Повторить загрузку
+            </button>
+          ) : null}
+          <button onClick={props.onClose}>Закрыть</button>
+        </div>
+      </Modal>
+    )
+  return (
+    <CouncilPanelForm {...props} defaults={defaults.data.participants ?? []} />
+  )
+}
 
-const isAgentSelection = (
-  selection: PlanningMemberSpec['selection'],
-): selection is {
-  kind: 'direct'
-  model_id: string
-  harness_profile_id: string
-} => 'harness_profile_id' in selection
-
-const isLLMSelection = (
-  selection: PlanningMemberSpec['selection'],
-): selection is {
-  kind: 'direct'
-  model_id: string
-  provider_connection_id: string
-} => 'provider_connection_id' in selection
-
-export function CouncilPanel({
+function CouncilPanelForm({
+  defaults,
   projectId,
   chatId,
   onClose,
   onLaunched,
 }: {
+  defaults: PlanningMemberSpec[]
   projectId: string
   chatId: string | null
   open: boolean
@@ -54,9 +75,15 @@ export function CouncilPanel({
   const [contextText, setContextText] = useState('')
   const [contextPaths, setContextPaths] = useState('')
   const [participants, setParticipants] = useState(() =>
-    Array.from({ length: 3 }, () => blankMember('participant')),
+    defaults.length
+      ? defaults.filter((member) => member.role === 'participant')
+      : Array.from({ length: 3 }, () => blankMember('participant')),
   )
-  const [merger, setMerger] = useState(() => blankMember('merger'))
+  const [merger, setMerger] = useState(
+    () =>
+      defaults.find((member) => member.role === 'merger') ??
+      blankMember('merger'),
+  )
   const key = `agents-ide.council-pending.${projectId}.${chatId}`
   const [stored] = useState(() => {
     try {
@@ -111,18 +138,7 @@ export function CouncilPanel({
       }
     },
   })
-  const valid = (spec: PlanningMemberSpec) =>
-    spec.selection.kind === 'group'
-      ? Boolean(spec.selection.group_id)
-      : isAgentSelection(spec.selection)
-        ? Boolean(
-            spec.selection.model_id.trim() && spec.selection.harness_profile_id,
-          )
-        : Boolean(
-            isLLMSelection(spec.selection) &&
-            spec.selection.model_id.trim() &&
-            spec.selection.provider_connection_id,
-          )
+  const valid = validCouncilMember
   const selectedSpecs = pending?.participants ?? [...participants, merger]
   const hasHarness = selectedSpecs.some(
     ({ selection }) =>
@@ -137,225 +153,15 @@ export function CouncilPanel({
     spec: PlanningMemberSpec,
     title: string,
     onChange: (next: PlanningMemberSpec) => void,
-  ) => {
-    const directKind: ResourceKind = isAgentSelection(spec.selection)
-      ? 'agent'
-      : 'llm'
-    const showHarnesses = () =>
-      (resources.data?.harnesses ?? [])
-        .filter((h) => !h.archived && h.harness_kind !== undefined)
-        .map((h) => ({
-          id: h.id,
-          name: `${h.name} (${h.harness_kind})`,
-        }))
-    return (
-      <fieldset className="council-member" disabled={locked}>
-        <legend>{title}</legend>
-        <label>
-          Тип выбора
-          <select
-            value={spec.selection.kind}
-            onChange={(e) => {
-              const kind = e.target.value
-              if (kind === 'group') {
-                onChange({
-                  role: spec.role,
-                  selection: { kind: 'group', group_id: '' },
-                })
-                return
-              }
-              if (directKind === 'agent') {
-                onChange({
-                  role: spec.role,
-                  selection: {
-                    kind: 'direct',
-                    model_id: '',
-                    harness_profile_id: '',
-                  },
-                })
-              } else {
-                onChange({
-                  role: spec.role,
-                  selection: {
-                    kind: 'direct',
-                    model_id: '',
-                    provider_connection_id: '',
-                  },
-                })
-              }
-            }}
-          >
-            <option value="direct">Прямая модель</option>
-            <option value="group">Группа</option>
-          </select>
-        </label>
-        {spec.selection.kind === 'direct' ? (
-          <label>
-            Подтип
-            <select
-              value={directKind}
-              onChange={(e) => {
-                const next: ResourceKind = e.target.value as ResourceKind
-                if (next === 'agent') {
-                  onChange({
-                    ...spec,
-                    selection: {
-                      kind: 'direct',
-                      model_id:
-                        spec.selection.kind === 'direct'
-                          ? spec.selection.model_id
-                          : '',
-                      harness_profile_id: '',
-                    },
-                  })
-                } else {
-                  onChange({
-                    ...spec,
-                    selection: {
-                      kind: 'direct',
-                      model_id:
-                        spec.selection.kind === 'direct'
-                          ? spec.selection.model_id
-                          : '',
-                      provider_connection_id: '',
-                    },
-                  })
-                }
-              }}
-            >
-              <option value="llm">LLM</option>
-              <option value="agent">Агент (Codex/OpenCode)</option>
-            </select>
-          </label>
-        ) : null}
-        {spec.selection.kind === 'group' ? (
-          <label>
-            Группа
-            <select
-              value={spec.selection.group_id}
-              onChange={(e) =>
-                onChange({
-                  ...spec,
-                  selection: { kind: 'group', group_id: e.target.value },
-                })
-              }
-            >
-              <option value="">Выберите группу</option>
-              {resources.data?.groups
-                .filter((g) => !g.archived)
-                .map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name} ({g.kind === 'agent' ? 'агент' : 'LLM'})
-                  </option>
-                ))}
-            </select>
-          </label>
-        ) : directKind === 'agent' ? (
-          <>
-            <label>
-              Модель
-              <input
-                value={spec.selection.model_id}
-                onChange={(e) =>
-                  onChange({
-                    ...spec,
-                    selection: {
-                      ...spec.selection,
-                      model_id: e.target.value,
-                    } as PlanningMemberSpec['selection'],
-                  })
-                }
-              />
-            </label>
-            <label>
-              Профиль harness
-              <select
-                value={
-                  isAgentSelection(spec.selection)
-                    ? spec.selection.harness_profile_id
-                    : ''
-                }
-                onChange={(e) =>
-                  onChange({
-                    ...spec,
-                    selection: {
-                      kind: 'direct',
-                      model_id:
-                        spec.selection.kind === 'direct'
-                          ? spec.selection.model_id
-                          : '',
-                      harness_profile_id: e.target.value,
-                    },
-                  })
-                }
-              >
-                <option value="">Выберите профиль</option>
-                {showHarnesses().map((h) => (
-                  <option key={h.id} value={h.id}>
-                    {h.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="hint">
-              На Windows поддерживаются Codex в режиме чтения и OpenCode без
-              инструментов. Каждый участник получает отдельную сессию.
-            </p>
-          </>
-        ) : (
-          <>
-            <label>
-              Модель
-              <input
-                value={spec.selection.model_id}
-                onChange={(e) =>
-                  onChange({
-                    ...spec,
-                    selection: {
-                      ...spec.selection,
-                      model_id: e.target.value,
-                    } as PlanningMemberSpec['selection'],
-                  })
-                }
-              />
-            </label>
-            <label>
-              Подключение
-              <select
-                value={
-                  isLLMSelection(spec.selection)
-                    ? spec.selection.provider_connection_id
-                    : ''
-                }
-                onChange={(e) =>
-                  onChange({
-                    ...spec,
-                    selection: {
-                      kind: 'direct',
-                      model_id:
-                        spec.selection.kind === 'direct'
-                          ? spec.selection.model_id
-                          : '',
-                      provider_connection_id: e.target.value,
-                    },
-                  })
-                }
-              >
-                <option value="">Выберите подключение</option>
-                {resources.data?.providers
-                  .filter((p) => !p.archived)
-                  .map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-          </>
-        )}
-      </fieldset>
-    )
-  }
+  ) => (
+    <CouncilMemberEditor
+      spec={spec}
+      title={title}
+      onChange={onChange}
+      resources={resources.data}
+      locked={locked}
+    />
+  )
   return (
     <Modal onClose={onClose} busy={create.isPending} labelledBy="council-title">
       <div className="dialog wide council-dialog">

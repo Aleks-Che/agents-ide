@@ -1,5 +1,6 @@
 import { EditorError } from './EditorError'
 import { MemberParamsEditor, type ParamDraft } from './MemberParamsEditor'
+import { ModelScheduleEditor, type ModelSchedule } from './ModelScheduleEditor'
 import { validateParamValue } from './model_params'
 import { Modal } from '../../app/Modal'
 import { useMemo, useState } from 'react'
@@ -9,6 +10,8 @@ import { groupsApi, harnessApi, connectionsApi } from '../../api/settings'
 import type { ModelGroup } from '../../api/settings'
 import { formatDateTime } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
+import { HarnessModelSelect } from './HarnessModelSelect'
+import { useInstalledHarnesses } from './harness_queries'
 
 type GroupKind = 'agent' | 'llm'
 
@@ -70,7 +73,7 @@ export function ModelGroupsPanel() {
         sourceNames={Object.fromEntries(
           (sources.data ?? []).map((source) => [
             source.id,
-            `${source.name}${source.archived ? ' · архив' : ''}`,
+            `${'harness_kind' in source ? (source.harness_kind === 'codex' ? 'Codex' : 'OpenCode') : source.name}${source.archived ? ' · архив' : ''}`,
           ]),
         )}
         groups={groups.data ?? []}
@@ -179,6 +182,9 @@ function GroupList({
                 {!member.enabled ? (
                   <span className="muted">отключён</span>
                 ) : null}
+                {member.schedule?.enabled ? (
+                  <span className="pill">по расписанию</span>
+                ) : null}
               </li>
             ))}
           </ol>
@@ -215,11 +221,7 @@ function CreateGroupDialog({
   const csrf = useCsrfToken()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const harnesses = useQuery({
-    queryKey: ['harness_profiles', { includeArchived: false }],
-    queryFn: () => harnessApi.list({ includeArchived: false }),
-    enabled: kind === 'agent',
-  })
+  const harnesses = useInstalledHarnesses(kind === 'agent')
   const connections = useQuery({
     queryKey: ['connections', { includeArchived: false }],
     queryFn: () => connectionsApi.list({ includeArchived: false }),
@@ -228,6 +230,8 @@ function CreateGroupDialog({
   const [profileId, setProfileId] = useState('')
   const [connectionId, setConnectionId] = useState('')
   const [modelId, setModelId] = useState('')
+  const [modelValid, setModelValid] = useState(false)
+  const [schedule, setSchedule] = useState<ModelSchedule | null>(null)
   const createAgent = useMutation({
     mutationFn: () =>
       groupsApi.createAgent(
@@ -239,6 +243,7 @@ function CreateGroupDialog({
               enabled: true,
               harness_profile_id: profileId,
               model_id: modelId.trim(),
+              schedule,
             },
           ],
         },
@@ -257,6 +262,7 @@ function CreateGroupDialog({
               enabled: true,
               provider_connection_id: connectionId,
               model_id: modelId.trim(),
+              schedule,
             },
           ],
         },
@@ -268,9 +274,9 @@ function CreateGroupDialog({
   const ready = useMemo(() => {
     if (!csrf) return false
     if (!name.trim() || !modelId.trim()) return false
-    if (kind === 'agent') return Boolean(profileId)
+    if (kind === 'agent') return Boolean(profileId) && modelValid
     return Boolean(connectionId)
-  }, [csrf, name, modelId, kind, profileId, connectionId])
+  }, [csrf, name, modelId, kind, profileId, connectionId, modelValid])
 
   return (
     <Modal
@@ -282,7 +288,7 @@ function CreateGroupDialog({
         className="dialog"
         onSubmit={(event) => {
           event.preventDefault()
-          create.mutate()
+          if (ready) create.mutate()
         }}
       >
         <header>
@@ -308,19 +314,23 @@ function CreateGroupDialog({
         />
         {kind === 'agent' ? (
           <>
-            <label htmlFor="group-harness">Harness-профиль</label>
+            <label htmlFor="group-harness">Harness</label>
             <select
               id="group-harness"
               required
               value={profileId}
-              onChange={(event) => setProfileId(event.target.value)}
+              onChange={(event) => {
+                setProfileId(event.target.value)
+                setModelId('')
+                setModelValid(false)
+              }}
             >
               <option value="" disabled>
-                Выберите профиль
+                Выберите harness
               </option>
               {(harnesses.data ?? []).map((profile) => (
                 <option key={profile.id} value={profile.id}>
-                  {profile.name}
+                  {profile.harness_kind === 'codex' ? 'Codex' : 'OpenCode'}
                 </option>
               ))}
             </select>
@@ -345,21 +355,30 @@ function CreateGroupDialog({
             </select>
           </>
         )}
-        <label htmlFor="group-model">ID модели</label>
-        <input
-          id="group-model"
-          list="group-model-options"
-          required
-          value={modelId}
-          onChange={(event) => setModelId(event.target.value)}
-          spellCheck={false}
-          placeholder="например, gpt-4.1 или minimax-coding-plan/MiniMax-M3"
-        />
-        <datalist id="group-model-options">
-          {(kind === 'agent'
-            ? (harnesses.data?.find((profile) => profile.id === profileId)
-                ?.catalog_models ?? [])
-            : [
+        <label htmlFor="group-model">
+          {kind === 'agent' ? 'Модель harness' : 'ID модели'}
+        </label>
+        {kind === 'agent' ? (
+          <HarnessModelSelect
+            id="group-model"
+            harness={harnesses.data?.find((h) => h.id === profileId)}
+            value={modelId}
+            onChange={setModelId}
+            onValidityChange={setModelValid}
+          />
+        ) : (
+          <>
+            <input
+              id="group-model"
+              list="group-model-options"
+              required
+              value={modelId}
+              onChange={(event) => setModelId(event.target.value)}
+              spellCheck={false}
+              placeholder="например, gpt-4.1 или minimax-coding-plan/MiniMax-M3"
+            />
+            <datalist id="group-model-options">
+              {[
                 ...new Set([
                   ...(connections.data?.find(
                     (connection) => connection.id === connectionId,
@@ -368,16 +387,20 @@ function CreateGroupDialog({
                     (connection) => connection.id === connectionId,
                   )?.manual_models ?? []),
                 ]),
-              ]
-          ).map((model) => (
-            <option key={model} value={model} />
-          ))}
-        </datalist>
+              ].map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
+          </>
+        )}
         <p className="hint">
-          Укажите точный ID модели или выберите подсказку из каталога. Наличие в
-          каталоге не подтверждает доступ. Порядок, состав и параметры
-          кандидатов можно изменить после создания кнопкой «Параметры…».
+          {kind === 'agent'
+            ? 'Выберите harness и модель из её каталога. Одну harness можно добавить несколько раз с разными моделями.'
+            : 'Укажите точный ID модели или выберите подсказку из каталога.'}{' '}
+          Порядок, состав и параметры кандидатов можно изменить после создания
+          кнопкой «Параметры…».
         </p>
+        <ModelScheduleEditor value={schedule} onChange={setSchedule} />
         {(kind === 'agent' ? harnesses.isLoading : connections.isLoading) ? (
           <p role="status">Загружаем источники моделей…</p>
         ) : null}
@@ -394,8 +417,9 @@ function CreateGroupDialog({
             : connections.data?.length === 0
         ) ? (
           <p className="hint">
-            Сначала создайте{' '}
-            {kind === 'agent' ? 'harness-профиль' : 'LLM-подключение'}.
+            {kind === 'agent'
+              ? 'Установите Codex или OpenCode и обновите список harness в настройках.'
+              : 'Сначала создайте LLM-подключение.'}
           </p>
         ) : null}
         {create.error ? (
@@ -432,6 +456,7 @@ interface EditableMember {
   profileId: string
   connectionId: string
   params: Record<string, unknown>
+  schedule: ModelSchedule | null
 }
 
 function EditGroupDialog({ groupId, onClose, onSaved }: EditGroupDialogProps) {
@@ -495,11 +520,7 @@ function EditGroupForm({
   const client = useQueryClient()
   const [group, setGroup] = useState(initial)
   const csrf = useCsrfToken()
-  const harnesses = useQuery({
-    queryKey: ['harness_profiles', { includeArchived: false }],
-    queryFn: () => harnessApi.list({ includeArchived: false }),
-    enabled: group.kind === 'agent',
-  })
+  const harnesses = useInstalledHarnesses(group.kind === 'agent')
   const connections = useQuery({
     queryKey: ['connections', { includeArchived: false }],
     queryFn: () => connectionsApi.list({ includeArchived: false }),
@@ -516,25 +537,33 @@ function EditGroupForm({
       profileId: member.harness_profile_id ?? '',
       connectionId: member.provider_connection_id ?? '',
       params: member.params,
+      schedule: member.schedule ?? null,
     })),
   )
   const [expandedParams, setExpandedParams] = useState<Record<string, boolean>>(
     {},
   )
   const [paramDrafts, setParamDrafts] = useState<Record<string, ParamDraft>>({})
+  const [modelValidity, setModelValidity] = useState<Record<string, boolean>>(
+    {},
+  )
 
   function accept(updated: ModelGroup) {
     setGroup(updated)
     client.setQueryData(['model_group', updated.id], updated)
     void client.invalidateQueries({ queryKey: ['model_groups'] })
   }
-  function acceptMetadata(updated: ModelGroup) {
+  function acceptSaved(updated: ModelGroup) {
+    const expanded = Object.fromEntries(
+      updated.members.map((member, index) => [
+        member.id,
+        Boolean(expandedParams[members[index]?.key]),
+      ]),
+    )
     accept(updated)
     setName(updated.name)
     setDescription(updated.description)
-  }
-  function acceptMembers(updated: ModelGroup) {
-    accept(updated)
+    setExpandedParams(expanded)
     setParamDrafts({})
     setMembers(
       updated.members.map((member) => ({
@@ -545,71 +574,50 @@ function EditGroupForm({
         profileId: member.harness_profile_id ?? '',
         connectionId: member.provider_connection_id ?? '',
         params: member.params,
+        schedule: member.schedule ?? null,
       })),
     )
   }
 
-  const renameAgent = useMutation({
-    mutationFn: () =>
-      groupsApi.updateAgent(
-        group.id,
-        {
-          expected_revision: group.revision,
-          name: name.trim() || null,
-          description: description.trim(),
-        },
-        csrf,
-      ),
-    onSuccess: acceptMetadata,
-  })
-  const renameLLM = useMutation({
-    mutationFn: () =>
-      groupsApi.updateLLM(
-        group.id,
-        {
-          expected_revision: group.revision,
-          name: name.trim() || null,
-          description: description.trim(),
-        },
-        csrf,
-      ),
-    onSuccess: acceptMetadata,
-  })
-  const replaceAgentMembers = useMutation({
-    mutationFn: () =>
-      groupsApi.replaceAgentMembers(
-        group.id,
-        {
-          expected_revision: group.revision,
-          members: members.map((member) => ({
-            id: member.id,
-            enabled: member.enabled,
-            harness_profile_id: member.profileId,
-            model_id: member.modelId.trim(),
-            params: member.params,
-          })),
-        },
-        csrf,
-      ),
-    onSuccess: acceptMembers,
-  })
-  const replaceLLMMembers = useMutation({
-    mutationFn: () =>
-      groupsApi.replaceLLMMembers(
-        group.id,
-        {
-          expected_revision: group.revision,
-          members: members.map((member) => ({
-            id: member.id,
-            enabled: member.enabled,
-            provider_connection_id: member.connectionId,
-            model_id: member.modelId.trim(),
-            params: member.params,
-          })),
-        },
-        csrf,
-      ),
-    onSuccess: acceptMembers,
+  const save = useMutation({
+    mutationFn: () => {
+      const metadata = {
+        expected_revision: group.revision,
+        name: name.trim(),
+        description: description.trim(),
+      }
+      const candidates = members.map((member) => ({
+        id: member.id,
+        enabled: member.enabled,
+        model_id: member.modelId.trim(),
+        params: member.params,
+        schedule: member.schedule,
+      }))
+      return group.kind === 'agent'
+        ? groupsApi.updateAgent(
+            group.id,
+            {
+              ...metadata,
+              members: candidates.map((member, index) => ({
+                ...member,
+                harness_profile_id: members[index].profileId,
+              })),
+            },
+            csrf,
+          )
+        : groupsApi.updateLLM(
+            group.id,
+            {
+              ...metadata,
+              members: candidates.map((member, index) => ({
+                ...member,
+                provider_connection_id: members[index].connectionId,
+              })),
+            },
+            csrf,
+          )
+    },
+    onSuccess: acceptSaved,
   })
   const archive = useMutation({
     mutationFn: () => groupsApi.archive(group.id, group.revision, csrf),
@@ -633,9 +641,6 @@ function EditGroupForm({
   })
 
   const kind = group.kind
-  const rename = kind === 'agent' ? renameAgent : renameLLM
-  const replaceMembers =
-    kind === 'agent' ? replaceAgentMembers : replaceLLMMembers
   const paramsValid = members.every((member) =>
     Object.entries(member.params).every(([name, value]) => {
       const draft = paramDrafts[`${member.key}:${name}`]
@@ -644,24 +649,44 @@ function EditGroupForm({
     }),
   )
   const validMembers =
+    members.some((member) => member.enabled) &&
     members.every(
       (member) =>
         member.modelId.trim() &&
-        (kind === 'agent' ? member.profileId : member.connectionId),
-    ) && paramsValid
+        (kind === 'agent'
+          ? member.profileId &&
+            (modelValidity[member.key] ||
+              group.members.some(
+                (original) =>
+                  original.id === member.id &&
+                  original.harness_profile_id === member.profileId &&
+                  original.model_id === member.modelId,
+              ))
+          : member.connectionId),
+    ) &&
+    paramsValid
   const metadataDirty =
     name.trim() !== group.name || description.trim() !== group.description
   const membersDirty =
     !paramsValid ||
     JSON.stringify(
       members.map(
-        ({ id, enabled, modelId, profileId, connectionId, params }) => ({
+        ({
           id,
           enabled,
           modelId,
           profileId,
           connectionId,
           params,
+          schedule,
+        }) => ({
+          id,
+          enabled,
+          modelId,
+          profileId,
+          connectionId,
+          params,
+          schedule,
         }),
       ),
     ) !==
@@ -673,6 +698,7 @@ function EditGroupForm({
           profileId: member.harness_profile_id ?? '',
           connectionId: member.provider_connection_id ?? '',
           params: member.params,
+          schedule: member.schedule ?? null,
         })),
       )
 
@@ -732,6 +758,7 @@ function EditGroupForm({
         profileId: kind === 'agent' ? (harnesses.data?.[0]?.id ?? '') : '',
         connectionId: kind === 'llm' ? (connections.data?.[0]?.id ?? '') : '',
         params: {},
+        schedule: null,
       },
     ])
   }
@@ -739,18 +766,18 @@ function EditGroupForm({
   return (
     <Modal
       onClose={onClose}
-      busy={
-        rename.isPending ||
-        replaceMembers.isPending ||
-        archive.isPending ||
-        copyGroup.isPending
-      }
+      busy={save.isPending || archive.isPending || copyGroup.isPending}
       labelledBy="group-edit-title"
     >
-      <div className="dialog wide">
+      <div className="dialog wide group-settings-dialog">
         <header>
           <h3 id="group-edit-title">{group.name}</h3>
-          <button type="button" className="quiet" onClick={onClose}>
+          <button
+            type="button"
+            className="quiet"
+            aria-label="Закрыть настройки группы"
+            onClick={onClose}
+          >
             ×
           </button>
         </header>
@@ -792,10 +819,14 @@ function EditGroupForm({
                     <span className="member-index">{index + 1}</span>
                     {kind === 'agent' ? (
                       <select
-                        aria-label="Harness-профиль"
+                        aria-label="Harness"
                         value={member.profileId}
                         onChange={(event) =>
-                          updateMember(index, { profileId: event.target.value })
+                          updateMember(index, {
+                            profileId: event.target.value,
+                            modelId: '',
+                            params: {},
+                          })
                         }
                       >
                         {!harnesses.data?.some(
@@ -803,12 +834,14 @@ function EditGroupForm({
                         ) ? (
                           <option value={member.profileId}>
                             Недоступен ·{' '}
-                            {member.profileId || 'выберите профиль'}
+                            {member.profileId || 'выберите harness'}
                           </option>
                         ) : null}
                         {(harnesses.data ?? []).map((profile) => (
                           <option key={profile.id} value={profile.id}>
-                            {profile.name}
+                            {profile.harness_kind === 'codex'
+                              ? 'Codex'
+                              : 'OpenCode'}
                           </option>
                         ))}
                       </select>
@@ -837,14 +870,33 @@ function EditGroupForm({
                         ))}
                       </select>
                     )}
-                    <input
-                      aria-label="ID модели"
-                      value={member.modelId}
-                      spellCheck={false}
-                      onChange={(event) =>
-                        updateMember(index, { modelId: event.target.value })
-                      }
-                    />
+                    {kind === 'agent' ? (
+                      <HarnessModelSelect
+                        harness={harnesses.data?.find(
+                          (h) => h.id === member.profileId,
+                        )}
+                        value={member.modelId}
+                        onChange={(modelId) =>
+                          updateMember(index, { modelId, params: {} })
+                        }
+                        onValidityChange={(valid) =>
+                          setModelValidity((previous) =>
+                            previous[member.key] === valid
+                              ? previous
+                              : { ...previous, [member.key]: valid },
+                          )
+                        }
+                      />
+                    ) : (
+                      <input
+                        aria-label="ID модели"
+                        value={member.modelId}
+                        spellCheck={false}
+                        onChange={(event) =>
+                          updateMember(index, { modelId: event.target.value })
+                        }
+                      />
+                    )}
                     <label className="enabled-toggle">
                       <input
                         type="checkbox"
@@ -866,6 +918,7 @@ function EditGroupForm({
                         {Object.keys(member.params).length > 0
                           ? ` (${Object.keys(member.params).length})`
                           : ''}
+                        {member.schedule?.enabled ? ' · расписание' : ''}
                       </button>
                       <button
                         type="button"
@@ -895,36 +948,44 @@ function EditGroupForm({
                     </div>
                   </div>
                   {expandedParams[member.key] ? (
-                    <MemberParamsEditor
-                      memberKey={member.key}
-                      params={member.params}
-                      drafts={paramDrafts}
-                      supportedReasoningEfforts={(() => {
-                        const metadata = harnesses.data?.find(
-                          (profile) => profile.id === member.profileId,
-                        )?.model_capabilities?.[member.modelId]
-                        return Array.isArray(metadata?.reasoning_efforts)
-                          ? metadata.reasoning_efforts.filter(
-                              (value): value is string =>
-                                typeof value === 'string',
-                            )
-                          : undefined
-                      })()}
-                      harnessHint={
-                        Object.keys(member.params).length > 0 &&
-                        isUnverifiedHarnessProfile(member.profileId) &&
-                        !harnesses.data?.find(
-                          (profile) => profile.id === member.profileId,
-                        )?.model_capabilities?.[member.modelId]
-                      }
-                      onParams={(next, removed) => {
-                        updateMember(index, { params: next })
-                        if (removed) {
-                          setParamDraft(`${member.key}:${removed}`, null)
+                    <>
+                      <MemberParamsEditor
+                        memberKey={member.key}
+                        params={member.params}
+                        drafts={paramDrafts}
+                        supportedReasoningEfforts={(() => {
+                          const metadata = harnesses.data?.find(
+                            (profile) => profile.id === member.profileId,
+                          )?.model_capabilities?.[member.modelId]
+                          return Array.isArray(metadata?.reasoning_efforts)
+                            ? metadata.reasoning_efforts.filter(
+                                (value): value is string =>
+                                  typeof value === 'string',
+                              )
+                            : undefined
+                        })()}
+                        harnessHint={
+                          Object.keys(member.params).length > 0 &&
+                          isUnverifiedHarnessProfile(member.profileId) &&
+                          !harnesses.data?.find(
+                            (profile) => profile.id === member.profileId,
+                          )?.model_capabilities?.[member.modelId]
                         }
-                      }}
-                      onDraft={setParamDraft}
-                    />
+                        onParams={(next, removed) => {
+                          updateMember(index, { params: next })
+                          if (removed) {
+                            setParamDraft(`${member.key}:${removed}`, null)
+                          }
+                        }}
+                        onDraft={setParamDraft}
+                      />
+                      <ModelScheduleEditor
+                        value={member.schedule}
+                        onChange={(schedule) =>
+                          updateMember(index, { schedule })
+                        }
+                      />
+                    </>
                   ) : null}
                 </li>
               ))}
@@ -932,24 +993,18 @@ function EditGroupForm({
           )}
         </div>
         <p className="hint">
-          «Сохранить кандидатов» сохраняет порядок, состав и параметры;
-          «Сохранить» — название и описание. Остальные правки остаются в форме.
-          Для копирования сначала сохраните правки. Параметры агентов выбираются
-          из актуального каталога harness и повторно проверяются перед запуском.
-          Для LLM сервер проверяет общий набор и ограничения адаптера. Изменения
-          группы применятся только к новым Run.
+          «Сохранить» сохраняет название, описание, состав, порядок, параметры и
+          расписания. Для копирования сначала сохраните правки. Параметры
+          агентов выбираются из актуального каталога harness и повторно
+          проверяются перед запуском. Для LLM сервер проверяет общий набор и
+          ограничения адаптера. Изменения группы применятся только к новым Run.
         </p>
         {!paramsValid ? (
           <p className="error" role="alert">
             Исправьте параметры кандидатов перед сохранением.
           </p>
         ) : null}
-        {[
-          rename.error,
-          replaceMembers.error,
-          archive.error,
-          copyGroup.error,
-        ].map((error, index) => (
+        {[save.error, archive.error, copyGroup.error].map((error, index) => (
           <EditorError key={index} error={error} onReload={onReload} />
         ))}
         {(kind === 'agent' ? harnesses.error : connections.error) ? (
@@ -959,14 +1014,9 @@ function EditGroupForm({
             )}
           </p>
         ) : null}
-        {rename.isSuccess && !metadataDirty ? (
+        {save.isSuccess && !metadataDirty && !membersDirty ? (
           <p role="status" className="hint">
-            Название и описание сохранены.
-          </p>
-        ) : null}
-        {replaceMembers.isSuccess && !membersDirty ? (
-          <p role="status" className="hint">
-            Кандидаты сохранены.
+            Группа сохранена.
           </p>
         ) : null}
         <footer>
@@ -990,18 +1040,10 @@ function EditGroupForm({
           </button>
           <button
             type="button"
-            className="quiet"
-            onClick={() => replaceMembers.mutate()}
-            disabled={replaceMembers.isPending || !csrf || !validMembers}
+            onClick={() => save.mutate()}
+            disabled={save.isPending || !csrf || !name.trim() || !validMembers}
           >
-            {replaceMembers.isPending ? 'Обновляем…' : 'Сохранить кандидатов'}
-          </button>
-          <button
-            type="button"
-            onClick={() => rename.mutate()}
-            disabled={rename.isPending || !csrf || !name.trim()}
-          >
-            {rename.isPending ? 'Сохраняем…' : 'Сохранить'}
+            {save.isPending ? 'Сохраняем…' : 'Сохранить'}
           </button>
         </footer>
       </div>

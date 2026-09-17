@@ -51,6 +51,20 @@ class PlanningJobBudget(ApiModel):
     concurrency: int = Field(default=2, ge=1, le=4)
 
 
+class PlanningCouncilDefaults(ApiModel):
+    participants: list[PlanningMemberSpec] = Field(default_factory=list, max_length=4)
+    revision: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _composition(self) -> PlanningCouncilDefaults:
+        if self.participants:
+            if sum(member.role == "merger" for member in self.participants) != 1:
+                raise ValueError("Council requires exactly one merger")
+            if not 2 <= sum(member.role == "participant" for member in self.participants) <= 3:
+                raise ValueError("Council requires 2..3 participants besides the merger")
+        return self
+
+
 class PlanningJobCreate(ApiModel):
     project_id: str
     chat_id: str | None = None

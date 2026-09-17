@@ -18,7 +18,9 @@ from pydantic import (
     model_validator,
 )
 
+from agents_ide.domain.commit_messages import DEFAULT_COMMIT_MESSAGE_PROMPT
 from agents_ide.domain.contracts import RunState
+from agents_ide.domain.model_schedule import ModelSchedule
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1, max_length=120)]
 ShortStr = Annotated[str, StringConstraints(min_length=1, max_length=64)]
@@ -210,6 +212,39 @@ class DraftPublish(ApiModel):
 # ----------------------------------------------------------------------------- Pipeline templates
 
 
+class CommitMessageSettings(ApiModel):
+    connection_id: str = Field(default="", max_length=64)
+    model: str = Field(default="", max_length=256)
+    prompt: str = Field(default=DEFAULT_COMMIT_MESSAGE_PROMPT, min_length=1, max_length=8000)
+    language: Literal["ru", "en"] = "ru"
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("prompt", "connection_id", "model")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("prompt")
+    @classmethod
+    def _nonempty_prompt(cls, value: str) -> str:
+        if not value:
+            raise ValueError("Prompt must not be blank")
+        return value
+
+    @field_validator("params")
+    @classmethod
+    def _params(cls, value: dict[str, Any]) -> dict[str, Any]:
+        from agents_ide.domain.graph_validation import validate_parameters
+
+        validate_parameters(value)
+        return value
+
+
+class GeneralSettings(ApiModel):
+    commit_message: CommitMessageSettings = Field(default_factory=CommitMessageSettings)
+    revision: int = Field(default=0, ge=0)
+
+
 class PipelineTemplateCreate(ApiModel):
     name: NonEmptyStr
     description: str = Field(default="", max_length=4096)
@@ -219,6 +254,11 @@ class PipelineTemplateCreate(ApiModel):
 class PipelineTemplateUpdate(ApiModel):
     name: NonEmptyStr | None = None
     description: str | None = Field(default=None, max_length=4096)
+    expected_version: int = Field(ge=1)
+
+
+class PipelineTemplateCopy(ApiModel):
+    name: NonEmptyStr
     expected_version: int = Field(ge=1)
 
 
@@ -389,6 +429,7 @@ class ProviderConnection(ApiOutput):
 class ProviderTest(ApiOutput):
     status: Literal["ok", "failed"]
     models: list[str]
+    tested_model: str | None = None
     detail: str | None = None
     tested_at: datetime
 
@@ -482,6 +523,7 @@ class ModelGroupMemberBase(ApiModel):
     enabled: bool = True
     model_id: ModelID
     params: dict[str, Any] = Field(default_factory=dict)
+    schedule: ModelSchedule | None = None
 
     @field_validator("params")
     @classmethod
@@ -506,6 +548,7 @@ class ModelGroupMember(ApiOutput):
     provider_connection_id: str | None
     model_id: str
     params: dict[str, Any]
+    schedule: ModelSchedule | None = None
     revision: int
     updated_at: datetime
 
@@ -526,12 +569,14 @@ class ModelGroupAgentUpdate(ApiModel):
     name: NonEmptyStr | None = None
     description: str | None = Field(default=None, max_length=4096)
     expected_revision: int = Field(ge=1)
+    members: list[ModelGroupAgentMemberCreate] | None = Field(default=None, max_length=200)
 
 
 class ModelGroupLLMUpdate(ApiModel):
     name: NonEmptyStr | None = None
     description: str | None = Field(default=None, max_length=4096)
     expected_revision: int = Field(ge=1)
+    members: list[ModelGroupLLMMemberCreate] | None = Field(default=None, max_length=200)
 
 
 class ModelGroupAgentMembersReplace(ApiModel):

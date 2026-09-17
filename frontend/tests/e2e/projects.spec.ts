@@ -1,4 +1,129 @@
 import { test, expect, pair, workspace, api } from './support'
+import { readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+
+test('project context menu targets its project and removal preserves files and history', async ({
+  page,
+}) => {
+  await pair(page)
+  const first = await api(page, 'POST', '/projects', {
+    name: 'Opened project',
+    workspace_path: workspace(),
+  })
+  const directory = workspace()
+  const sentinel = path.join(directory, 'keep.txt')
+  writeFileSync(sentinel, 'Project files must remain', 'utf8')
+  const second = await api(page, 'POST', '/projects', {
+    name: 'Background project',
+    workspace_path: directory,
+  })
+  const chat = await api(page, 'POST', `/projects/${second.id}/chats`, {
+    title: 'Preserved history',
+  })
+  await page.reload()
+  const opened = page.getByRole('option', { name: /Opened project/ })
+  const background = page.getByRole('option', { name: /Background project/ })
+  await opened.click()
+  await expect(
+    page.getByRole('button', { name: 'Переименовать проект' }),
+  ).toHaveCount(0)
+  await background.click({ button: 'right' })
+  await expect(opened).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('menuitem', { name: 'Переименовать' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Переименовать проект' })
+  await expect(dialog.getByLabel('Название')).toHaveValue('Background project')
+  await dialog.getByLabel('Название').fill('Renamed background')
+  await dialog.getByRole('button', { name: 'Сохранить' }).click()
+  await expect(opened).toHaveAttribute('aria-selected', 'true')
+  const renamed = page.getByRole('option', { name: /Renamed background/ })
+  await renamed.focus()
+  await renamed.press('Shift+F10')
+  const menu = page.getByRole('menu', {
+    name: 'Действия с проектом «Renamed background»',
+  })
+  await expect(menu).toBeVisible()
+  await expect(
+    menu.getByRole('menuitem', { name: 'Переименовать' }),
+  ).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(
+    menu.getByRole('menuitem', { name: 'Удалить из списка' }),
+  ).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await expect(renamed).toBeFocused()
+  await renamed.click({ button: 'right' })
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  await expect(menu).toHaveCount(0)
+  await renamed.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Удалить из списка' }).click()
+  await expect(renamed).toHaveCount(0)
+  await expect(opened).toHaveAttribute('aria-selected', 'true')
+  expect(readFileSync(sentinel, 'utf8')).toBe('Project files must remain')
+  expect(
+    (await api(page, 'GET', `/projects/${second.id}`)).archived,
+  ).toBeTruthy()
+  expect((await api(page, 'GET', `/projects/${second.id}/chats`))[0].id).toBe(
+    chat.id,
+  )
+  await page.reload()
+  await expect(renamed).toHaveCount(0)
+  await opened.click()
+  await page.getByRole('button', { name: 'Запуски', exact: true }).click()
+  await opened.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Удалить из списка' }).click()
+  await expect(opened).toHaveCount(0)
+  await expect(
+    page.getByRole('button', { name: 'Диалоги', exact: true }),
+  ).toBeDisabled()
+  await expect(
+    page.getByRole('button', { name: 'Запуски', exact: true }),
+  ).toBeDisabled()
+  await expect(
+    page.getByRole('heading', { name: 'Состояние служб' }),
+  ).toBeVisible()
+  expect(
+    (await api(page, 'GET', `/projects/${first.id}`)).archived,
+  ).toBeTruthy()
+})
+
+test('failed project removal keeps the project selected and allows retry', async ({
+  page,
+}) => {
+  await pair(page)
+  const project = await api(page, 'POST', '/projects', {
+    name: 'Busy project',
+    workspace_path: workspace(),
+  })
+  await page.reload()
+  const option = page.getByRole('option', { name: /Busy project/ })
+  await option.click()
+  const archiveUrl = `**/api/projects/${project.id}/archive`
+  await page.route(archiveUrl, (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 'project_has_active_runs',
+        message: 'Активные Run препятствуют архивации проекта',
+      }),
+    }),
+  )
+  await option.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Удалить из списка' }).click()
+  await expect(page.getByRole('alert')).toContainText(
+    'Сначала завершите активные запуски проекта.',
+  )
+  await expect(option).toHaveAttribute('aria-selected', 'true')
+  expect((await api(page, 'GET', `/projects/${project.id}`)).archived).toBe(
+    false,
+  )
+  await page.unroute(archiveUrl)
+  await option.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Удалить из списка' }).click()
+  await expect(option).toHaveCount(0)
+  await expect(page.getByRole('alert')).toHaveCount(0)
+})
 
 test('history beyond 200 messages loads backwards and shows newly sent messages', async ({
   page,
@@ -62,7 +187,10 @@ test('project probe, rename, isolated chat drafts and archive the last chat', as
   await expect(
     page.getByRole('option', { name: /Demo workspace/ }),
   ).toBeVisible()
-  await page.getByRole('button', { name: 'Переименовать проект' }).click()
+  await page
+    .getByRole('option', { name: /Demo workspace/ })
+    .click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Переименовать' }).click()
   dialog = page.getByRole('dialog', { name: 'Переименовать проект' })
   await dialog.getByLabel('Название').fill('Renamed workspace')
   await dialog.getByRole('button', { name: 'Сохранить' }).click()

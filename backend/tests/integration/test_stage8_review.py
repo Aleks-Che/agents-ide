@@ -157,7 +157,16 @@ def provider(repository):
         thread.join()
 
 
-def start_preset(authenticated, repository, provider, *, inputs=None, roles=True, overrides=None):
+def start_preset(
+    authenticated,
+    repository,
+    provider,
+    *,
+    inputs=None,
+    roles=True,
+    overrides=None,
+    commit_generation=None,
+):
     client, headers = authenticated
     preset = client.get("/api/presets", headers=headers).json()[0]
     versions = client.get(f"/api/templates/{preset['template_id']}/versions", headers=headers)
@@ -168,6 +177,33 @@ def start_preset(authenticated, repository, provider, *, inputs=None, roles=True
     connection = client.post(
         "/api/connections", headers=headers, json={"name": "local", "base_url": provider}
     ).json()
+    version_id = versions.json()[0]["id"]
+    if commit_generation is not None:
+        version = versions.json()[0]
+        graph = version["graph"]
+        for node in graph["nodes"]:
+            if node["type"] == "GitCommit":
+                node["config"].update(
+                    generate_message=True,
+                    message_generation={
+                        "connection_id": connection["id"],
+                        **commit_generation,
+                    },
+                )
+        template = client.post(
+            "/api/templates", headers=headers, json={"name": "Generated commits"}
+        ).json()
+        created = client.post(
+            f"/api/templates/{template['id']}/versions",
+            headers=headers,
+            json={
+                "graph": graph,
+                "inputs": version["inputs"],
+                "settings": version["settings"],
+            },
+        )
+        assert created.status_code == 201, created.text
+        version_id = created.json()["id"]
     profile = client.post(
         "/api/harness_profiles",
         headers=headers,
@@ -187,7 +223,7 @@ def start_preset(authenticated, repository, provider, *, inputs=None, roles=True
         "provider_connection_id": connection["id"],
     }
     binding = client.post(
-        f"/api/versions/{versions.json()[0]['id']}/bindings",
+        f"/api/versions/{version_id}/bindings",
         headers=headers,
         json={
             "project_id": project["id"],

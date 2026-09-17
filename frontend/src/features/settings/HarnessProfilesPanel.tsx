@@ -1,434 +1,205 @@
-import { EditorError } from './EditorError'
-import { Modal } from '../../app/Modal'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ApiError } from '../../api/client'
-import { describeError, harnessApi } from '../../api/settings'
-import type { HarnessProfile } from '../../api/settings'
-import { formatDateTime } from '../../app/format'
+import { Modal } from '../../app/Modal'
 import { useCsrfToken } from '../../app/session'
+import {
+  describeError,
+  harnessApi,
+  type HarnessProfile,
+} from '../../api/settings'
+import { EditorError } from './EditorError'
+import { defaultHarnessModel, useInstalledHarnesses } from './harness_queries'
 
 export function HarnessProfilesPanel() {
-  const client = useQueryClient()
-  const [createOpen, setCreateOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const profiles = useQuery({
-    queryKey: ['harness_profiles', { includeArchived: false }],
-    queryFn: () => harnessApi.list({ includeArchived: false }),
-  })
-
+  const harnesses = useInstalledHarnesses()
   return (
     <section className="panel" aria-labelledby="harness-heading">
       <header className="panel-header">
         <span className="section-label" id="harness-heading">
-          Профили harness
+          Установленные harness
         </span>
         <button
           type="button"
           className="quiet"
-          onClick={() => setCreateOpen(true)}
+          disabled={harnesses.isFetching}
+          onClick={() => void harnesses.refetch()}
         >
-          + Новый
+          Обновить список
         </button>
       </header>
-      <ProfileList
-        profiles={profiles.data ?? []}
-        loading={profiles.isLoading}
-        error={profiles.error ? describeError(profiles.error) : null}
-        onRetry={() => void profiles.refetch()}
-        onEdit={(profile) => setEditingId(profile.id)}
-      />
-      {createOpen ? (
-        <CreateProfileDialog
-          onClose={() => setCreateOpen(false)}
-          onCreated={() => {
-            setCreateOpen(false)
-            void client.invalidateQueries({ queryKey: ['harness_profiles'] })
-          }}
-        />
+      <p className="hint">
+        Codex и OpenCode находятся автоматически. Выберите harness, чтобы
+        открыть настройки и модель по умолчанию.
+      </p>
+      {harnesses.isLoading ? (
+        <p className="panel-empty" role="status">
+          Ищем установленные harness…
+        </p>
       ) : null}
+      {harnesses.error ? (
+        <p className="error" role="alert">
+          {describeError(harnesses.error)}
+        </p>
+      ) : null}
+      {harnesses.isSuccess && !harnesses.data.length ? (
+        <p className="panel-empty">
+          Harness не найдены. Установите Codex или OpenCode под текущим
+          пользователем и обновите список.
+        </p>
+      ) : null}
+      <ul className="panel-list" aria-label="Установленные harness">
+        {(harnesses.data ?? []).map((harness) => (
+          <li key={harness.id} className="profile-item harness-item">
+            <button
+              type="button"
+              className="quiet harness-installation"
+              aria-label={
+                harness.harness_kind === 'codex' ? 'Codex' : 'OpenCode'
+              }
+              onClick={() => setEditingId(harness.id)}
+            >
+              <strong>
+                {harness.harness_kind === 'codex' ? 'Codex' : 'OpenCode'}
+              </strong>
+              <code>{harness.executable_path}</code>
+              <span className="muted">
+                Модель по умолчанию ·{' '}
+                {defaultHarnessModel(harness) || 'не выбрана'}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
       {editingId ? (
-        <EditProfileDialog
-          profileId={editingId}
+        <HarnessSettingsDialog
+          harnessId={editingId}
           onClose={() => setEditingId(null)}
-          onSaved={() => {
-            setEditingId(null)
-            void client.invalidateQueries({ queryKey: ['harness_profiles'] })
-          }}
         />
       ) : null}
     </section>
   )
 }
 
-interface ProfileListProps {
-  profiles: HarnessProfile[]
-  loading: boolean
-  error: string | null
-  onRetry: () => void
-  onEdit: (profile: HarnessProfile) => void
-}
-
-function ProfileList({
-  profiles,
-  loading,
-  error,
-  onRetry,
-  onEdit,
-}: ProfileListProps) {
-  if (loading) {
-    return (
-      <p className="panel-empty" role="status">
-        Загружаем профили…
-      </p>
-    )
-  }
-  if (error) {
-    return (
-      <div className="panel-empty">
-        <p className="error">{error}</p>
-        <button type="button" className="quiet" onClick={onRetry}>
-          Повторить
-        </button>
-      </div>
-    )
-  }
-  if (profiles.length === 0) {
-    return (
-      <p className="panel-empty">
-        Harness-профилей нет. Добавьте профиль OpenCode или Codex.
-      </p>
-    )
-  }
-  return (
-    <ul className="panel-list" aria-label="Harness-профили">
-      {profiles.map((profile) => (
-        <li key={profile.id} className="profile-item">
-          <header>
-            <strong>{profile.name}</strong>
-            <span className="pill">{labelKind(profile.harness_kind)}</span>
-          </header>
-          <span className="muted">ID · {profile.id}</span>
-          <span className="meta">
-            <span>{formatDateTime(profile.created_at)}</span>
-            {profile.executable_path ? (
-              <code title={profile.executable_path}>
-                {profile.executable_path}
-              </code>
-            ) : (
-              <span className="muted">
-                путь не указан — тест и запуск недоступны
-              </span>
-            )}
-          </span>
-          <span className="meta">
-            <span>
-              Каталог · {profile.catalog_models.length} моделей
-              {profile.catalog_fetched_at
-                ? ` · обновлён ${formatDateTime(profile.catalog_fetched_at)}`
-                : ''}
-            </span>
-            <button
-              type="button"
-              className="quiet"
-              onClick={() => onEdit(profile)}
-            >
-              Параметры…
-            </button>
-          </span>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function labelKind(kind: HarnessProfile['harness_kind']): string {
-  if (kind === 'opencode') return 'OpenCode'
-  if (kind === 'codex') return 'Codex'
-  return kind
-}
-
-interface CreateProfileDialogProps {
-  onClose: () => void
-  onCreated: () => void
-}
-
-function CreateProfileDialog({ onClose, onCreated }: CreateProfileDialogProps) {
-  const csrf = useCsrfToken()
-  const [name, setName] = useState('')
-  const [kind, setKind] = useState<'opencode' | 'codex'>('opencode')
-  const [executablePath, setExecutablePath] = useState('')
-  const [restrictedMode, setRestrictedMode] = useState(false)
-  const permissionMode = kind === 'codex' ? 'read_only' : 'no_tools'
-  const create = useMutation({
-    mutationFn: () =>
-      harnessApi.create(
-        {
-          name: name.trim(),
-          harness_kind: kind,
-          executable_path: executablePath.trim() || null,
-          settings: restrictedMode ? { permission_mode: permissionMode } : {},
-        },
-        csrf,
-      ),
-    onSuccess: onCreated,
-  })
-  return (
-    <Modal
-      onClose={onClose}
-      busy={create.isPending}
-      labelledBy="harness-create-title"
-    >
-      <form
-        className="dialog"
-        onSubmit={(event) => {
-          event.preventDefault()
-          create.mutate()
-        }}
-      >
-        <header>
-          <h3 id="harness-create-title">Новый harness-профиль</h3>
-          <button type="button" className="quiet" onClick={onClose}>
-            ×
-          </button>
-        </header>
-        <label htmlFor="harness-name">Название</label>
-        <input
-          id="harness-name"
-          required
-          maxLength={128}
-          autoFocus
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
-        <label htmlFor="harness-kind">Тип</label>
-        <select
-          id="harness-kind"
-          value={kind}
-          onChange={(event) => {
-            setKind(event.target.value === 'codex' ? 'codex' : 'opencode')
-            setRestrictedMode(false)
-          }}
-        >
-          <option value="opencode">OpenCode</option>
-          <option value="codex">Codex (только чтение)</option>
-        </select>
-        <label htmlFor="harness-path">Путь к исполняемому файлу</label>
-        <input
-          id="harness-path"
-          spellCheck={false}
-          placeholder="C:\tools\opencode.exe"
-          value={executablePath}
-          onChange={(event) => setExecutablePath(event.target.value)}
-        />
-        <p className="hint">
-          Для теста и запуска нужен полный путь к нативному исполняемому файлу.
-          Скрипты .cmd, .bat и .ps1 не поддерживаются.
-        </p>
-        <label className="enabled-toggle">
-          <input
-            type="checkbox"
-            checked={restrictedMode}
-            onChange={(event) => setRestrictedMode(event.target.checked)}
-          />
-          {kind === 'codex'
-            ? 'Только чтение (read_only)'
-            : 'Только ответы модели, без инструментов (no_tools)'}
-        </label>
-        <p className="hint">
-          {kind === 'codex'
-            ? 'Codex запускается только в режиме чтения без одобрения расширенных прав. Запись в проект ещё не прошла приёмку.'
-            : 'OpenCode пока можно запускать только в режиме no_tools. Запись в проект и доступ к инструментам ещё не прошли приёмку.'}
-        </p>
-        {create.error ? (
-          <p className="error" role="alert">
-            {create.error instanceof ApiError
-              ? create.error.body.message
-              : describeError(create.error)}
-          </p>
-        ) : null}
-        <footer>
-          <button type="button" className="quiet" onClick={onClose}>
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={create.isPending || !name.trim() || !csrf}
-          >
-            {create.isPending ? 'Создаём…' : 'Создать'}
-          </button>
-        </footer>
-      </form>
-    </Modal>
-  )
-}
-
-interface EditProfileDialogProps {
-  profileId: string
-  onClose: () => void
-  onSaved: () => void
-}
-
-function EditProfileDialog({
-  profileId,
+function HarnessSettingsDialog({
+  harnessId,
   onClose,
-  onSaved,
-}: EditProfileDialogProps) {
+}: {
+  harnessId: string
+  onClose: () => void
+}) {
+  const csrf = useCsrfToken()
   const [reloadIndex, setReloadIndex] = useState(0)
-  const profile = useQuery({
-    queryKey: ['harness_profile', profileId],
+  const harness = useQuery({
+    queryKey: ['harness_settings', harnessId],
+    queryFn: async () => {
+      let catalogError: string | null = null
+      try {
+        await harnessApi.refreshCatalog(harnessId, csrf)
+      } catch (error) {
+        catalogError = describeError(error)
+      }
+      return { profile: await harnessApi.get(harnessId), catalogError }
+    },
+    enabled: Boolean(csrf),
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    queryFn: () => harnessApi.get(profileId),
   })
-
-  if (!profile.data || !profile.isFetchedAfterMount) {
+  if (!harness.data || !harness.isFetchedAfterMount) {
     return (
-      <Modal onClose={onClose} busy={false} label="Настройки">
+      <Modal onClose={onClose} busy={false} label="Настройки harness">
         <div className="dialog">
-          <header>
-            <h3>Профиль harness</h3>
-            <button type="button" className="quiet" onClick={onClose}>
-              ×
-            </button>
-          </header>
-          {profile.isFetching ? (
-            <p role="status">Загружаем профиль…</p>
-          ) : profile.error ? (
-            <p className="error">{describeError(profile.error)}</p>
-          ) : (
-            <p>Профиль недоступен.</p>
-          )}
+          <p role="status">
+            {harness.error
+              ? describeError(harness.error)
+              : 'Загружаем настройки и модели harness…'}
+          </p>
+          <button type="button" onClick={onClose}>
+            Закрыть
+          </button>
         </div>
       </Modal>
     )
   }
-
   return (
-    <EditProfileForm
-      key={`${profile.data.id}:${reloadIndex}`}
-      profile={profile.data}
+    <HarnessSettingsForm
+      key={`${harnessId}:${reloadIndex}`}
+      initial={harness.data.profile}
+      catalogError={harness.data.catalogError}
+      onClose={onClose}
       onReload={async () => {
-        const result = await profile.refetch()
+        const result = await harness.refetch()
         if (result.isSuccess) setReloadIndex((index) => index + 1)
       }}
-      onClose={onClose}
-      onSaved={onSaved}
     />
   )
 }
 
-interface EditProfileFormProps {
-  onReload: () => void
-  profile: HarnessProfile
-  onClose: () => void
-  onSaved: () => void
-}
-
-function EditProfileForm({
-  profile: initial,
+function HarnessSettingsForm({
+  initial,
+  catalogError,
   onClose,
-  onSaved,
   onReload,
-}: EditProfileFormProps) {
-  const client = useQueryClient()
+}: {
+  initial: HarnessProfile
+  catalogError: string | null
+  onClose: () => void
+  onReload: () => void
+}) {
   const csrf = useCsrfToken()
+  const client = useQueryClient()
   const [profile, setProfile] = useState(initial)
-  const [name, setName] = useState(initial.name)
-  const [executablePath, setExecutablePath] = useState(
-    initial.executable_path ?? '',
-  )
-  const [catalogTtl, setCatalogTtl] = useState(
-    String(initial.catalog_ttl_seconds),
-  )
-  const permissionMode =
-    initial.harness_kind === 'codex' ? 'read_only' : 'no_tools'
-  const [restrictedMode, setRestrictedMode] = useState(
-    initial.settings.permission_mode === permissionMode,
-  )
-  const catalog = useQuery({
-    queryKey: ['harness_catalog', profile.id],
-    queryFn: () => harnessApi.catalog(profile.id),
-  })
-  const dirty =
-    name.trim() !== profile.name ||
-    executablePath.trim() !== (profile.executable_path ?? '') ||
-    Number(catalogTtl) !== profile.catalog_ttl_seconds ||
-    restrictedMode !== (profile.settings.permission_mode === permissionMode)
-  function accept(updated: HarnessProfile) {
-    setProfile(updated)
-    client.setQueryData(['harness_profile', updated.id], updated)
-    void client.invalidateQueries({ queryKey: ['harness_profiles'] })
-    void client.invalidateQueries({ queryKey: ['harness_catalog', updated.id] })
-  }
+  const [model, setModel] = useState(defaultHarnessModel(initial))
+  const [error, setError] = useState(catalogError)
   const save = useMutation({
     mutationFn: () =>
       harnessApi.update(
         profile.id,
         {
           expected_version: profile.version,
-          name: name.trim(),
-          ...(executablePath.trim() !== (profile.executable_path ?? '')
-            ? { executable_path: executablePath.trim() || null }
-            : {}),
-          ...(Number(catalogTtl) !== profile.catalog_ttl_seconds
-            ? { catalog_ttl_seconds: Number(catalogTtl) }
-            : {}),
-          ...(restrictedMode !==
-          (profile.settings.permission_mode === permissionMode)
-            ? {
-                settings: {
-                  ...profile.settings,
-                  permission_mode: restrictedMode ? permissionMode : null,
-                },
-              }
-            : {}),
+          settings: { ...profile.settings, default_model: model || null },
         },
         csrf,
       ),
-    onSuccess: (updated) => {
-      accept(updated)
-      onSaved()
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['installed_harnesses'] })
+      void client.invalidateQueries({ queryKey: ['harness_profiles'] })
+      onClose()
     },
   })
-  const archive = useMutation({
-    mutationFn: () => harnessApi.archive(profile.id, profile.version, csrf),
-    onSuccess: (updated) => {
-      accept(updated)
-      onSaved()
-    },
-  })
-  const probe = useMutation({
+  const refresh = useMutation({
     mutationFn: async () => {
-      const result = await harnessApi.probe(profile.id, csrf)
-      const updated = await harnessApi.get(profile.id)
-      return { result, updated }
+      try {
+        await harnessApi.refreshCatalog(profile.id, csrf, true)
+        setError(null)
+      } catch (cause) {
+        setError(describeError(cause))
+      }
+      return harnessApi.get(profile.id)
     },
-    onSuccess: ({ updated }) => {
-      accept(updated)
-      setName(updated.name)
-      setExecutablePath(updated.executable_path ?? '')
-      setCatalogTtl(String(updated.catalog_ttl_seconds))
-      setRestrictedMode(updated.settings.permission_mode === permissionMode)
+    onSuccess: (updated) => {
+      setProfile(updated)
+      void client.invalidateQueries({
+        queryKey: ['harness_catalog', profile.id],
+      })
     },
   })
-  const busy = save.isPending || archive.isPending || probe.isPending
-  const valid =
-    name.trim() &&
-    Number.isInteger(Number(catalogTtl)) &&
-    Number(catalogTtl) >= 60 &&
-    Number(catalogTtl) <= 86400
+  const busy = save.isPending || refresh.isPending
+  const valid = !model || (!error && profile.catalog_models.includes(model))
   return (
     <Modal onClose={onClose} busy={busy} labelledBy="harness-edit-title">
       <form
         className="dialog"
         onSubmit={(event) => {
           event.preventDefault()
-          if (valid && !busy) save.mutate()
+          if (!busy && valid) save.mutate()
         }}
       >
         <header>
-          <h3 id="harness-edit-title">{profile.name}</h3>
+          <h3 id="harness-edit-title">
+            {profile.harness_kind === 'codex' ? 'Codex' : 'OpenCode'} ·
+            настройки
+          </h3>
           <button
             type="button"
             className="quiet"
@@ -438,109 +209,61 @@ function EditProfileForm({
             ×
           </button>
         </header>
-        <label htmlFor="harness-edit-name">Название</label>
+        <label htmlFor="harness-path">Исполняемый файл</label>
         <input
-          id="harness-edit-name"
-          required
-          maxLength={128}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
+          id="harness-path"
+          readOnly
+          value={profile.executable_path ?? ''}
         />
-        <label htmlFor="harness-edit-path">Путь</label>
-        <input
-          id="harness-edit-path"
-          spellCheck={false}
-          value={executablePath}
-          onChange={(event) => setExecutablePath(event.target.value)}
-        />
-        <label htmlFor="harness-edit-ttl">TTL каталога, секунд</label>
-        <input
-          id="harness-edit-ttl"
-          type="number"
-          required
-          min={60}
-          max={86400}
-          step={1}
-          value={catalogTtl}
-          onChange={(event) => setCatalogTtl(event.target.value)}
-        />
-        <label className="enabled-toggle">
-          <input
-            type="checkbox"
-            checked={restrictedMode}
-            onChange={(event) => setRestrictedMode(event.target.checked)}
-          />
-          {profile.harness_kind === 'codex'
-            ? 'Только чтение (read_only)'
-            : 'Только ответы модели, без инструментов (no_tools)'}
-        </label>
-
+        <label htmlFor="harness-default-model">Модель по умолчанию</label>
+        <select
+          id="harness-default-model"
+          value={model}
+          disabled={busy}
+          onChange={(event) => setModel(event.target.value)}
+        >
+          <option value="">Выбирать при добавлении в группу</option>
+          {model && !profile.catalog_models.includes(model) ? (
+            <option value={model} disabled>
+              Недоступна · {model}
+            </option>
+          ) : null}
+          {profile.catalog_models.map((id) => (
+            <option key={id} value={id}>
+              {id}
+            </option>
+          ))}
+        </select>
         <p className="hint">
-          {profile.harness_kind === 'codex'
-            ? 'Codex выполняет запросы в режиме read_only без одобрения расширенных прав.'
-            : 'OpenCode пока выполняет только запросы без инструментов (no_tools).'}{' '}
-          Каталог не подтверждает доступ к модели. Тест проверяет сохранённый
-          профиль; сначала сохраните правки.
+          Модели загружаются из самой harness с её подключениями и авторизацией.
+          Выбранная модель подставляется при добавлении harness в группу; у
+          каждого участника её можно изменить.
         </p>
-        {catalog.data ? (
-          <div className="catalog-summary">
-            <span>
-              Каталог ·{' '}
-              {catalog.data.status === 'fresh'
-                ? 'актуальный'
-                : catalog.data.status === 'stale'
-                  ? 'устарел'
-                  : 'не проверен'}
-            </span>
-            <ul aria-label="Модели harness">
-              {catalog.data.models.map((model) => (
-                <li key={model.id}>
-                  <code>{model.id}</code>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {catalog.error ? (
+        <p className="hint">
+          Режим запуска ·{' '}
+          {String(profile.settings.permission_mode ?? 'не настроен')}
+        </p>
+        {error ? (
           <p className="error" role="alert">
-            {describeError(catalog.error)}
+            {error}
           </p>
         ) : null}
-        {probe.data ? (
-          <p
-            role="status"
-            className={probe.data.result.status === 'ok' ? 'hint' : 'error'}
-          >
-            Тест · {probe.data.result.status} {probe.data.result.version}{' '}
-            {probe.data.result.detail}
-          </p>
-        ) : profile.last_test_status ? (
+        {!error && profile.catalog_models.length === 0 ? (
           <p className="hint">
-            Последний тест · {profile.last_test_status} ·{' '}
-            {formatDateTime(profile.last_test_at)}
+            Нет доступных моделей. Настройте провайдера и вход в самой harness.
           </p>
         ) : null}
-        {[save.error, archive.error, probe.error].map((error, index) => (
-          <EditorError key={index} error={error} onReload={onReload} />
-        ))}
+        <EditorError error={save.error ?? refresh.error} onReload={onReload} />
         <footer>
           <button
             type="button"
-            className="quiet danger"
-            onClick={() => archive.mutate()}
-            disabled={!csrf}
-          >
-            Архивировать
-          </button>
-          <button
-            type="button"
             className="quiet"
-            onClick={() => probe.mutate()}
-            disabled={!csrf || dirty}
+            disabled={busy || !csrf}
+            onClick={() => refresh.mutate()}
           >
-            {probe.isPending ? 'Проверяем…' : 'Тест'}
+            {refresh.isPending ? 'Загружаем…' : 'Обновить модели'}
           </button>
-          <button type="submit" disabled={!csrf || !valid}>
+          <button type="submit" disabled={busy || !csrf || !valid}>
             {save.isPending ? 'Сохраняем…' : 'Сохранить'}
           </button>
         </footer>

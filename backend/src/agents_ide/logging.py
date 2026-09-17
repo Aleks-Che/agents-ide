@@ -8,6 +8,52 @@ from typing import Any
 
 SENSITIVE = re.compile(r"secret|password|token|authorization|cookie|pair.?code|credential", re.I)
 _known_secrets: set[str] = set()
+CONTEXT_FIELDS = (
+    "request_id",
+    "status",
+    "duration_ms",
+    "worker_id",
+    "event",
+    "run_id",
+    "service",
+    "pid",
+    "retries",
+    "failures",
+    "expected_schema",
+    "actual_schema",
+)
+
+
+def exception_details(error: BaseException) -> list[dict[str, Any]]:
+    """Keep the failure location without exception text, SQL values or frame locals."""
+    chain: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen and len(chain) < 5:
+        seen.add(id(current))
+        frames = []
+        traceback = current.__traceback__
+        while traceback is not None:
+            code = traceback.tb_frame.f_code
+            frames.append(
+                {
+                    "file": Path(code.co_filename).name,
+                    "line": traceback.tb_lineno,
+                    "function": code.co_name,
+                }
+            )
+            traceback = traceback.tb_next
+        item: dict[str, Any] = {
+            "type": type(current).__name__,
+            "frames": frames[-20:],
+        }
+        if isinstance(current, OSError):
+            item["errno"] = current.errno
+        chain.append(item)
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return chain
 
 
 def register_secret(value: str) -> None:
@@ -38,15 +84,17 @@ def redact(value: Any) -> Any:
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         # Never serialize arbitrary exception bodies, headers, URL queries or argv.
-        payload = {
+        payload: dict[str, Any] = {
             "at": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
-        for key in ("request_id", "status", "duration_ms", "worker_id", "event"):
+        for key in CONTEXT_FIELDS:
             if hasattr(record, key):
                 payload[key] = getattr(record, key)
+        if record.exc_info and record.exc_info[1] is not None:
+            payload["exception"] = exception_details(record.exc_info[1])
         return json.dumps(redact(payload), ensure_ascii=False)
 
 

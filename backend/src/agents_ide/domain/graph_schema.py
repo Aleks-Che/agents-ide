@@ -313,6 +313,18 @@ def _git_commit_config() -> dict[str, Any]:
         "type": "object",
         "properties": {
             "message": {"type": "string", "maxLength": 512},
+            "generate_message": {"type": "boolean"},
+            "message_generation": {
+                "type": "object",
+                "properties": {
+                    "connection_id": {"type": "string", "maxLength": 64},
+                    "model": {"type": "string", "maxLength": 256},
+                    "prompt": {"type": "string", "minLength": 1, "maxLength": 8000},
+                    "language": {"enum": ["ru", "en"]},
+                    "params": {"type": "object"},
+                },
+                "additionalProperties": False,
+            },
             "allow_untracked": {"type": "boolean"},
             "no_changes_is_progress": {"type": "boolean"},
             "allowlist": {

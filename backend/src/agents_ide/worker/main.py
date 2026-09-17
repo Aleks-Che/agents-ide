@@ -105,6 +105,10 @@ def run_worker(settings: Settings) -> None:
                             write_heartbeat(engine, worker_id, started_at, "stale")
                     except (OperationalError, SQLAlchemyError):
                         db_failures += 1
+                        logger.exception(
+                            "worker.database_check_failed",
+                            extra={"worker_id": worker_id, "failures": db_failures},
+                        )
                         try:
                             write_heartbeat(engine, worker_id, started_at, "unavailable")
                         except Exception:
