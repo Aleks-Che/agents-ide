@@ -343,7 +343,7 @@ def _validate_current_prompt(
         known_node_ids=frozenset(nodes),
         project={
             "id": Value.of(run.project_id),
-            "path": Value.of(snapshot["workspace"]["workspace_path"]),
+            "path": Value.of(runtime.get("workspace", snapshot["workspace"])["workspace_path"]),
         },
         run={"id": Value.of(run.id), "cycle_id": Value.of(runtime["cycle_id"])},
         cycle_id=runtime["cycle_id"],

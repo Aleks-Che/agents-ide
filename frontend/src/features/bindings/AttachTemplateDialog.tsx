@@ -8,6 +8,7 @@ import {
 import { projectsApi, type Project } from '../../api/projects'
 import { Modal } from '../../app/Modal'
 import { useCsrfToken } from '../../app/session'
+import { WorkspacePolicyFields } from './WorkspacePolicyFields'
 
 export function AttachTemplateDialog({
   fixedProject,
@@ -29,6 +30,8 @@ export function AttachTemplateDialog({
   const [projectId, setProjectId] = useState(initialProjectId ?? '')
   const [templateId, setTemplateId] = useState(initialTemplateId ?? '')
   const [name, setName] = useState<string | null>(null)
+  const [workspaceMode, setWorkspaceMode] = useState<'project' | 'worktree'>('project')
+  const [branchPolicy, setBranchPolicy] = useState<'run_branch' | 'current'>('run_branch')
   const projects = useQuery({
     queryKey: ['projects', { includeArchived: false }],
     queryFn: () => projectsApi.list({ includeArchived: false }),
@@ -62,6 +65,8 @@ export function AttachTemplateDialog({
         {
           project_id: project.id,
           name: bindingName.trim(),
+          workspace_mode: workspaceMode,
+          branch_policy: branchPolicy,
         },
         csrf,
       )
@@ -194,6 +199,12 @@ export function AttachTemplateDialog({
               изменения. Затем откройте диалог проекта и нажмите «Запустить
               шаблон».
             </p>
+            <WorkspacePolicyFields
+              workspaceMode={workspaceMode}
+              branchPolicy={branchPolicy}
+              onWorkspaceMode={setWorkspaceMode}
+              onBranchPolicy={setBranchPolicy}
+            />
           </>
         ) : null}
         {create.error ? (

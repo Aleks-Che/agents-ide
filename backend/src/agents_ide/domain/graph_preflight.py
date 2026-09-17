@@ -208,6 +208,7 @@ def preflight(
             project.workspace_entered_path
         )
         workspace = Path(normalized)
+        isolated = configuration.get("workspace_mode") == "worktree"
         if (dev, ino) != (project.workspace_identity_dev, project.workspace_identity_ino):
             report.add_error(
                 ValidationIssue("workspace_conflict", "Идентичность рабочего каталога изменилась")
@@ -220,10 +221,44 @@ def preflight(
             "branch": git.default_branch if git else None,
             "dirty": git.dirty if git else False,
             "will_switch_branch": bool(git and configuration["branch_policy"] == "run_branch"),
+            "workspace_mode": configuration.get("workspace_mode", "project"),
+            "will_create_worktree": isolated,
             "hooks_and_baseline": "unverified",
             "mutations_performed": False,
         }
-        if any(n["type"] == "GitCommit" for n in graph["nodes"]):
+        if isolated:
+            report.preview["git_plan"]["will_switch_branch"] = False
+            if configuration["branch_policy"] != "run_branch":
+                report.add_error(
+                    ValidationIssue("configuration_invalid", "Worktree требует отдельную ветку")
+                )
+            if git is None or not git.head_sha:
+                report.add_error(
+                    ValidationIssue(
+                        "git_repository_required", "Worktree требует Git-репозиторий с коммитом"
+                    )
+                )
+            elif Path(git.root_path) != workspace:
+                report.add_error(
+                    ValidationIssue("workspace_conflict", "Worktree требует корень репозитория")
+                )
+            else:
+                from agents_ide.engine.git_commit import git_fingerprint
+                from agents_ide.engine.worktrees import worktree_path
+
+                target = worktree_path(workspace, "<run_id>")
+                fingerprint = git_fingerprint(workspace)
+                git_dependencies = {"fingerprint": fingerprint, "executable": shutil.which("git")}
+                dependencies["git"] = git_dependencies
+                report.preview["git_dependencies"] = git_dependencies
+                report.preview["git_plan"].update(
+                    worktree_path=str(target),
+                    starts_from="committed_head",
+                    hooks_and_baseline="checked_at_worktree_dispatch",
+                    hooks=list(fingerprint["hooks"]),
+                    signing_required=fingerprint["signing_required"],
+                )
+        if not isolated and any(n["type"] == "GitCommit" for n in graph["nodes"]):
             if git is None or not git.head_sha:
                 report.add_error(
                     ValidationIssue(

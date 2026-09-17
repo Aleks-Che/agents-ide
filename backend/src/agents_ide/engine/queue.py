@@ -147,7 +147,11 @@ def claim_next_job(
         for job in jobs:
             run = session.get(Run, job.run_id)
             assert run is not None
-            workspace = json.loads(run.snapshot_json)["workspace"]
+            from agents_ide.engine.worktrees import effective_workspace
+
+            workspace = effective_workspace(
+                json.loads(run.snapshot_json), json.loads(run.runtime_json)
+            )
             scope = workspace.get("scope")
             blocking = [
                 r

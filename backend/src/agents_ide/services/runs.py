@@ -96,7 +96,9 @@ def reserve_workspace(session: Session, run_id: str, generation: int) -> bool:
     """
     run = get_or_404(session, RunModel, run_id)
     snapshot = json.loads(run.snapshot_json)
-    workspace = snapshot["workspace"]
+    from agents_ide.engine.worktrees import effective_workspace
+
+    workspace = effective_workspace(snapshot, json.loads(run.runtime_json))
     _, normalized, dev, ino, git = collect_workspace(workspace["workspace_path"])
     scope = workspace_scope(Path(normalized), git)
     if [dev, ino] != [workspace["identity_dev"], workspace["identity_ino"]]:
@@ -321,11 +323,16 @@ def start_run(session: Session, payload: RunStart) -> Run:
             "git_root_path": git.root_path if git else None,
         }
     )
+    run_id = new_id()
+    if configuration.get("workspace_mode") == "worktree" and payload.execution_mode != "simulated":
+        from agents_ide.engine.worktrees import worktree_path
+
+        snapshot["workspace"]["worktree_path"] = str(worktree_path(Path(normalized), run_id))
     snapshot_payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     snapshot_hash_value = content_hash(snapshot)
     now = utc_now()
     model = RunModel(
-        id=new_id(),
+        id=run_id,
         idempotency_key=payload.idempotency_key,
         request_hash=request_hash_value,
         request_json=to_json(request),

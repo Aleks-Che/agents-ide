@@ -471,7 +471,7 @@ def update_binding(
             "command_filter",
         }:
             setattr(model, f"{name}_json", to_json(value))
-        elif name == "role_parameters":
+        elif name in {"role_parameters", "workspace_mode"}:
             pass  # Stored in settings_json with the other explicit overrides.
         else:
             setattr(model, name, value)

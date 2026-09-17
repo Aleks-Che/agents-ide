@@ -439,7 +439,9 @@ export function LibraryView({
                   <span className="meta">
                     <span>{binding.archived ? 'архив' : 'активна'}</span>
                     <span className="muted">
-                      {binding.branch_policy === 'current'
+                      {binding.workspace_mode === 'worktree'
+                        ? 'изолированная папка + отдельная ветка'
+                        : binding.branch_policy === 'current'
                         ? 'ветка: current'
                         : 'ветка: run_branch'}{' '}
                       · {binding.dirty_policy}

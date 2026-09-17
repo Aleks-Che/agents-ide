@@ -168,6 +168,7 @@ def binding_from_model(model: PipelineBindingModel) -> PipelineBinding:
         limit_overrides=from_json(model.limit_overrides_json, {}),
         command_filter=from_json(model.command_filter_json, []),
         branch_policy=model.branch_policy,  # type: ignore[arg-type]
+        workspace_mode=from_json(model.settings_json, {}).get("workspace_mode", "project"),
         dirty_policy=model.dirty_policy,  # type: ignore[arg-type]
         archived=model.archived_at is not None,
         version=model.revision,

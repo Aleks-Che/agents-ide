@@ -345,6 +345,9 @@ class Runner:
                 return RunnerResult(RunState(row.state))
             self.snapshot = json.loads(row.snapshot_json)
             self.runtime = json.loads(row.runtime_json)
+            from agents_ide.engine.worktrees import effective_workspace
+
+            self.snapshot["workspace"] = effective_workspace(self.snapshot, self.runtime)
             target = json.loads(row.resume_target_json or "{}")
             recovering = row.state == "recovering"
             has_history = (
@@ -606,6 +609,9 @@ class Runner:
                 return maintenance
             with self.session_factory() as session:
                 check_capacity(session, self.run_id)
+            from agents_ide.engine.worktrees import prepare_worktree
+
+            prepare_worktree(self)
             self._workspace_check()
             paused_hash = self.runtime.get("git_paused_workspace_hash")
             if paused_hash:

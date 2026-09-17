@@ -142,6 +142,7 @@ class SettingsOverrides(ApiModel):
     limit_overrides: dict[str, float] | None = None
     command_filter: list[str] | None = None
     branch_policy: Literal["run_branch", "current"] | None = None
+    workspace_mode: Literal["project", "worktree"] | None = None
     dirty_policy: Literal["strict", "allow_nonoverlap"] | None = None
 
     @field_validator("limit_overrides")
@@ -359,6 +360,7 @@ class PipelineBinding(ApiOutput):
     limit_overrides: dict[str, Any]
     command_filter: list[str]
     branch_policy: Literal["run_branch", "current"]
+    workspace_mode: Literal["project", "worktree"] = "project"
     dirty_policy: Literal["strict", "allow_nonoverlap"]
     archived: bool
     version: int

@@ -2922,6 +2922,15 @@
           "version_id": {
             "title": "Version Id",
             "type": "string"
+          },
+          "workspace_mode": {
+            "default": "project",
+            "enum": [
+              "project",
+              "worktree"
+            ],
+            "title": "Workspace Mode",
+            "type": "string"
           }
         },
         "required": [
@@ -3035,6 +3044,21 @@
               }
             ],
             "title": "Role Parameters"
+          },
+          "workspace_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "project",
+                  "worktree"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Mode"
           }
         },
         "required": [
@@ -3189,6 +3213,21 @@
               }
             ],
             "title": "Role Parameters"
+          },
+          "workspace_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "project",
+                  "worktree"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Mode"
           }
         },
         "required": [
@@ -6290,6 +6329,21 @@
               }
             ],
             "title": "Role Parameters"
+          },
+          "workspace_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "project",
+                  "worktree"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Mode"
           }
         },
         "title": "SettingsOverrides",

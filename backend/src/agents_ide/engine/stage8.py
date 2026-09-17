@@ -98,7 +98,11 @@ def prepare_git(runner: Runner) -> None:
                 dirty_policy=runner.snapshot["resolved_settings"]["dirty_policy"],
             )
             expected = runner.snapshot.get("dependencies", {}).get("git", {}).get("fingerprint")
-            if expected is not None and expected != baseline.fingerprint:
+            if (
+                runner.snapshot["resolved_settings"].get("workspace_mode") != "worktree"
+                and expected is not None
+                and expected != baseline.fingerprint
+            ):
                 raise AppError(
                     "external_change_detected", "Git policy changed after preflight", 409
                 )

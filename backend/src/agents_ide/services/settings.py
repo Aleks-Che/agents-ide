@@ -27,6 +27,7 @@ from agents_ide.services.groups import load_group_snapshot
 
 DEFAULTS: dict[str, Any] = {
     "branch_policy": "run_branch",
+    "workspace_mode": "project",
     "dirty_policy": "strict",
     "role_assignments": {},
     "model_selections": {},

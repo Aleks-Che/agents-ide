@@ -655,10 +655,14 @@ class ProcessSupervisor:
                 owned_job(session, self.run_id, self.worker_id, self.generation)
                 run = session.get(Run, self.run_id)
                 assert run is not None
+                from agents_ide.engine.worktrees import effective_workspace
+
+                workspace = effective_workspace(
+                    json.loads(run.snapshot_json), json.loads(run.runtime_json)
+                )
                 if kind in {"command", "git", "harness"}:
                     from agents_ide.security.filesystem import directory_identity
 
-                    workspace = json.loads(run.snapshot_json)["workspace"]
                     root = Path(workspace["workspace_path"])
                     identity = directory_identity(root)
                     if identity != (workspace["identity_dev"], workspace["identity_ino"]):
@@ -691,7 +695,7 @@ class ProcessSupervisor:
                         started_at=entry.started_at,
                         state="started",
                         tree_json=to_json({"job_owned": sys.platform == "win32", "pids": {}}),
-                        workspace_json=to_json(json.loads(run.snapshot_json)["workspace"]),
+                        workspace_json=to_json(workspace),
                         transport=transport,
                         port=port,
                     )

@@ -10,6 +10,7 @@ import { useCsrfToken } from '../../app/session'
 import { Modal } from '../../app/Modal'
 import { EditorError } from '../settings/EditorError'
 import { formatDateTime, shortHash } from '../../app/format'
+import { WorkspacePolicyFields } from './WorkspacePolicyFields'
 import {
   BindingSelectionDraft,
   buildDraftFromSelection,
@@ -142,6 +143,9 @@ function BindingEditorForm({
   const [branchPolicy, setBranchPolicy] = useState<'run_branch' | 'current'>(
     binding?.branch_policy ?? 'run_branch',
   )
+  const [workspaceMode, setWorkspaceMode] = useState<'project' | 'worktree'>(
+    binding?.workspace_mode ?? 'project',
+  )
   const [dirtyPolicy, setDirtyPolicy] = useState<'strict' | 'allow_nonoverlap'>(
     binding?.dirty_policy ?? 'strict',
   )
@@ -202,6 +206,7 @@ function BindingEditorForm({
           expected_version: binding.version,
           name: name.trim(),
           branch_policy: branchPolicy,
+          workspace_mode: workspaceMode,
           dirty_policy: dirtyPolicy,
           model_selections: selectionsPayload,
           model_overrides: Object.fromEntries(
@@ -306,19 +311,12 @@ function BindingEditorForm({
           />
         </fieldset>
         <div className="binding-policy">
-          <fieldset>
-            <label htmlFor="binding-branch-policy">Ветка</label>
-            <select
-              id="binding-branch-policy"
-              value={branchPolicy}
-              onChange={(event) =>
-                setBranchPolicy(event.target.value as 'run_branch' | 'current')
-              }
-            >
-              <option value="run_branch">отдельная run_branch</option>
-              <option value="current">текущая ветка</option>
-            </select>
-          </fieldset>
+          <WorkspacePolicyFields
+            workspaceMode={workspaceMode}
+            branchPolicy={branchPolicy}
+            onWorkspaceMode={setWorkspaceMode}
+            onBranchPolicy={setBranchPolicy}
+          />
           <fieldset>
             <label htmlFor="binding-dirty-policy">Грязный каталог</label>
             <select
