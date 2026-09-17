@@ -899,9 +899,23 @@ function EditGroupForm({
                       memberKey={member.key}
                       params={member.params}
                       drafts={paramDrafts}
+                      supportedReasoningEfforts={(() => {
+                        const metadata = harnesses.data?.find(
+                          (profile) => profile.id === member.profileId,
+                        )?.model_capabilities?.[member.modelId]
+                        return Array.isArray(metadata?.reasoning_efforts)
+                          ? metadata.reasoning_efforts.filter(
+                              (value): value is string =>
+                                typeof value === 'string',
+                            )
+                          : undefined
+                      })()}
                       harnessHint={
                         Object.keys(member.params).length > 0 &&
-                        isUnverifiedHarnessProfile(member.profileId)
+                        isUnverifiedHarnessProfile(member.profileId) &&
+                        !harnesses.data?.find(
+                          (profile) => profile.id === member.profileId,
+                        )?.model_capabilities?.[member.modelId]
                       }
                       onParams={(next, removed) => {
                         updateMember(index, { params: next })
@@ -920,11 +934,10 @@ function EditGroupForm({
         <p className="hint">
           «Сохранить кандидатов» сохраняет порядок, состав и параметры;
           «Сохранить» — название и описание. Остальные правки остаются в форме.
-          Для копирования сначала сохраните правки. Поддержка параметров
-          конкретной моделью не подтверждена. Перед запуском сервер проверяет
-          общий набор и ограничения адаптера; наличие поля в редакторе не
-          гарантирует поддержку провайдером. Изменения группы применятся только
-          к новым Run.
+          Для копирования сначала сохраните правки. Параметры агентов выбираются
+          из актуального каталога harness и повторно проверяются перед запуском.
+          Для LLM сервер проверяет общий набор и ограничения адаптера. Изменения
+          группы применятся только к новым Run.
         </p>
         {!paramsValid ? (
           <p className="error" role="alert">

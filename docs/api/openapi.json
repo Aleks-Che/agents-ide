@@ -691,14 +691,18 @@
           "type": {
             "enum": [
               "agent.message_delta",
+              "agent.native_event",
+              "agent.output_delta",
               "agent.permission_requested",
               "agent.permission_resolved",
+              "agent.plan_updated",
               "agent.server_started",
               "agent.session_aborted",
               "agent.session_created",
               "agent.session_invalidated",
               "agent.session_resumed",
               "agent.tool_call",
+              "agent.turn_started",
               "artifact.recorded",
               "assignment.applied",
               "attempt.finished",
@@ -1183,6 +1187,43 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HarnessCatalogModel": {
+        "additionalProperties": false,
+        "properties": {
+          "context_window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "reasoning_efforts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasoning Efforts",
+            "type": "array"
+          },
+          "source": {
+            "default": "cache",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "HarnessCatalogModel",
+        "type": "object"
+      },
       "HarnessProbe": {
         "additionalProperties": false,
         "properties": {
@@ -1312,6 +1353,14 @@
             ],
             "title": "Last Test Status"
           },
+          "model_capabilities": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Model Capabilities",
+            "type": "object"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -1367,10 +1416,7 @@
           },
           "models": {
             "items": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "type": "object"
+              "$ref": "#/components/schemas/HarnessCatalogModel"
             },
             "title": "Models",
             "type": "array"
@@ -3647,6 +3693,16 @@
             ],
             "title": "Chat Id"
           },
+          "context_paths": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 32,
+            "title": "Context Paths",
+            "type": "array"
+          },
           "context_text": {
             "default": "",
             "maxLength": 65536,
@@ -3670,7 +3726,7 @@
             "items": {
               "$ref": "#/components/schemas/PlanningMemberSpec"
             },
-            "maxItems": 5,
+            "maxItems": 4,
             "title": "Participants",
             "type": "array"
           },

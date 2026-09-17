@@ -4,10 +4,10 @@
 React-интерфейс обслуживается FastAPI; отдельный Python worker сохраняет работу
 в SQLite/WAL и продолжает её без браузера.
 
-Реализованы конструктор, direct/group, preset с PlanItem/Git, Council для LLM,
+Реализованы конструктор, direct/group, preset с PlanItem/Git, Council для LLM и нативных Codex/OpenCode,
 наблюдение через SSE и эксплуатационные команды этапа 12. **Полная v1 ещё не
-принята:** автономная запись реальных harness, часть Codex/OpenCode и Council через
-harness остаются за capability gates. См. [план](docs/IMPLEMENTATION_PLAN.md),
+принята:** автономная запись, восстановление незавершённых внешних операций и полная
+приёмка реальных моделей остаются открытыми. См. [план](docs/IMPLEMENTATION_PLAN.md),
 [приёмку](docs/operations/RELEASE_ACCEPTANCE.md) и [интеграции](docs/integrations/CAPABILITIES.md).
 
 ## Установка

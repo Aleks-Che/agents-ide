@@ -1,0 +1,49 @@
+{
+  "passed": true,
+  "version": "codex-cli 0.153.4",
+  "model_calls": 0,
+  "profile": "agents_ide_council",
+  "sandbox_warmup_retried": true,
+  "observations": {
+    "allowed_read": {
+      "rpc_error": false,
+      "rpc_error_details": null,
+      "exit_code": 0,
+      "allowed_marker": true,
+      "secret_marker": false,
+      "access_denied": false
+    },
+    "outside_read": {
+      "rpc_error": false,
+      "rpc_error_details": null,
+      "exit_code": 1,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": true
+    },
+    "inside_write": {
+      "rpc_error": false,
+      "rpc_error_details": null,
+      "exit_code": 1,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": true
+    },
+    "outside_write": {
+      "rpc_error": false,
+      "rpc_error_details": null,
+      "exit_code": 1,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": true
+    },
+    "allowed_read_after_denials": {
+      "rpc_error": false,
+      "rpc_error_details": null,
+      "exit_code": 0,
+      "allowed_marker": true,
+      "secret_marker": false,
+      "access_denied": false
+    }
+  }
+}

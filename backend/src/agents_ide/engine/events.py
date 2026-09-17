@@ -96,6 +96,10 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "agent.permission_requested",
         "agent.permission_resolved",
         "agent.session_invalidated",
+        "agent.native_event",
+        "agent.turn_started",
+        "agent.output_delta",
+        "agent.plan_updated",
     }
 )
 

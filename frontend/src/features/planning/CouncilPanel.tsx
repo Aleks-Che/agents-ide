@@ -52,6 +52,7 @@ export function CouncilPanel({
   const csrf = useCsrfToken()
   const [taskText, setTaskText] = useState('')
   const [contextText, setContextText] = useState('')
+  const [contextPaths, setContextPaths] = useState('')
   const [participants, setParticipants] = useState(() =>
     Array.from({ length: 3 }, () => blankMember('participant')),
   )
@@ -88,6 +89,10 @@ export function CouncilPanel({
         chat_id: chatId,
         task_text: taskText.trim(),
         context_text: contextText,
+        context_paths: contextPaths
+          .split(/\r?\n/)
+          .map((value) => value.trim())
+          .filter(Boolean),
         participants: [...participants, merger],
         idempotency_key: crypto.randomUUID(),
       }
@@ -293,8 +298,8 @@ export function CouncilPanel({
               </select>
             </label>
             <p className="hint">
-              Council через harness пока недоступен. Поддержка выбора и снимков
-              проверяется внутренними симуляционными тестами.
+              На Windows поддерживаются Codex в режиме чтения и OpenCode без
+              инструментов. Каждый участник получает отдельную сессию.
             </p>
           </>
         ) : (
@@ -356,9 +361,9 @@ export function CouncilPanel({
       <div className="dialog wide council-dialog">
         <h2 id="council-title">Совместное планирование</h2>
         <p className="hint">
-          Участники получают одинаковую задачу и текст контекста ниже. Доступа к
-          файлам проекта и инструментам нет. Сейчас запуск доступен для LLM;
-          Council через harness ещё проходит разработку и приёмку.
+          Участники получают одинаковую задачу и снимок контекста. Выбранные
+          файлы фиксируются перед началом; запись в проект запрещена. Чужие
+          черновики получает только объединяющий.
         </p>
         <label>
           Задача
@@ -382,6 +387,15 @@ export function CouncilPanel({
           />
         </label>
         <label>
+          Файлы контекста относительно проекта, по одному пути на строку
+          <textarea
+            rows={3}
+            value={contextPaths}
+            disabled={locked}
+            onChange={(e) => setContextPaths(e.target.value)}
+          />
+        </label>
+        <label>
           Число участников
           <select
             disabled={locked}
@@ -395,7 +409,7 @@ export function CouncilPanel({
               )
             }
           >
-            {[2, 3, 4].map((n) => (
+            {[2, 3].map((n) => (
               <option key={n}>{n}</option>
             ))}
           </select>
@@ -411,10 +425,9 @@ export function CouncilPanel({
         ))}
         {editor(merger, 'Объединяющий', setMerger)}
         {hasHarness ? (
-          <p role="alert">
-            Запуск Council с агентом или агентной группой пока недоступен.
-            Выберите LLM-подключение или группу LLM для каждого участника и
-            объединяющего.
+          <p className="hint">
+            Для агентов нужен нативный executable в профиле. Сервер проверит
+            режим доступа до начала работы и создаст отдельную область чтения.
           </p>
         ) : null}
         {resources.isLoading ? (
@@ -455,7 +468,6 @@ export function CouncilPanel({
               create.isPending ||
               !csrf ||
               Boolean(stored.error) ||
-              (!pending && hasHarness) ||
               (!pending &&
                 (!taskText.trim() ||
                   !participants.every(valid) ||
@@ -667,6 +679,10 @@ function ReviewForm({
           {job.n_participants_actual}/{job.n_participants_requested}
           {job.degraded ? ' · уменьшенный состав' : ''}
         </p>
+        <p className="hint">
+          Повторяющиеся ID моделей исключены из состава. Независимость разных
+          псевдонимов одной модели не подтверждена.
+        </p>
         {promoteable ? (
           <p role="status" className="council-degraded-banner">
             Кворум не набран: принят только один черновик. Это не полное
@@ -677,8 +693,13 @@ function ReviewForm({
         ) : null}
         <p>
           Вызовы: {String(job.usage?.external_calls ?? 0)} · токены:{' '}
-          {String(job.usage?.tokens_used ?? 'неизвестно')} · стоимость:{' '}
-          {String(job.usage?.cost_estimated ?? 'неизвестно')}
+          {job.usage?.tokens_used_complete === false
+            ? 'неизвестно (данные неполные)'
+            : String(job.usage?.tokens_used ?? 'неизвестно')}{' '}
+          · стоимость:{' '}
+          {job.usage?.cost_estimated_complete === false
+            ? 'неизвестно (есть неполные данные)'
+            : String(job.usage?.cost_estimated ?? 'неизвестно')}
         </p>
         <ul>
           {job.members?.map((m) => (

@@ -270,7 +270,10 @@ def test_retry_cannot_replace_pinned_harness_configuration(authenticated, tmp_pa
             session.commit()
             member = session.get(PlanningMember, job["members"][0]["id"])
             assert member.candidates_json == before
-            assert json.loads(member.access_overrides_json)[profile["id"]] == {"version": 2}
+            assert json.loads(member.access_overrides_json)[profile["id"]] == {
+                "version": 2,
+                "native_fingerprint": json.loads(before)[0]["harness"]["native_fingerprint"],
+            }
             current = planning.effective_candidate(member, json.loads(before)[0])
             assert current["harness"]["settings"] == {"permission_mode": "no_tools"}
             assert current["harness"]["name"] == profile["name"]

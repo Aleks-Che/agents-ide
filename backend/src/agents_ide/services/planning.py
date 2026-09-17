@@ -47,6 +47,7 @@ from agents_ide.persistence.models import (
     Project,
     ProviderConnection,
 )
+from agents_ide.security.native_credentials import fingerprint
 from agents_ide.services.groups import load_group_snapshot
 from agents_ide.services.transactions import begin_write
 
@@ -154,6 +155,7 @@ def _candidate(
                 "executable_path": profile.executable_path,
                 "settings": json.loads(profile.settings_json or "{}"),
                 "version": profile.version,
+                "native_fingerprint": fingerprint(profile.harness_kind, profile.executable_path),
             },
         }
     connection = session.get(ProviderConnection, selection.get("provider_connection_id"))
@@ -219,13 +221,38 @@ def candidate_identity(candidate: dict[str, Any]) -> tuple[str, str]:
 
 
 def require_real_council_supported(session: Session, job: PlanningJob) -> None:
-    """Reject the entire job before any external call, including a late merger."""
+    """Check every candidate before any external call, including a late merger."""
+    import sys
+    from pathlib import Path
+
+    from agents_ide.adapters.model_catalog import parameters_for
+    from agents_ide.services.harness import current_model_metadata
+
     for member in session.scalars(select(PlanningMember).where(PlanningMember.job_id == job.id)):
-        if any(c.get("kind") == "agent" for c in json.loads(member.candidates_json)):
-            raise AppError(
-                "council_harness_real_unverified",
-                "Council через harness пока доступен только во внутренних симуляционных тестах",
-                422,
+        for candidate in json.loads(member.candidates_json):
+            if candidate.get("kind") != "agent" or not candidate.get("enabled", True):
+                continue
+            harness = candidate["harness"]
+            path = Path(harness.get("executable_path") or "")
+            if (
+                sys.platform != "win32"
+                or not path.is_absolute()
+                or not path.is_file()
+                or path.suffix.lower() in {".ps1", ".cmd", ".bat"}
+            ):
+                raise AppError(
+                    "council_harness_real_unverified",
+                    "Council требует нативный executable и проверенную изоляцию Windows",
+                    422,
+                )
+            profile = session.get(HarnessProfile, candidate["harness_profile_id"])
+            if profile is None or not _harness_is_read_only(profile):
+                raise AppError("council_harness_unverified", "Council требует режим чтения", 422)
+            parameters_for(
+                harness["harness_kind"],
+                candidate["model_id"],
+                candidate["params"],
+                current_model_metadata(profile),
             )
 
 
@@ -233,7 +260,10 @@ def create_planning_job(
     session: Session, payload: PlanningJobCreate, *, simulated: bool = False
 ) -> PlanningJob:
     begin_write(session)
-    request_hash = content_hash(payload.model_dump(mode="json"))
+    request_body = payload.model_dump(mode="json")
+    if not payload.context_paths:
+        request_body.pop("context_paths", None)  # Preserve idempotency of existing text-only jobs.
+    request_hash = content_hash(request_body)
     existing = session.scalar(
         select(PlanningJob).where(PlanningJob.idempotency_key == payload.idempotency_key)
     )
@@ -257,7 +287,11 @@ def create_planning_job(
             raise AppError("chat_unavailable", "Диалог недоступен", 409)
     if not payload.task_text.strip():
         raise AppError("planning_task_empty", "Task must not be blank", 422)
-    context = {"kind": "provided_text", "context_section": sanitize(payload.context_text)}
+    from agents_ide.services.planning_context import capture_context
+
+    context, read_workspace = capture_context(
+        session, project, payload.context_text, payload.context_paths
+    )
     job = PlanningJob(
         id=new_id(),
         idempotency_key=payload.idempotency_key,
@@ -270,7 +304,7 @@ def create_planning_job(
         task_text=sanitize(payload.task_text),
         read_manifest_hash=content_hash(context),
         context_snapshot_json=_serialise(context),
-        read_workspace_json=_serialise({"mode": "no_workspace_access"}),
+        read_workspace_json=_serialise(read_workspace),
         budget_json=payload.budget.model_dump_json(),
         usage_json='{"external_calls":0}',
         n_participants_requested=payload.participant_count,
@@ -428,9 +462,13 @@ def _refresh_access(session: Session, member: PlanningMember) -> list[dict[str, 
                     "Исполнитель или настройки harness изменились: создайте новый Council",
                     409,
                 )
-            if profile.version != current["harness"]["version"]:
+            native_fingerprint = fingerprint(profile.harness_kind, profile.executable_path)
+            if profile.version != current["harness"]["version"] or native_fingerprint != current[
+                "harness"
+            ].get("native_fingerprint"):
                 overrides[profile.id] = {
                     "version": profile.version,
+                    "native_fingerprint": native_fingerprint,
                 }
                 changes.append(
                     {
@@ -438,6 +476,7 @@ def _refresh_access(session: Session, member: PlanningMember) -> list[dict[str, 
                         "harness_id": profile.id,
                         "previous_version": current["harness"]["version"],
                         "version": profile.version,
+                        "native_credentials_refreshed": True,
                     }
                 )
             continue
@@ -484,6 +523,14 @@ def retry_planning_job(
     now = utc_now()
     if job.lease_owner and (job.lease_expires_at or 0) > now:
         raise AppError("planning_retry_worker_active", "Дождитесь освобождения задания worker", 409)
+    from agents_ide.engine.planning_native import processes_stopped
+
+    if not processes_stopped(session, job.id):
+        raise AppError(
+            "planning_retry_worker_active",
+            "Завершение предыдущего дерева процессов не подтверждено",
+            409,
+        )
     if not job.request_hash:
         raise AppError("legacy_planning_unverifiable", "Создайте новый Council", 409)
     if content_hash(json.loads(job.context_snapshot_json)) != job.read_manifest_hash:

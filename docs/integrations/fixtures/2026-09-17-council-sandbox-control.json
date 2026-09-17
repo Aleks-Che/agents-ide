@@ -1,0 +1,40 @@
+{
+  "passed": false,
+  "version": "codex-cli 0.153.4",
+  "model_calls": 0,
+  "profile": "agents_ide_council",
+  "observations": {
+    "allowed_read": {
+      "rpc_error": true,
+      "rpc_error_details": "{'code': -32603, 'message': 'exec failed: windows sandbox: CreateProcessWithLogonW failed: 267'}",
+      "exit_code": null,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": false
+    },
+    "outside_read": {
+      "rpc_error": false,
+      "rpc_error_details": null,
+      "exit_code": 1,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": true
+    },
+    "inside_write": {
+      "rpc_error": false,
+      "rpc_error_details": null,
+      "exit_code": 1,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": true
+    },
+    "outside_write": {
+      "rpc_error": false,
+      "rpc_error_details": null,
+      "exit_code": 1,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": true
+    }
+  }
+}

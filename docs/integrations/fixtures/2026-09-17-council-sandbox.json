@@ -1,0 +1,36 @@
+{
+  "passed": false,
+  "version": "codex-cli 0.153.4",
+  "model_calls": 0,
+  "profile": "agents_ide_council",
+  "observations": {
+    "allowed_read": {
+      "rpc_error": true,
+      "exit_code": null,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": false
+    },
+    "outside_read": {
+      "rpc_error": false,
+      "exit_code": 1,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": true
+    },
+    "inside_write": {
+      "rpc_error": false,
+      "exit_code": 1,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": true
+    },
+    "outside_write": {
+      "rpc_error": false,
+      "exit_code": 1,
+      "allowed_marker": false,
+      "secret_marker": false,
+      "access_denied": true
+    }
+  }
+}

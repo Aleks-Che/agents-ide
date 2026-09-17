@@ -1,5 +1,88 @@
 # Журнал реализации
 
+### 2026-09-17 · Незавершённые пункты плана · Нативный Council и проверка границ
+
+**Статус:** закрыты 11 из 19 открытых чекбоксов; 8 комплексных условий остаются
+открытыми. Полная v1 не принята. Автономная запись и recovery незавершённых внешних
+операций по-прежнему не допускаются без доказанной capability (B-001/B-002).
+
+**Реализовано:**
+
+- Council использует 2–3 agent/llm-участника direct/group и отдельного merger.
+  Нативные Codex/OpenCode выполняются через общий ProcessSupervisor и durable
+  журнал процессов миграции 0019; PID, поколение, lease и native session/turn ID
+  сохраняются до продолжения. Retry запрещён, пока старые процессы живы.
+- Выбранные файлы копируются в один неизменяемый пакет: запрещены secrets, links
+  и hardlinks; резервации и Windows handles защищают получение содержимого.
+  У каждого участника отдельный приватный cwd и новая сессия. Чужие принятые
+  черновики получает только merger, также отдельными файлами.
+- Codex 0.153.4 получает именованный профиль чтения и отключённую сеть инструментов,
+  MCP/дополнительные инструменты отключены; OpenCode работает с --pure/no_tools.
+  Реальная проверка production ACL разрешила чтение context и запретила чтение
+  соседнего synthetic .env, запись внутри и снаружи cwd. Windows 267 при первом
+  command/exec исправляется одним повтором фиксированной безвредной команды до
+  вызова модели; модельные запросы этим механизмом не повторяются.
+- Raw native envelopes сохраняются после очистки вместе с нормализованными
+  delta/tool/plan/turn-событиями и лимитами хранения. Каталог хранит per-model effort
+  ladder и SHA-256 fingerprint executable/native auth/config (миграция 0018).
+  Внешняя смена авторизации инвалидирует каталог и блокирует старый dispatch;
+  explicit retry обновляет доступ отдельно от неизменяемого snapshot.
+- Preflight повторяет проверки ресурсов, секретов, Git baseline/hooks/allowlist,
+  command fingerprints и нативного доступа. UI показывает только подтверждённые
+  параметры конкретной модели; неподдержанное значение не понижается молча.
+- Native OpenCode APIError/401 с isRetryable=false, пустыми parts, нулевыми tokens
+  и отсутствием assistant/tool activity получает безопасный provider_unauthorized
+  для fallback. Прочие ошибки после отправки остаются unknown. Проверено настоящим
+  OpenCode с локальным HTTP-провайдером, без внешних модельных запросов.
+- Исправлены завершение Windows Job при дублированном handle, утечка регистрации
+  завершённого процесса и API 500 при переводе часов назад. Неполные token/cost
+  метрики Council явно помечаются неполными. Сценарии upstream и отличия описаны
+  в [карте адаптации](integrations/SOURCE_ADAPTATION.md); MIT включён в пакет.
+
+**Проверки и найденные дефекты:**
+
+- Windows, итоговый общий прогон: **720 passed / 1 failed**, 1161,22 с. Единственное
+  падение — устаревшее ожидание access_overrides без native_fingerprint; исправлено.
+  Последующий набор OpenCode/Council: **56 passed**, включая этот случай и новые
+  401-сценарии. Ранее новые native/context и смежные наборы: 31 и 51 passed.
+- Linux/WSL Ubuntu, Python 3.12, полная копия checkout и locked wheels: первый
+  прогон 692 passed / 2 failed / 19 skipped выявил DPAPI-зависимость фикстуры и
+  откат часов. После исправлений **696 passed / 1 failed / 24 skipped**, 749,94 с;
+  единственное падение — то же ожидание fingerprint. Последующий целевой прогон
+  **132 passed / 1 Windows-only skipped** проверил исправление и новые 401-сценарии.
+  24 общих пропуска — Windows-specific; четыре новых Windows path tests прошли
+  на Windows без пропусков. Это локальная Linux-проверка, не GitHub Actions.
+- Frontend: **147 Vitest passed**. Полный Playwright: 35 passed / 1 failed;
+  устаревшее ожидание полного запрета native Council заменено проверкой серверного
+  отказа до вызовов и прошло отдельно. Все три member-params сценария прошли,
+  включая новый per-model выбор и запрет silent clamp. Всего покрыты 37 сценариев
+  текущего набора, общий и целевые прогоны учитываются раздельно.
+- Ruff check/format, mypy Windows/Linux и генерируемые контракты проверены;
+  ESLint/Prettier/TypeScript/Vite прошли. У pytest два прежних deprecation warning.
+- Разрешённый лимит из трёх внешних обращений исчерпан: первый Codex получил
+  invalid_json_schema (исправлена строгая required-схема), затем Codex gpt-5.6-sol
+  и OpenCode MiniMax-M3 дали два принятых черновика. Локальный HTTP-merger создал
+  ready_for_confirmation; все процессы остановлены. Это ещё не полностью нативный
+  merger. [Отчёт](integrations/fixtures/2026-09-17-native-council.json).
+- Проверки sandbox и provider 401 не обращаются к внешним моделям:
+  [private ACL sandbox](integrations/fixtures/2026-09-17-council-private-sandbox.json),
+  [native provider 401](integrations/fixtures/2026-09-17-opencode-provider-auth.json).
+  Первые неуспешные sandbox fixtures сохранены как история, не как допуск.
+- Архив поставки проверен по всем 171 SHA-256 и соответствию исходникам; включены
+  миграции 0018/0019, MIT и готовый UI. Новая offline runtime-only установка на
+  Python 3.12.7 прошла migrate, pairing, UI=200, worker=running и stop/start/stop;
+  pytest/ruff/mypy отсутствуют. Использовались отдельные data_dir и порт.
+  Это новое окружение на текущем хосте, без отдельной чистой ОС и физического reboot.
+  [Отчёт проверки](operations/fixtures/2026-09-17-release-runtime.json).
+
+**Открыто:** полный нативный Council подготовлен в scripts/probe_council_acceptance.py
+с dry-run по умолчанию и жёстким максимумом 3 вызова; новое разрешение ещё ожидается.
+Нужны B-001/B-002, реальные циклы/межharness fallback и полная capability-матрица,
+чистая Windows и физический reboot. GitHub Actions для прежнего HEAD aa958620
+[завершился ошибкой](https://github.com/Aleks-Che/agents-ide/actions/runs/35132629221):
+frontend format и Ubuntu 3.13 pytest, остальные jobs отменены fail-fast. Найденные
+локально дефекты исправлены; текущие изменения ещё не опубликованы для нового CI.
+
 ### 2026-09-16 · Этап 12 · Эксплуатация и приёмка
 
 **Статус:** эксплуатационная реализация выполнена; общая приёмка v1 остаётся
@@ -2326,9 +2409,9 @@ permissions, transport health и внешние IDs к имеющемуся supe
 | --- | --- | --- | --- |
 | B-001 | Блокер допуска автономной записи; `unverified` | Роли с записью в 6A/6B | Подтвердить границы разрешённой записи и отрицательные сценарии выхода за workspace. Успешный отказ permission не доказывает изоляцию разрешённого действия. До проверки — `no-go` для обоих harness. |
 | B-002 | Блокер автоматического восстановления; `unverified` | Этапы 5, 6A/6B | Проверить смерть процесса и обрыв транспорта во время незавершённого внешнего действия. Восстановление завершённой истории не разрешает повтор запроса с неизвестным исходом. |
-| V-001 | `unverified` | Адаптер OpenCode, этап 6A | Проверить ошибку авторизации именно провайдера и полный поток model delta. Сейчас подтверждены 401 локального server и SSE `server.connected`. |
-| V-002 | Удалённый прогон не выполнен | Приёмка изменений через CI | Выполнить добавленный GitHub Actions workflow. Локальные Windows-тесты прошли; они не означают, что Windows/Linux jobs уже прошли на GitHub. |
-| V-003 | Частично проверено | Пути и резервации, этап 5 | В ревью этапа 2 проверены junction-алиас, вложенные области, общий checkout и подмена каталога. Остаются финальные file handles/TOCTOU при исполнении, subst/8.3 и длинные пути всей цепочки Python/Git/harness. Отказ сетевого диска проверен имитацией Win32 DRIVE_REMOTE, без реального сетевого тома. |
+| V-001 | Проверено 2026-09-17 | Адаптер OpenCode, этап 6A | Native provider APIError/401 проверен локальным HTTP endpoint: пустой вывод и точная нулевая usage разрешают fallback; при предыдущем assistant/tool output исход unknown. Полный поток delta проверен реальным ответом MiniMax-M3 и raw native archive. [Fixture](integrations/fixtures/2026-09-17-opencode-provider-auth.json). |
+| V-002 | Предыдущий CI failed; новый ожидается | Приёмка изменений через CI | Actions run 35132629221 для aa958620 упал на frontend format и Ubuntu 3.13 pytest; остальные jobs отменены. Исправления проверены локально на Windows и Linux/WSL 3.12. Текущая рабочая версия ещё не опубликована для нового CI. |
+| V-003 | Частично проверено 2026-09-17 | Пути и резервации, этап 5 | Реальные Windows 8.3, SUBST, путь >260 символов и запрет замены удерживаемого каталога прошли; добавлены hardlink guard и handles при Council context capture. Junction/вложенные области/общий checkout проверены ранее. Полная цепочка Git/harness под каждым алиасом и реальный сетевой том остаются unverified. |
 | V-004 | Ограничено возможностями адаптера | Git / этап 6A | Git baseline, allowlist, private index, hooks/signing и внешние изменения проверены этапом 8. `allow_nonoverlap` доступен серверным графам без AgentTask/Command; для записывающих адаптеров требуется подтверждённая изоляция записи. |
 | V-005 | Проверено локально 2026-09-16 | Нагрузочная приёмка, этап 12 | 100 000 событий на Windows/NTFS/NVMe: p95 snapshot 13,66 мс, история 15,82 мс, persisted → DOM 470,89 мс. Ограниченные буферы и slow reset подтверждены; [измерения](operations/fixtures/2026-09-16-stage12-load.json). CI остаётся V-002. |
 | V-006 | Условие обновления старых данных | Базы с записями из первоначального этапа 2 | В 0002 не сохранялись исходный запрос Run, payload команд и полный scope резервации. Миграция 0003 сохраняет историю, но не выдумывает утраченные поля. Для legacy-старта возвращается `idempotency_unverifiable`; команды с NULL payload и неизвестные резервации требуют сверки на этапе 5. Новые записи содержат все эти поля. |
@@ -2336,7 +2419,7 @@ permissions, transport health и внешние IDs к имеющемуся supe
 
 Основания и точные границы: [матрица интеграций](integrations/CAPABILITIES.md), [решения каркаса](architecture/FOUNDATION_DECISIONS.md), [runtime-контракты](architecture/RUNTIME_CONTRACTS.md).
 
-V-008 — интеграционная часть этапа 3 закрыта частично: движок 4 передаёт cycle/scope, сохраняет loops/assignments/счётчики и повторяет directory/resource/secret-проверки под резервацией. Для явного simulated допустим dispatch_ready=true. Реальные адаптеры ещё должны подтвердить точные capability, формат/контекст, бюджеты и permissions; Git — baseline/allowlist/hooks, evidence — версию файлов. Для real dispatch_ready=false; объявлять весь этап 3 закрытым пока нельзя.
+V-008 — preflight/dispatch закрыты для реализованных политик: scope/counters, directory/resource/secret, Git baseline/hooks/allowlist, command fingerprint, evidence и native auth recheck. Per-model reasoning ladder и параметры UI проверены. Полная capability-матрица контекста, формата ответа, телеметрии и разрешённой записи реальных кандидатов остаётся открытой; unsupported write по-прежнему блокируется. Один из двух интеграционных чекбоксов этапа 3 закрыт.
 
 V-009 — совместимость ранних графов этапа 3: ранее принимались неоднозначные переходы, циклы без лимитов и неизвестные поля. Теперь публикация/старт их отклоняют. Миграция 0006 сохраняет историю и добавляет только origin; исправление требует новой версии. Новые итоговые хэши включают фактические inputs, старые snapshot/hash не переписываются.
 

@@ -215,15 +215,16 @@ class Runner:
         self._persist(run)
         now = utc_now()
         intervals = json.loads(run.active_intervals_json)
-        if intervals and intervals[-1]["ended_at"] is None:
-            intervals[-1]["ended_at"] = datetime.fromtimestamp(now, UTC).isoformat()
+        from agents_ide.domain.active_intervals import close_interval
+
+        interval_time, quality = close_interval(intervals, datetime.fromtimestamp(now, UTC))
         if state in {"running", "retry_wait", "recovering", "pause_requested", "stop_requested"}:
             intervals.append(
                 {
                     "state": state,
-                    "started_at": datetime.fromtimestamp(now, UTC).isoformat(),
+                    "started_at": interval_time,
                     "ended_at": None,
-                    "quality": "observed",
+                    "quality": quality,
                 }
             )
             self.runtime["active_since"] = now
@@ -890,12 +891,6 @@ class Runner:
         from agents_ide.engine.opencode_runtime import OpenCodeRuntime, validate_settings
 
         validate_settings(profile.get("settings", {}))
-        if request.params:
-            raise AppError(
-                "configuration_invalid",
-                "OpenCode model parameters are unverified",
-                409,
-            )
         runtime = self._opencode_live.get(profile_id)
         if runtime is None:
             # There is at most one OpenCode listener per Run. A completed
@@ -931,14 +926,6 @@ class Runner:
         from agents_ide.engine.codex_runtime import CodexRuntime, validate_settings
 
         validate_settings(profile.get("settings", {}))
-        # Model parameters for Codex need an explicit per-model capability
-        # mapping that is not yet established; refuse until that gate opens.
-        if request.params:
-            raise AppError(
-                "configuration_invalid",
-                "Codex model parameters are unverified",
-                409,
-            )
         runtime = self._codex_live.get(profile_id)
         if runtime is None or not runtime.stream.is_alive():
             self._close_harness_live()
@@ -1387,6 +1374,15 @@ class Runner:
                 return "missing"
             if resource.archived_at is not None:
                 return "archived"
+            if isinstance(resource, HarnessProfile) and not self.simulated:
+                from agents_ide.security.native_credentials import fingerprint
+
+                pinned = self.snapshot["dependencies"]["harness_profiles"].get(ref, {})
+                expected = pinned.get("native_catalog_fingerprint")
+                if expected and expected != fingerprint(
+                    resource.harness_kind, resource.executable_path
+                ):
+                    return "native_credentials_changed"
             if (
                 candidate.get("resource_version")
                 and resource.version != candidate["resource_version"]
@@ -2291,6 +2287,11 @@ class Runner:
                         "agent.permission_requested",
                         "agent.permission_resolved",
                         "agent.session_aborted",
+                        "agent.native_event",
+                        "agent.turn_started",
+                        "agent.output_delta",
+                        "agent.plan_updated",
+                        "budget.updated",
                     }
                     if type_ not in allowed:
                         raise ValueError("Adapter cannot emit state transitions")
@@ -2308,6 +2309,12 @@ class Runner:
                             agent_session.last_external_event_at = utc_now()
                             if payload.get("session_id") and not late:
                                 agent_session.external_session_id = payload["session_id"]
+                            if (
+                                type_ == "agent.turn_started"
+                                and payload.get("turn_id")
+                                and not late
+                            ):
+                                agent_session.external_turn_id = payload["turn_id"]
                             if (
                                 payload.get("message_id")
                                 and payload.get("role") == "assistant"

@@ -347,13 +347,13 @@ def command_event(
         if previous in {"running", "retry_wait", "pause_requested", "stop_requested"}:
             from datetime import UTC, datetime
 
+            from agents_ide.domain.active_intervals import close_interval
+
             intervals = json.loads(run.active_intervals_json)
-            now = datetime.now(UTC).isoformat()
-            if intervals and intervals[-1]["ended_at"] is None:
-                intervals[-1]["ended_at"] = now
+            now, quality = close_interval(intervals, datetime.now(UTC))
             if run.state in {"running", "retry_wait", "pause_requested", "stop_requested"}:
                 intervals.append(
-                    {"state": run.state, "started_at": now, "ended_at": None, "quality": "observed"}
+                    {"state": run.state, "started_at": now, "ended_at": None, "quality": quality}
                 )
             run.active_intervals_json = to_json(intervals)
         append_event(

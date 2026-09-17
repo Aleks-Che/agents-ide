@@ -24,6 +24,7 @@ from agents_ide.domain.common import (
 )
 from agents_ide.domain.contracts import RunState
 from agents_ide.domain.schemas import (
+    ActiveInterval,
     CommandAccepted,
     Run,
     RunCommand,
@@ -579,6 +580,8 @@ def _command_allowed(command_type: str, state: str) -> bool:
 
 
 def _run_from_model(model: RunModel) -> Run:
+    from agents_ide.domain.active_intervals import interval_view
+
     return Run(
         simulated=json.loads(model.snapshot_json).get("execution_mode") == "simulated",
         runtime=json.loads(model.runtime_json),
@@ -601,7 +604,10 @@ def _run_from_model(model: RunModel) -> Run:
         worker_id=model.worker_id,
         worker_generation=model.worker_generation,
         waiting_reason=json.loads(model.waiting_reason_json) if model.waiting_reason_json else None,
-        active_intervals=json.loads(model.active_intervals_json),
+        active_intervals=[
+            ActiveInterval.model_validate(item)
+            for item in interval_view(json.loads(model.active_intervals_json))
+        ],
     )
 
 

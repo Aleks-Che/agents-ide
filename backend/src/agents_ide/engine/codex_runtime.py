@@ -22,6 +22,42 @@ if TYPE_CHECKING:
 STARTUP_TIMEOUT_SECONDS = 30.0
 
 
+def verify_read_sandbox(adapter: CodexAdapter, workspace: Path, check: Callable[[], None]) -> bool:
+    """Warm the exact named profile before giving any work to a model.
+
+    On 0.153.4 a newly created private cwd can fail its first process launch
+    with Windows 267. Only this known pre-launch failure permits one retry of
+    our fixed, side-effect-free readiness command; model turns are never retried.
+    """
+    for attempt in range(2):
+        response = adapter._request_response(
+            "command/exec",
+            {
+                "command": [
+                    str(Path(os.environ["SYSTEMROOT"]) / "System32/cmd.exe"),
+                    "/d",
+                    "/c",
+                    "echo AGENTS_IDE_SANDBOX_READY",
+                ],
+                "cwd": str(workspace),
+                "timeoutMs": 5000,
+            },
+            timeout=10,
+            check=check,
+        )
+        result = response.get("result", {})
+        if result.get("exitCode") == 0 and "AGENTS_IDE_SANDBOX_READY" in result.get("stdout", ""):
+            return bool(attempt)
+        error = response.get("error", {})
+        if attempt == 0 and error == {
+            "code": -32603,
+            "message": "exec failed: windows sandbox: CreateProcessWithLogonW failed: 267",
+        }:
+            continue
+        raise AppError("council_harness_real_unverified", "Council sandbox startup failed", 422)
+    raise AssertionError("Unreachable sandbox probe state")
+
+
 def validate_settings(settings: dict[str, Any], *, execution: bool = True) -> None:
     if settings.get("serve_args") or settings.get("env"):
         raise AppError(
@@ -82,6 +118,8 @@ class CodexRuntime:
     entry: ProcessRegistryEntry | None = None
     supervisor: ProcessSupervisor | None = None
     _closed: bool = False
+    isolated_config: dict[str, Any] | None = None
+    sandbox_warmup_retried: bool = False
 
     @classmethod
     def start(
@@ -94,6 +132,7 @@ class CodexRuntime:
         attempt_id: str | None = None,
         check_owned: Callable[[], None] | None = None,
         stop_event: threading.Event | None = None,
+        isolated_read: bool = False,
     ) -> CodexRuntime:
         path = Path(executable)
         if (
@@ -116,6 +155,16 @@ class CodexRuntime:
 
         check()
         argv = [str(path), "app-server", "--listen", "stdio://"]
+        isolated_config = None
+        if isolated_read:
+            from agents_ide.security.codex_policy import SUPPORTED_VERSION, arguments, config_for
+
+            if fetch_codex_version(str(path)) != SUPPORTED_VERSION:
+                raise AppError(
+                    "council_harness_real_unverified", "Unsupported Codex sandbox version", 422
+                )
+            isolated_config = config_for(workspace_path)
+            argv.extend(arguments(isolated_config))
         env = codex_environment()
         entry = None
         if supervisor is None:
@@ -137,12 +186,40 @@ class CodexRuntime:
                 if entry.group:
                     entry.group.close()
                 raise
-        runtime = cls(workspace_path, str(path), stream, entry=entry, supervisor=supervisor)
+        runtime = cls(
+            workspace_path,
+            str(path),
+            stream,
+            entry=entry,
+            supervisor=supervisor,
+            isolated_config=isolated_config,
+        )
         try:
             adapter = CodexAdapter(
                 stream=stream, session=runtime.session(), request_timeout=start_timeout
             )
             adapter.initialize(check=check)
+            if isolated_read:
+                readiness = adapter._request_response(
+                    "windowsSandbox/readiness", {}, timeout=10, check=check
+                )
+                if readiness.get("result", {}).get("status") != "ready":
+                    raise AppError(
+                        "council_harness_real_unverified", "Windows sandbox is not ready", 422
+                    )
+                config = adapter._request_response(
+                    "config/read", {"includeLayers": False}, timeout=10, check=check
+                )
+                servers = config.get("result", {}).get("config", {}).get("mcp_servers", {})
+                if config.get("error") or not isinstance(servers, dict):
+                    raise AppError(
+                        "council_harness_real_unverified",
+                        "Native MCP configuration unavailable",
+                        422,
+                    )
+                assert isolated_config is not None
+                isolated_config["mcp_servers"] = {name: {"enabled": False} for name in servers}
+                runtime.sandbox_warmup_retried = verify_read_sandbox(adapter, workspace_path, check)
             runtime.cached_models = adapter.list_models(check=check)
             check()
             runtime.server_version = fetch_codex_version(
@@ -156,7 +233,13 @@ class CodexRuntime:
 
     def session(self) -> RunSession:
         return RunSession(
-            str(self.workspace_path), {"permission_mode": "read_only"}, self.server_version
+            str(self.workspace_path),
+            {
+                "permission_mode": "read_only",
+                "model_metadata": getattr(self.cached_models, "metadata", {}),
+                **({"isolated_config": self.isolated_config} if self.isolated_config else {}),
+            },
+            self.server_version,
         )
 
     def close(self) -> None:

@@ -170,11 +170,16 @@ def _capture_dependencies(
             )
         common = {"id": row.id, "version": row.version, "archived": row.archived_at is not None}
         if isinstance(row, HarnessProfile):
+            from agents_ide.security.native_credentials import fingerprint
+            from agents_ide.services.harness import current_model_metadata
+
             data = {
                 **common,
                 "harness_kind": row.harness_kind,
                 "executable_path": row.executable_path,
                 "settings": json.loads(row.settings_json),
+                "native_catalog_fingerprint": fingerprint(row.harness_kind, row.executable_path),
+                "model_metadata": current_model_metadata(row),
             }
             profiles[ref] = data
         else:

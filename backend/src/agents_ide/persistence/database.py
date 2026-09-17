@@ -9,7 +9,7 @@ from sqlalchemy import URL, Engine, create_engine, event
 
 from agents_ide.config import Settings
 
-SCHEMA_REVISION = "0017_operations"
+SCHEMA_REVISION = "0019_planning_native"
 
 
 def create_database(settings: Settings) -> Engine:

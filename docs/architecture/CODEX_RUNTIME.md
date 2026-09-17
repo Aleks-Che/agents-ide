@@ -41,7 +41,7 @@ Request IDs уникальны в пределах соединения и об�
 заменяет накопленные delta того же item, без дублирования; final_answer имеет приоритет
 над commentary. Инструменты читаются из item/completed. Usage берётся из
 thread/tokenUsage/updated → tokenUsage.last.totalTokens, без суммирования уже включённых
-cache/reasoning. Стоимость неизвестна. Полный архив всех native событий не реализован.
+cache/reasoning. Стоимость неизвестна. Исходные envelopes, включая неизвестные типы, сохраняются как agent.native_event после удаления секретов; tool output и plan/diff дополнительно нормализуются. Большие Run payload перемещаются в артефакты и подчиняются квотам/retention.
 
 Legacy direct-профиль из config.harness_profile_id также закрепляется в dependencies.
 Runner сохраняет session_id и message_id до зависимых переходов, server_version и
@@ -68,3 +68,15 @@ CODEX_HOME; **0 вызовов модели**. [Наблюдение](../integra
 Строгая фикстура: protocol, Runner, роли, IDs, approvals, long turn, stop/pause/resume,
 ошибки startup/catalog/transport и ограничение output. Полный gate 6B с реальными моделями,
 межharness fallback, подтверждённым model capability и write isolation остаётся открытым.
+
+
+## Изолированный Council (17.09.2026)
+
+Council использует отдельный именованный permission profile Codex 0.153.4: чтение
+scratch-каталога и SYSTEMROOT, без сети инструментов. Legacy sandboxPolicy не
+подменяет этот профиль при turn/start. Перед вызовом проверяются readiness Windows
+sandbox и возвращённые activePermissionProfile/approvalPolicy/networkAccess. MCP
+и дополнительные инструменты отключены; исходный проект не передаётся. Реальный
+command/exec подтвердил чтение разрешённого файла и отказ читать соседний synthetic
+.env и записывать новый файл. Этот профиль не разрешает автономную запись Run.
+Подробности и ограничения — в [Council](PLANNING_COUNCIL.md).

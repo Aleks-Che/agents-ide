@@ -1,0 +1,211 @@
+{
+    "schemaVersion":  1,
+    "project":  "Claudexor",
+    "version":  "3.11.0",
+    "upstreamUrl":  "https://github.com/razzant/claudexor",
+    "sourceDirectory":  "C:\\work\\git\\my-repos\\claudexor",
+    "upstreamCommit":  null,
+    "provenanceNote":  "Selected byte-for-byte copies from a local source directory without .git; package.json version is not proof of a release tag or commit. Not a standalone build.",
+    "copiedAtUtc":  "2026-09-14T07:23:52.2486998Z",
+    "license":  "MIT",
+    "licenseFile":  "LICENSE",
+    "copyright":  "Copyright (c) 2026 Anton Razzhigaev",
+    "fileCount":  39,
+    "files":  [
+                  {
+                      "path":  "LICENSE",
+                      "bytes":  1073,
+                      "sha256":  "471f75bc6ef38333696dd6549c4355adef05291a74135649131f0a5728f5a45c"
+                  },
+                  {
+                      "path":  "package.json",
+                      "bytes":  3929,
+                      "sha256":  "cbfa8ea3441607c273b1e9d8519e8058ba9ce65f4218a7d7c812fd171072d735"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/council.ts",
+                      "bytes":  6385,
+                      "sha256":  "4615820441a73d5e739b4e99a1d87474a356815c0ad7df351d0cebeb3c769b9a"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/council.test.ts",
+                      "bytes":  4014,
+                      "sha256":  "bf82baa1d7b425df3ac28e6f678a91b2f483e457932ae7acf0d12ab1bb02a7f9"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/council-input.ts",
+                      "bytes":  2972,
+                      "sha256":  "10d9493677a9bcbf0f509760c0d0b4fe0a190cdbed106876213ace683116e240"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/council-input.test.ts",
+                      "bytes":  2837,
+                      "sha256":  "2a153faadd9b92bad9252ff49b4d2684b28b9071060c783f10787c1cc25c92e9"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/council-input.integration.test.ts",
+                      "bytes":  18602,
+                      "sha256":  "b371d7cd900e8eaac506b6084919bbe1ac8500f090f23ad5ee2605c1d0010bae"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/planRun.ts",
+                      "bytes":  22146,
+                      "sha256":  "1ffcd9745387afc077b0bbca779d27ee321ffaffbb331698ee8ed5261eea6911"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/plannerAttempt.ts",
+                      "bytes":  13080,
+                      "sha256":  "3cc1c6ef5db7bcade3db825953f3542c978d03ae59801839e26a7199cfc918c1"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/plan-prompt.ts",
+                      "bytes":  1849,
+                      "sha256":  "cdbd71026d9bedcb6844b4859369e0a4678da4a6700acfaed18fbdf9bbf7e63a"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/planQuestions.ts",
+                      "bytes":  8034,
+                      "sha256":  "27442da3c53801f851d75e14c43d3e18ebe26eacf2cf6436032f7dc1400f746b"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/planQuestions.test.ts",
+                      "bytes":  4805,
+                      "sha256":  "11e098feef0a50e5af63e8515c62a2e7c40052b5aa595ea77c3e7e8d74be2693"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/planBrief.ts",
+                      "bytes":  2229,
+                      "sha256":  "21db4fe99988b498b101a8d61ab208241f6a38ddc28d8e2921066d7dd655e90e"
+                  },
+                  {
+                      "path":  "packages/orchestrator/src/planTerminal.ts",
+                      "bytes":  4643,
+                      "sha256":  "1198ee1e001df7202265be1d8f0800583496ebe5ef12b09ebb8d1fdf01bbeb38"
+                  },
+                  {
+                      "path":  "packages/schema/src/plan.ts",
+                      "bytes":  5819,
+                      "sha256":  "e8af95f186e402638c732dc2fc978903640263d3aec9581e87a6054c70479547"
+                  },
+                  {
+                      "path":  "packages/schema/src/effort.ts",
+                      "bytes":  10547,
+                      "sha256":  "f5ef0d975b757af6c3ed796084d6abe79ad90bb323b60fa8a16466ed505ecc9e"
+                  },
+                  {
+                      "path":  "packages/core/src/effort.ts",
+                      "bytes":  4858,
+                      "sha256":  "40e19724f6da37b8bb86a84be4170143900e4269a9f416c10df9e2511fc69bf7"
+                  },
+                  {
+                      "path":  "packages/core/src/effort.test.ts",
+                      "bytes":  8177,
+                      "sha256":  "ee0f06ad0d27e4d92fc9c2a31463122ab91d3cd9d25c93cdfd43e8996598d6a5"
+                  },
+                  {
+                      "path":  "packages/harness-codex/src/effort-probe.ts",
+                      "bytes":  27290,
+                      "sha256":  "d9fd2df8f929ef342d515ccc670fecd6b9adcc8d49824b3d831d30e72b42f8f0"
+                  },
+                  {
+                      "path":  "packages/harness-codex/src/effort.test.ts",
+                      "bytes":  45172,
+                      "sha256":  "33183d23718330ebfa617981492c5912e8f79aef885867b0a9c192b059258ebb"
+                  },
+                  {
+                      "path":  "packages/harness-codex/src/vendor-cli-version.ts",
+                      "bytes":  607,
+                      "sha256":  "4b7b13613bbdc6edc9ee45c09b4b97992541369ef185420ac41911d02600a908"
+                  },
+                  {
+                      "path":  "packages/harness-codex/src/parse.ts",
+                      "bytes":  21750,
+                      "sha256":  "f5404a5d7913059e714ed8fcb178ee8e0e1ecf1d47de734166cf5388fce2d1e4"
+                  },
+                  {
+                      "path":  "packages/harness-codex/src/parse.test.ts",
+                      "bytes":  31899,
+                      "sha256":  "a9cd1f6151e8359bceddb310d312374b4a058fc98706c4dff6e86219654591cb"
+                  },
+                  {
+                      "path":  "packages/harness-codex/src/retry-signals.ts",
+                      "bytes":  1914,
+                      "sha256":  "f09709e6eefb47e2b438d5611a65e42364927d9c4f5c0884fad5b162f5b345c0"
+                  },
+                  {
+                      "path":  "packages/harness-opencode/src/parse.ts",
+                      "bytes":  6790,
+                      "sha256":  "ebc9f9db99f15f87eba4c1edc17319fc28659c996d18c6ab7c635f6a30dc23e7"
+                  },
+                  {
+                      "path":  "packages/harness-opencode/src/parse.test.ts",
+                      "bytes":  1977,
+                      "sha256":  "a5102583df289d76240708e2b5ee029be6617f1bb0c168c0e8edd68fdcab687b"
+                  },
+                  {
+                      "path":  "packages/harness-raw-api/src/parse.ts",
+                      "bytes":  3275,
+                      "sha256":  "03cf6dec740b9ac6ca1beb85dcf1d404f273ca9f107281b9bbd7e59b7468b933"
+                  },
+                  {
+                      "path":  "packages/harness-raw-api/src/parse.test.ts",
+                      "bytes":  7494,
+                      "sha256":  "14954990a646dc5b0f1f39523c59cc44a5839d8c8d1b41ad4a02fa117bb207f9"
+                  },
+                  {
+                      "path":  "packages/harness-raw-api/src/providerError.ts",
+                      "bytes":  2672,
+                      "sha256":  "701504e3d907a61904f21ec5472d0c9c1415a664e7d425c515d7a300ee3debc4"
+                  },
+                  {
+                      "path":  "packages/review/src/gates.ts",
+                      "bytes":  9069,
+                      "sha256":  "31577ce0666bf5e674974fcfca0488cbc27f713b4c06f19337c8ca6fcb31a757"
+                  },
+                  {
+                      "path":  "packages/review/src/convergence.ts",
+                      "bytes":  2696,
+                      "sha256":  "59843f14e6a2bbfe6587675c78d9423dbbd9d935efb1015a480e54f95d82977c"
+                  },
+                  {
+                      "path":  "packages/review/src/convergence.test.ts",
+                      "bytes":  2170,
+                      "sha256":  "1b26e2505f4d4c603c1f7175217f05abf18ab7a4356815c807db32f1a24b6d9d"
+                  },
+                  {
+                      "path":  "packages/harness-codex/fixtures/basic-run.jsonl",
+                      "bytes":  1003,
+                      "sha256":  "0704119b12d1ca8e5ec481da58697e0f3f9397eac77165c5c30f36faf1d164ff"
+                  },
+                  {
+                      "path":  "packages/harness-codex/fixtures/session-resume-rate-limit.jsonl",
+                      "bytes":  841,
+                      "sha256":  "16c8f08fb09c96b1eb3061f7789cd58d9087358563ff75c57c36fbd5e5539d3b"
+                  },
+                  {
+                      "path":  "packages/harness-codex/fixtures/signals/reconnect-timeout.jsonl",
+                      "bytes":  119,
+                      "sha256":  "2d3e005952ff11853200dc90f4e616dd0d590eebf2e8f030b38df48d73d090f6"
+                  },
+                  {
+                      "path":  "packages/harness-codex/fixtures/plan-progress-todo-list.jsonl",
+                      "bytes":  994,
+                      "sha256":  "478623cb9582dc3a869543f6ad67c4b26018e37074a4182bc54dfbd9a346cdf4"
+                  },
+                  {
+                      "path":  "packages/harness-codex/fixtures/structured-envelope-intermediate.jsonl",
+                      "bytes":  955,
+                      "sha256":  "883ba74ae285372f908e9f5de8cede1bf166dc08685337b3e4d111055ac664db"
+                  },
+                  {
+                      "path":  "packages/harness-opencode/fixtures/basic-run.jsonl",
+                      "bytes":  484,
+                      "sha256":  "0c4bcaedc7a09fcb081b4d5006681cab988b507f7457f4ee883353d7c6848367"
+                  },
+                  {
+                      "path":  "packages/harness-opencode/fixtures/session-resume.jsonl",
+                      "bytes":  552,
+                      "sha256":  "313594672f87c2060711ce5f73c017590475b807b52b5e9c0771e048333a2181"
+                  }
+              ]
+}

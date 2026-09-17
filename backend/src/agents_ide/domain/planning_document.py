@@ -55,6 +55,24 @@ class PlanDocument(ApiModel):
     def items(self) -> list[dict[str, Any]]:
         return [{"id": f"P{i}", **step.model_dump()} for i, step in enumerate(self.steps, 1)]
 
+    @classmethod
+    def native_output_schema(cls) -> dict[str, Any]:
+        """Native strict output requires every property, including defaulted ones."""
+
+        def strict(value: Any) -> Any:
+            if isinstance(value, list):
+                return [strict(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            result = {key: strict(item) for key, item in value.items() if key != "default"}
+            if result.get("type") == "object":
+                result["required"] = list(result.get("properties", {}))
+                result["additionalProperties"] = False
+            return result
+
+        schema: dict[str, Any] = strict(cls.model_json_schema())
+        return schema
+
 
 def parse_document(body: str) -> PlanDocument:
     if len(body.encode("utf-8")) > 65536:

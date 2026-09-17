@@ -1,0 +1,18 @@
+{
+  "date": "2026-09-17",
+  "state": "ready_for_confirmation",
+  "participants": [
+    "codex/gpt-5.6-sol",
+    "opencode/minimax-coding-plan/MiniMax-M3"
+  ],
+  "merger": "local deterministic HTTP fixture",
+  "accepted_drafts": 2,
+  "all_processes_stopped": true,
+  "native_events": 206,
+  "wallclock_seconds": 18.15806293487549,
+  "tokens_reported": 12268,
+  "total_cost": "unknown",
+  "authorized_external_calls_consumed_total": 3,
+  "earlier_call": "Codex invalid_json_schema; native schema required fields corrected",
+  "fully_native_merger": "not tested in this observation"
+}

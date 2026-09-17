@@ -873,7 +873,7 @@ test('Council retry can reset a strict subset of failed participants', async ({
   }
 })
 
-test('Council blocks harness direct and group before submission and restores LLM launch', async ({
+test('Council validates native harness configuration on the server before any participant is called', async ({
   page,
 }) => {
   await pair(page)
@@ -928,17 +928,18 @@ test('Council blocks harness direct and group before submission and restores LLM
   await participant
     .getByRole('combobox', { name: 'Профиль harness', exact: true })
     .selectOption(harness.id)
-  await expect(submit).toBeDisabled()
-  await expect(dialog.getByRole('alert')).toContainText(
-    'Запуск Council с агентом или агентной группой пока недоступен',
-  )
+  await expect(submit).toBeEnabled()
+  await submit.click()
+  await expect(dialog.getByRole('alert')).toContainText('нативный executable')
   await participant
     .getByRole('combobox', { name: 'Тип выбора', exact: true })
     .selectOption('group')
   await participant
     .getByRole('combobox', { name: 'Группа', exact: true })
     .selectOption(group.id)
-  await expect(submit).toBeDisabled()
+  await expect(submit).toBeEnabled()
+  await submit.click()
+  await expect(dialog.getByRole('alert')).toContainText('нативный executable')
   await participant
     .getByRole('combobox', { name: 'Тип выбора', exact: true })
     .selectOption('direct')
@@ -953,7 +954,9 @@ test('Council blocks harness direct and group before submission and restores LLM
   await editors[2]
     .getByRole('combobox', { name: 'Профиль harness', exact: true })
     .selectOption(harness.id)
-  await expect(submit).toBeDisabled()
+  await expect(submit).toBeEnabled()
+  await submit.click()
+  await expect(dialog.getByRole('alert')).toContainText('нативный executable')
   expect(
     await api(page, 'GET', `/planning_jobs?project_id=${project.id}`),
   ).toEqual([])

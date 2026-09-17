@@ -29,7 +29,13 @@ from agents_ide.persistence.models import (
 from agents_ide.security.filesystem import atomic_write
 from agents_ide.services.transactions import begin_write
 
-DETAIL_TYPES = ("agent.message_delta", "attempt.text_delta", "attempt.progress")
+DETAIL_TYPES = (
+    "agent.message_delta",
+    "attempt.text_delta",
+    "attempt.progress",
+    "agent.native_event",
+    "agent.output_delta",
+)
 TERMINAL = ("completed", "failed", "cancelled")
 
 

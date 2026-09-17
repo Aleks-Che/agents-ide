@@ -135,7 +135,11 @@ def preflight(
         "candidates": {},
         "commands": [],
         "data_destinations": [],
-        "permissions": {"status": "unverified", "autonomous_write": "blocked"},
+        "permissions": {
+            "status": "declared",
+            "autonomous_write": "blocked",
+            "commands": "pinned_argv",
+        },
         "dispatch_ready": False,
         "mutable_checks_required_before_dispatch": True,
         "requires_trust": getattr(version, "origin", "local") == "imported",
@@ -147,12 +151,16 @@ def preflight(
             "selection": configuration["model_selections"].get(single_agent.role),
         }
         report.preview["graph"] = graph
-    report.add_warning(
-        ValidationIssue(
-            "runtime_unimplemented",
-            "Исполнение и повторная проверка под резервацией относятся к этапам 4–8",
-        )
-    )
+    report.preview["dispatch_checks"] = [
+        "workspace_reservation",
+        "directory_identity",
+        "resource_version",
+        "native_credentials",
+        "model_parameters",
+        "process_ownership",
+        "command_fingerprint",
+        "git_baseline_and_hooks",
+    ]
     if configuration["dirty_policy"] == "allow_nonoverlap" and any(
         n["type"] in {"AgentTask", "Command"} for n in graph["nodes"]
     ):
@@ -433,6 +441,7 @@ def preflight(
             "Command",
             "CollectContext",
             "LLMRequest",
+            "AgentTask",
             "GitCommit",
             "PlanControl",
         }
@@ -559,11 +568,19 @@ def _candidates(
                 if candidate["enabled"] and report.preview.get("execution_mode") == "real":
                     try:
                         validate_settings(settings)
-                        if candidate["params"]:
-                            raise AppError(
-                                "configuration_invalid",
-                                f"{resource.harness_kind} parameters require verified mapping",
-                                422,
+                        from agents_ide.adapters.model_catalog import parameters_for
+                        from agents_ide.services.harness import current_model_metadata
+
+                        metadata = current_model_metadata(resource)
+                        parameters_for(
+                            resource.harness_kind,
+                            candidate["model_id"],
+                            candidate["params"],
+                            metadata,
+                        )
+                        if candidate["model_id"] in metadata:
+                            row["capabilities"].update(
+                                metadata[candidate["model_id"]], status="catalog_verified"
                             )
                     except AppError as exc:
                         report.add_error(

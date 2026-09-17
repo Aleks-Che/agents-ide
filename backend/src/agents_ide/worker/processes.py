@@ -239,6 +239,11 @@ class ProcessGroup:
 
     def _close(self) -> None:
         if self.job is not None:
+            import win32job
+
+            # Explicitly terminate the owned Job: kill-on-close alone waits for
+            # every duplicated Job handle to disappear. Never fall back to PID.
+            win32job.TerminateJobObject(self.job, 1)
             self.job.Close()
             self.job = None
             for handle in self.handles:

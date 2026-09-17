@@ -23,18 +23,22 @@ def hold_command_directory(root: Path, cwd: Path) -> Iterator[None]:
             if current.is_symlink() or current.is_junction():
                 raise ValueError("linked_path")
             if sys.platform == "win32":
+                import pywintypes
                 import win32con
                 import win32file
 
-                handle = win32file.CreateFile(
-                    str(current),
-                    win32con.GENERIC_READ,
-                    win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
-                    None,
-                    win32con.OPEN_EXISTING,
-                    win32con.FILE_FLAG_BACKUP_SEMANTICS,
-                    None,
-                )
+                try:
+                    handle = win32file.CreateFile(
+                        str(current),
+                        win32con.GENERIC_READ,
+                        win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
+                        None,
+                        win32con.OPEN_EXISTING,
+                        win32con.FILE_FLAG_BACKUP_SEMANTICS,
+                        None,
+                    )
+                except pywintypes.error as exc:
+                    raise OSError("Workspace directory unavailable") from exc
                 handles.append(handle)
                 final = Path(
                     str(win32file.GetFinalPathNameByHandle(int(handle), 0)).removeprefix("\\\\?\\")
@@ -62,6 +66,10 @@ def read_workspace_file(root: Path, relative: str, cap: int) -> bytes:
             raise ValueError("linked_path")
     with target.open("rb") as stream:
         before = os.fstat(stream.fileno())
+        # A harmless filename can be a hard link to a protected file. Its final
+        # handle path still looks safe, so pathname checks alone are insufficient.
+        if before.st_nlink != 1:
+            raise ValueError("linked_file")
         if sys.platform == "win32":
             import msvcrt
 
@@ -82,10 +90,11 @@ def read_workspace_file(root: Path, relative: str, cap: int) -> bytes:
         after = os.fstat(stream.fileno())
         if len(raw) > cap:
             raise ValueError("too_large")
-        if (before.st_ino, before.st_size, before.st_mtime_ns) != (
+        if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_nlink) != (
             after.st_ino,
             after.st_size,
             after.st_mtime_ns,
+            after.st_nlink,
         ) or target.stat().st_ino != before.st_ino:
             raise ValueError("unstable_file")
         return raw

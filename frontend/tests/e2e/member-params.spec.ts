@@ -2,6 +2,81 @@ import { randomUUID } from 'node:crypto'
 import { type Page } from '@playwright/test'
 import { test, expect, api, pair } from './support'
 
+test('native parameter choices follow model metadata and preserve an unsupported draft visibly', async ({
+  page,
+}) => {
+  await pair(page)
+  const suffix = randomUUID()
+  const profile = await api(page, 'POST', '/harness_profiles', {
+    name: `Native effort ${suffix}`,
+    harness_kind: 'codex',
+    settings: { permission_mode: 'read_only' },
+  })
+  const group = await api(page, 'POST', '/model_groups/agent', {
+    name: `Native metadata ${suffix}`,
+    members: [{ harness_profile_id: profile.id, model_id: 'alpha' }],
+  })
+  await page.route('**/api/harness_profiles*', async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    await route.fulfill({
+      response,
+      json: Array.isArray(body)
+        ? body.map((item) =>
+            item.id === profile.id
+              ? {
+                  ...item,
+                  model_capabilities: {
+                    alpha: {
+                      source: 'native_catalog',
+                      reasoning_efforts: ['low', 'high'],
+                    },
+                    beta: {
+                      source: 'native_catalog',
+                      reasoning_efforts: ['low'],
+                    },
+                  },
+                }
+              : item,
+          )
+        : body,
+    })
+  })
+  await page.getByRole('button', { name: 'Настройки', exact: true }).click()
+  const panel = page.getByRole('region', { name: 'Группы моделей' })
+  await panel.getByRole('tab', { name: 'agent', exact: true }).click()
+  await panel
+    .getByRole('listitem')
+    .filter({ hasText: group.name })
+    .getByRole('button', { name: 'Параметры…' })
+    .click()
+  const dialog = page.getByRole('dialog')
+  const member = dialog.locator('.member-edit-list > li').first()
+  await member.getByRole('button', { name: /^Параметры/ }).click()
+  await expect(
+    member.getByLabel('Новый параметр').locator('option'),
+  ).toHaveCount(1)
+  await member.getByRole('button', { name: 'Добавить параметр' }).click()
+  const effort = member.getByLabel('Значение reasoning_effort')
+  await expect(effort.locator('option')).toHaveText(['low', 'high'])
+  await effort.selectOption('high')
+  await dialog
+    .getByRole('button', { name: 'Сохранить кандидатов', exact: true })
+    .click()
+  await expect(
+    dialog.getByText('Кандидаты сохранены.', { exact: true }),
+  ).toBeVisible()
+  expect(
+    (await api(page, 'GET', `/model_groups/${group.id}`)).members[0].params,
+  ).toEqual({ reasoning_effort: 'high' })
+  await member.getByRole('textbox', { name: 'ID модели' }).fill('beta')
+  await expect(effort).toHaveValue('high')
+  await expect(effort).toHaveAttribute('aria-invalid', 'true')
+  await expect(member.getByRole('alert')).toContainText(
+    'не поддерживается выбранной моделью',
+  )
+})
+
 async function editGroup(page: Page, params: Record<string, unknown>) {
   await pair(page)
   const suffix = randomUUID()

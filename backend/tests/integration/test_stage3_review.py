@@ -507,7 +507,7 @@ def test_missing_secret_is_visible_and_next_llm_candidate_is_usable(authenticate
         client,
         headers,
         "/api/connections",
-        {"name": "protected", "base_url": "https://one.invalid", "secret": "regression-value"},
+        {"name": "protected", "base_url": "https://one.invalid"},
     )
     second = post(
         client, headers, "/api/connections", {"name": "public", "base_url": "https://two.invalid"}
@@ -537,7 +537,11 @@ def test_missing_secret_is_visible_and_next_llm_candidate_is_usable(authenticate
     from agents_ide.persistence.models import ProviderConnection
 
     with client.app.state.session_factory() as session:
-        reference = session.get(ProviderConnection, first["id"]).secret_reference
+        from agents_ide.domain.common import new_id
+
+        protected = session.get(ProviderConnection, first["id"])
+        reference = protected.secret_reference = new_id()
+        session.commit()
     (client.app.state.settings.data_dir / "secrets" / f"{reference}.dpapi").write_bytes(b"broken")
     preview = post(client, headers, f"/api/bindings/{binding['id']}/preflight", {})
     assert preview["ok"] and preview["candidates"]["a"][0]["reason"] == "secret_unavailable"

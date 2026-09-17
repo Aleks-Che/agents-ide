@@ -25,6 +25,8 @@ from agents_ide.adapters.base import (
     AgentResult,
     ExternalOutcome,
 )
+from agents_ide.adapters.model_catalog import CatalogModels, codex_metadata, parameters_for
+from agents_ide.adapters.native_events import archive_native
 from agents_ide.errors import AppError
 
 MAX_MESSAGE_BYTES = 1024 * 1024
@@ -296,7 +298,7 @@ class CodexAdapter(AgentAdapter):
 
     def list_models(self, *, check: Callable[[], None] | None = None) -> tuple[str, ...]:
         self.initialize(check=check)
-        models: set[str] = set()
+        models: dict[str, dict[str, Any]] = {}
         cursor = None
         seen: set[str] = set()
         for _ in range(100):
@@ -314,12 +316,19 @@ class CodexAdapter(AgentAdapter):
             ):
                 raise OSError("Codex model catalog rejected")
             for item in result["data"]:
-                if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                if (
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("id"), str)
+                    or not 1 <= len(item["id"]) <= 256
+                ):
                     raise OSError("Invalid Codex model catalog")
-                models.add(item["id"])
+                metadata = codex_metadata(item)
+                if item["id"] in models and metadata != models[item["id"]]:
+                    raise OSError("Conflicting Codex model metadata")
+                models[item["id"]] = metadata
             cursor = result.get("nextCursor")
             if cursor is None:
-                return tuple(sorted(models))
+                return CatalogModels(models)
             if not isinstance(cursor, str) or cursor in seen:
                 raise OSError("Invalid Codex catalog cursor")
             seen.add(cursor)
@@ -342,15 +351,25 @@ class CodexAdapter(AgentAdapter):
         if (
             settings.get("permission_mode") != "read_only"
             or settings.get("approval_policy", "never") != "never"
-            or request.params
         ):
             raise CodexConfigurationError("Unverified Codex permissions or parameters")
-        return {
+        try:
+            parameters_for(
+                "codex", request.model_id, request.params, settings.get("model_metadata", {})
+            )
+        except AppError as exc:
+            raise CodexConfigurationError(exc.message) from None
+        options: dict[str, Any] = {
             "model": request.model_id,
             "cwd": self.session.workspace_path,
             "sandbox": "read-only",
             "approvalPolicy": "never",
         }
+        if settings.get("isolated_config"):
+            options.pop("sandbox")
+            options["config"] = settings["isolated_config"]
+            options["ephemeral"] = True
+        return options
 
     def run(self, request: AgentAdapterRequest) -> AgentResult:
         with self._stream.lock:
@@ -430,6 +449,18 @@ class CodexAdapter(AgentAdapter):
                 if response.get("error"):
                     return failure("thread_start_failed", ExternalOutcome.UNAVAILABLE, safe=True)
             thread = response["result"]["thread"]
+            if self.session.settings.get("isolated_config"):
+                from agents_ide.security.codex_policy import PROFILE
+
+                actual = response["result"]
+                if (
+                    actual.get("activePermissionProfile", {}).get("id") != PROFILE
+                    or actual.get("approvalPolicy") != "never"
+                    or actual.get("sandbox", {}).get("networkAccess") is not False
+                ):
+                    return failure(
+                        "sandbox_policy_mismatch", ExternalOutcome.UNAVAILABLE, safe=True
+                    )
             returned_id = validate_thread_id(thread["id"])
             if tid and returned_id != tid:
                 return failure("session_identity_mismatch")
@@ -437,6 +468,13 @@ class CodexAdapter(AgentAdapter):
                 return failure("session_has_active_turn")
             self._binding = SessionBinding(
                 returned_id, self._binding.resume_count + 1 if resumed else 0
+            )
+            archive_native(
+                request.emit_event,
+                "codex",
+                "thread/resumed" if resumed else "thread/started",
+                thread,
+                returned_id,
             )
             emit(
                 "agent.session_resumed" if resumed else "agent.session_created",
@@ -464,6 +502,18 @@ class CodexAdapter(AgentAdapter):
                 turn_params["input"].append(
                     {"type": "text", "text": "Feedback:\n" + request.feedback}
                 )
+            if self.session.settings.get("isolated_config"):
+                turn_params.pop("sandboxPolicy")
+            if isinstance(request.capabilities.get("output_schema"), dict):
+                turn_params["outputSchema"] = request.capabilities["output_schema"]
+            turn_params.update(
+                parameters_for(
+                    "codex",
+                    request.model_id,
+                    request.params,
+                    self.session.settings.get("model_metadata", {}),
+                )
+            )
             pending: list[dict[str, Any]] = []
             sent = True  # Any loss during dispatch is ambiguous until proven rejected.
             response = self._request_response(
@@ -481,6 +531,7 @@ class CodexAdapter(AgentAdapter):
                     )
                 return failure("turn_start_failed")
             self._turn_id = validate_turn_id(response["result"]["turn"]["id"])
+            emit("agent.turn_started", turn_id=self._turn_id)
             emit("attempt.progress", message_id=self._turn_id, role="assistant")
             texts: dict[str, str] = {}
             phases: dict[str, str] = {}
@@ -503,10 +554,10 @@ class CodexAdapter(AgentAdapter):
                 params = message.get("params") or {}
                 if not isinstance(params, dict):
                     raise ValueError("Invalid notification")
-                matching = (
-                    params.get("threadId") == returned_id
-                    and params.get("turnId", (params.get("turn") or {}).get("id")) == self._turn_id
-                )
+                native_turn = params.get("turnId", (params.get("turn") or {}).get("id"))
+                matching = params.get("threadId") == returned_id and native_turn == self._turn_id
+                if matching or (params.get("threadId") == returned_id and native_turn is None):
+                    archive_native(request.emit_event, "codex", method, message, returned_id)
                 if "id" in message:
                     if not message.get("_answered"):
                         _decline(self._stream, message)
@@ -549,6 +600,15 @@ class CodexAdapter(AgentAdapter):
                     value = params.get("tokenUsage", {}).get("last", {}).get("totalTokens")
                     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                         tokens = value
+                    emit("budget.updated", tokens_used=tokens, cost=None, source_quality="native")
+                elif method == "item/started":
+                    item = params.get("item") or {}
+                    if item.get("type") not in {"userMessage", "agentMessage", "reasoning", "plan"}:
+                        emit("agent.tool_call", item=item, phase="started")
+                elif method in {"turn/plan/updated", "turn/diff/updated"}:
+                    emit("agent.plan_updated", native_type=method, details=params)
+                elif method.endswith("/delta"):
+                    emit("agent.output_delta", native_type=method, details=params)
                 elif method == "turn/completed":
                     turn = params["turn"]
                     terminal = turn.get("status") in {"completed", "failed", "interrupted"}
@@ -558,6 +618,22 @@ class CodexAdapter(AgentAdapter):
                         emit("agent.session_aborted", message_id=self._turn_id)
                         return failure("interrupted")
                     if turn.get("error") or turn.get("status") != "completed":
+                        if not texts and not tools:
+                            try:
+                                rejection = json.loads(turn.get("error", {}).get("message", ""))
+                            except (ValueError, AttributeError, TypeError):
+                                rejection = {}
+                            if (
+                                isinstance(rejection, dict)
+                                and rejection.get("status") == 400
+                                and rejection.get("error", {}).get("code") == "invalid_json_schema"
+                                and rejection.get("error", {}).get("param") == "text.format.schema"
+                            ):
+                                return failure(
+                                    "configuration_invalid",
+                                    ExternalOutcome.CONFIRMED_FAILURE,
+                                    safe=True,
+                                )
                         return failure("provider_result_unknown")
                     finals = [
                         text for key, text in texts.items() if phases.get(key) == "final_answer"
@@ -615,5 +691,12 @@ class CodexAdapter(AgentAdapter):
                         and params.get("threadId") == self.external_session_id
                         and (params.get("turn") or {}).get("id") == self._turn_id
                     ):
+                        archive_native(
+                            request.emit_event,
+                            "codex",
+                            "turn/completed",
+                            event,
+                            self.external_session_id or "",
+                        )
                         break
                 self._stream.close()

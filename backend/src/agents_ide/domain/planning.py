@@ -56,7 +56,10 @@ class PlanningJobCreate(ApiModel):
     chat_id: str | None = None
     task_text: Annotated[str, StringConstraints(min_length=1, max_length=64 * 1024)]
     context_text: str = Field(default="", max_length=64 * 1024)
-    participants: list[PlanningMemberSpec] = Field(default_factory=list, max_length=5)
+    context_paths: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
+        default_factory=list, max_length=32
+    )
+    participants: list[PlanningMemberSpec] = Field(default_factory=list, max_length=4)
     budget: PlanningJobBudget = Field(default_factory=PlanningJobBudget)
     idempotency_key: ShortStr
     initiator: ShortStr = "ui"
@@ -70,8 +73,8 @@ class PlanningJobCreate(ApiModel):
             raise ValueError("participants must contain exactly one merger entry")
         participants = [entry for entry in self.participants if entry.role == "participant"]
         n_requested = len(participants)
-        if n_requested < 2 or n_requested > 4:
-            raise ValueError("Council requires 2..4 participants besides the merger")
+        if n_requested < 2 or n_requested > 3:
+            raise ValueError("Council requires 2..3 participants besides the merger")
         # Each member declares a typed selection (direct agent/llm or group).
         for entry in self.participants:
             if isinstance(entry.selection, DirectAgentSelection) and not entry.selection.model_id:

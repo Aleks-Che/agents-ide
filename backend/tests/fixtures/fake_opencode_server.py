@@ -26,6 +26,7 @@ class Handler(BaseHTTPRequestHandler):
     lock = threading.Lock()
     response_status = 200
     response_error = None
+    auth_only_error = False
     response_size = 0
     delay = 0
     close_stream = False
@@ -181,12 +182,13 @@ class Handler(BaseHTTPRequestHandler):
                 "properties": {"sessionID": "ses_foreign", "field": "text", "delta": "FOREIGN"},
             }
         )
-        self.publish(
-            {
-                "type": "message.part.delta",
-                "properties": {"sessionID": sid, "field": "text", "delta": "hello"},
-            }
-        )
+        if not self.auth_only_error:
+            self.publish(
+                {
+                    "type": "message.part.delta",
+                    "properties": {"sessionID": sid, "field": "text", "delta": "hello"},
+                }
+            )
         if self.pending_permission or prompt == "permission":
             self.publish(
                 {
@@ -213,8 +215,19 @@ class Handler(BaseHTTPRequestHandler):
         }
         if self.response_error or sid in self.aborts:
             info["error"] = self.response_error or {"name": "MessageAbortedError"}
+        if self.auth_only_error:
+            info["tokens"] = {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache": {"read": 0, "write": 0},
+            }
         self._send_json(
-            self.response_status, {"info": info, "parts": [{"type": "text", "text": text}]}
+            self.response_status,
+            {
+                "info": info,
+                "parts": [] if self.auth_only_error else [{"type": "text", "text": text}],
+            },
         )
 
 

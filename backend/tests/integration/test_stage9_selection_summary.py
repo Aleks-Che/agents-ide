@@ -550,6 +550,29 @@ def test_no_dependencies_returns_null(authenticated):
         )
 
 
+def test_clock_rollback_keeps_run_snapshot_readable(authenticated, tmp_path, settings, monkeypatch):
+    import agents_ide.engine.runner as runner_module
+
+    client, _ = authenticated
+    run, _ = _review_run(authenticated, tmp_path / "clock", kind="llm", legacy=True)
+    original = Runner._state
+
+    def state(self, session, row, next_state, reason=None):
+        if next_state == "completed":
+            earlier = runner_module.utc_now() - 60
+            monkeypatch.setattr(runner_module, "utc_now", lambda: earlier)
+        return original(self, session, row, next_state, reason)
+
+    monkeypatch.setattr(Runner, "_state", state)
+    assert _execute(client, run, settings).final_state == "completed"
+    response = client.get(f"/api/runs/{run['id']}")
+    assert response.status_code == 200, response.text
+    interval = response.json()["active_intervals"][0]
+    assert interval["quality"] == "unknown"
+    assert interval["ended_at"] == interval["started_at"]
+    assert client.get(f"/api/runs/{run['id']}/snapshot").status_code == 200
+
+
 def test_latest_visit_does_not_mix_attempts_from_previous_cycle(
     authenticated, tmp_path, settings, monkeypatch
 ):

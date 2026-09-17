@@ -198,6 +198,8 @@ def provider_from_model(model: ProviderConnectionModel) -> ProviderConnection:
 
 
 def harness_from_model(model: HarnessProfileModel) -> HarnessProfile:
+    from agents_ide.services.harness import current_model_metadata
+
     return HarnessProfile(
         id=model.id,
         name=model.name,
@@ -205,6 +207,7 @@ def harness_from_model(model: HarnessProfileModel) -> HarnessProfile:
         executable_path=model.executable_path,
         settings=from_json(model.settings_json, {}),
         catalog_models=from_json(model.catalog_models_json, []),
+        model_capabilities=current_model_metadata(model),
         catalog_fetched_at=_dt(model.catalog_fetched_at),
         catalog_ttl_seconds=model.catalog_ttl_seconds,
         last_test_status=model.last_test_status,

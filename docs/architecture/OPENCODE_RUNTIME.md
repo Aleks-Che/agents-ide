@@ -81,7 +81,8 @@ Run можно продолжить. Stop/resume проверен через к�
 
 `GET .../models` возвращает `fresh|stale|unverified`, TTL по умолчанию 900 секунд.
 Смена executable/settings сбрасывает каталог и диагностику; ошибка probe не оставляет fresh.
-Изменение файлов авторизации самим OpenCode пока обнаруживается только последующим probe/TTL;
+Изменение executable/native auth/config обнаруживается по SHA-256 fingerprint; stale каталог
+не передаёт неподтверждённые метаданные параметров. TTL и ручной probe сохраняются;
 каталог никогда не считается доказательством доступа или успешной оплаты запроса.
 Миграция 0012 включена в `SCHEMA_REVISION`; пустая/обновлённая БД проходит readiness.
 
@@ -96,8 +97,23 @@ Run можно продолжить. Stop/resume проверен через к�
   настоящие БД/HTTP/ProcessSupervisor и subprocess с этим протоколом.
 - Сопоставлены сценарии session/text/tool-state/usage из
   [CLI-парсера](../../sources/claudexor/packages/harness-opencode/src/parse.ts).
-  Его NDJSON-формат не подключается к HTTP/SSE напрямую; effort mapping ещё не подтверждён.
+  Его NDJSON-формат не подключается к HTTP/SSE напрямую; per-model reasoningEffort берётся из свежих provider variants, без clamp.
 - Остаются изоляция разрешённой записи, интерактивные approvals, восстановление незавершённой
   операции с полезными эффектами, capability/параметры выбранной модели и полный пресет
   с реальным исполнителем. Простои server внутри долгих серверных узлов пока не имеют
   отдельного idle-reaper на 60 секунд. Codex 6B и удалённый CI не проверялись этим ревью.
+
+## Provider auth и Council: 17.09.2026
+
+Нативный OpenCode 1.18.30 с локальным HTTP-провайдером подтвердил форму APIError/401
+в info.error внутри HTTP 200. Только isRetryable=false, пустые parts, точная нулевая
+usage и отсутствие assistant/tool activity дают unavailable/provider_unauthorized
+с retry_safety=safe/no_effect=true. Эхо пользовательского сообщения не считается
+модельным выводом. Любая предшествующая генерация или неоднозначная форма сохраняет
+unknown. [Воспроизводимый probe](../../scripts/probe_opencode_auth.py) использует
+изолированный XDG-каталог, синтетический ключ и loopback, без внешних моделей.
+
+Council использует отдельный cwd с фиксированным контекстом, --pure, no_tools и новую
+сессию для каждого участника. MiniMax-M3 реально вернул валидный черновик; полный
+нативный merger ещё не проверен. Raw envelopes архивируются после sanitization.
+Эти результаты не разрешают автономную запись обычного Run или повтор unknown.

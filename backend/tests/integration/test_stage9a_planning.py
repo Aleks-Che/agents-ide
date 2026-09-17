@@ -106,7 +106,7 @@ def test_manual_edit_without_questions_is_validated_and_hash_binds_text_and_step
     assert response.status_code == 409
 
 
-@pytest.mark.parametrize("count", [2, 3, 4])
+@pytest.mark.parametrize("count", [2, 3])
 def test_count_default_and_merger_reuse(authenticated, tmp_path, count):
     client, headers = authenticated
     *_, payload = setup(client, headers, tmp_path, count=count)
@@ -115,6 +115,13 @@ def test_count_default_and_merger_reuse(authenticated, tmp_path, count):
     assert len(job["members"]) == count + 1
     assert job["n_participants_actual"] == 0
     assert len(job["read_manifest_hash"]) == 64
+
+
+def test_four_participants_exceed_v1_council_limit(authenticated, tmp_path):
+    client, headers = authenticated
+    *_, payload = setup(client, headers, tmp_path, count=4)
+    response = client.post("/api/planning_jobs", headers=headers, json=payload)
+    assert response.status_code == 422
 
 
 def test_validation_idempotency_chat_auth_and_cancel(authenticated, tmp_path):

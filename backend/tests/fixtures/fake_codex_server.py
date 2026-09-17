@@ -97,7 +97,14 @@ class Handler:
             tid = str(uuid.uuid4())
             self.sessions[tid] = {"id": tid, "cwd": params["cwd"], "turns": []}
             self.save()
-            return {"thread": self.sessions[tid]}
+            result = {"thread": self.sessions[tid]}
+            if params.get("config", {}).get("default_permissions"):
+                result.update(
+                    activePermissionProfile={"id": params["config"]["default_permissions"]},
+                    approvalPolicy="never",
+                    sandbox={"type": "readOnly", "networkAccess": False},
+                )
+            return result
         if method == "thread/resume":
             if os.environ.get("FAKE_CODEX_RESUME_ERROR"):
                 raise ValueError("Temporary storage error")
@@ -158,7 +165,7 @@ class Handler:
             if not event.wait(5):
                 raise ValueError("No valid approval response")
         prompt = params["input"][0]["text"]
-        text = "hello from codex"
+        text = os.environ.get("FAKE_CODEX_FINAL_TEXT", "hello from codex")
         if "force_decision=" in prompt:
             text = json.dumps({"verdict": "passed", "feedback": "fixture"})
         item = {"id": "answer", "type": "agentMessage", "text": text, "phase": "final_answer"}

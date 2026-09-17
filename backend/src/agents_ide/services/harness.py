@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from agents_ide.domain.common import assert_safe_name, new_id, to_json, utc_now
 from agents_ide.domain.schemas import (
+    HarnessCatalogModel,
     HarnessProbe,
     HarnessProfile,
     HarnessProfileCatalog,
@@ -20,6 +21,7 @@ from agents_ide.domain.schemas import (
 )
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import HarnessProfile as HarnessProfileModel
+from agents_ide.security.native_credentials import fingerprint
 from agents_ide.services.mapping import ensure_unique, get_or_404, harness_from_model
 from agents_ide.services.transactions import begin_write
 
@@ -35,6 +37,8 @@ def create_harness(session: Session, payload: HarnessProfileCreate) -> HarnessPr
         executable_path=payload.executable_path,
         settings_json=to_json(payload.settings),
         catalog_models_json="[]",
+        catalog_fingerprint=fingerprint(payload.harness_kind, payload.executable_path),
+        catalog_metadata_json="{}",
         catalog_fetched_at=None,
         catalog_ttl_seconds=payload.catalog_ttl_seconds,
         archived_at=None,
@@ -70,11 +74,43 @@ def list_harnesses(session: Session, include_archived: bool = False) -> list[Har
     if not include_archived:
         stmt = stmt.where(HarnessProfileModel.archived_at.is_(None))
     stmt = stmt.order_by(HarnessProfileModel.created_at.desc())
-    return [harness_from_model(row) for row in session.scalars(stmt).all()]
+    rows = session.scalars(stmt).all()
+    for row in rows:
+        invalidate_native_catalog(session, row)
+    return [harness_from_model(row) for row in rows]
 
 
 def get_harness(session: Session, harness_id: str) -> HarnessProfile:
-    return harness_from_model(get_or_404(session, HarnessProfileModel, harness_id))
+    model = get_or_404(session, HarnessProfileModel, harness_id)
+    invalidate_native_catalog(session, model)
+    return harness_from_model(model)
+
+
+def invalidate_native_catalog(session: Session, model: HarnessProfileModel) -> None:
+    current = fingerprint(model.harness_kind, model.executable_path)
+    if model.catalog_fingerprint == current:
+        return
+    begin_write(session)
+    model.catalog_models_json = "[]"
+    model.catalog_metadata_json = "{}"
+    model.catalog_fetched_at = None
+    model.catalog_fingerprint = current
+    model.last_test_status = None
+    model.last_test_at = None
+    model.version += 1
+    model.updated_at = utc_now()
+    session.flush()
+
+
+def current_model_metadata(model: HarnessProfileModel) -> dict[str, Any]:
+    if (
+        model.catalog_fingerprint != fingerprint(model.harness_kind, model.executable_path)
+        or model.catalog_fetched_at is None
+        or utc_now() - model.catalog_fetched_at > model.catalog_ttl_seconds
+    ):
+        return {}
+    metadata: dict[str, Any] = json.loads(model.catalog_metadata_json or "{}")
+    return metadata
 
 
 def update_harness(
@@ -137,6 +173,7 @@ def archive_harness(session: Session, harness_id: str, expected_version: int) ->
 
 def model_catalog(session: Session, harness_id: str) -> HarnessProfileCatalog:
     model = get_or_404(session, HarnessProfileModel, harness_id)
+    invalidate_native_catalog(session, model)
     if model.archived_at is not None:
         raise AppError("harness_archived", "Архивный профиль недоступен", 409)
     from datetime import UTC, datetime
@@ -151,7 +188,13 @@ def model_catalog(session: Session, harness_id: str) -> HarnessProfileCatalog:
         fetched_dt = datetime.fromtimestamp(model.catalog_fetched_at, tz=UTC)
     return HarnessProfileCatalog(
         status=status,  # type: ignore[arg-type]
-        models=[{"id": item, "source": "cache"} for item in sorted(cached)],
+        models=[
+            HarnessCatalogModel(
+                id=item,
+                **json.loads(model.catalog_metadata_json or "{}").get(item, {"source": "cache"}),
+            )
+            for item in sorted(cached)
+        ],
         fetched_at=fetched_dt,
         ttl_seconds=model.catalog_ttl_seconds,
     )
@@ -193,6 +236,7 @@ def probe_harness(
         )
     expected_version = model.version
     harness_kind = model.harness_kind
+    expected_fingerprint = fingerprint(harness_kind, executable)
     settings = json.loads(model.settings_json)
     session.rollback()  # No DB lock or read snapshot while a process starts.
     try:
@@ -221,6 +265,8 @@ def probe_harness(
     session.refresh(model)
     if model.version != expected_version or model.archived_at is not None:
         raise AppError("version_conflict", "Profile changed during probe", 409)
+    if fingerprint(harness_kind, executable) != expected_fingerprint:
+        raise AppError("version_conflict", "Native credentials changed during probe", 409)
     if version is None:
         record_probe_result(session, model, "failed", None, detail)
         return HarnessProbe(
@@ -230,6 +276,8 @@ def probe_harness(
             tested_at=datetime.now(tz=UTC),
         )
     model.catalog_models_json = to_json(list(models))
+    model.catalog_metadata_json = to_json(getattr(models, "metadata", {}))
+    model.catalog_fingerprint = expected_fingerprint
     model.catalog_fetched_at = utc_now()
     model.last_test_status = "ok"
     model.last_test_at = utc_now()

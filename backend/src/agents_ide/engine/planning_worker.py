@@ -224,6 +224,14 @@ def _prepare(
                     reason = "harness_unavailable"
                 elif profile.version != current["harness"]["version"]:
                     reason = "resource_changed"
+                elif current["harness"].get("native_fingerprint"):
+                    from agents_ide.security.native_credentials import fingerprint
+
+                    if (
+                        fingerprint(profile.harness_kind, profile.executable_path)
+                        != current["harness"]["native_fingerprint"]
+                    ):
+                        reason = "native_credentials_changed"
                 resource_id = current["harness_profile_id"]
             else:
                 resource = session.get(ProviderConnection, current["provider_connection_id"])
@@ -272,6 +280,7 @@ def _prepare(
             _fail(session, job, "context_changed")
             session.commit()
             return None
+        drafts: list[dict[str, Any]] = []
         if member.role == "merger":
             drafts = [
                 {"member_id": d.member_id, "body_text": d.body_text}
@@ -346,14 +355,19 @@ def _prepare(
                 prompt=prompt,
                 context_package={
                     "__node_id__": node,
+                    "context": context,
+                    "drafts": drafts,
                     "read_manifest_hash": job.read_manifest_hash,
                     "read_workspace_mode": json.loads(job.read_workspace_json or "{}").get(
                         "mode", "no_workspace_access"
                     ),
                 },
-                # No repository access until a pinned read manifest/reservation exists.
+                # The native runtime supplies a private copy, never the live repository.
                 workspace_path="",
-                capabilities={"harness_kind": candidate["harness"]["harness_kind"]},
+                capabilities={
+                    "harness_kind": candidate["harness"]["harness_kind"],
+                    "output_schema": PlanDocument.native_output_schema(),
+                },
                 params=candidate["params"],
                 attempt_index=attempt.attempt_index,
                 visit_index=1,
@@ -401,6 +415,7 @@ def _finish(
             ("tokens_used", result.tokens_used),
             ("cost_estimated", result.cost_estimated),
         ):
+            usage[name + "_complete"] = usage.get(name + "_complete", True) and value is not None
             if value is not None:
                 usage[name] = usage.get(name, 0) + value
         job.usage_json = service._serialise(usage)
@@ -493,6 +508,8 @@ def _invoke_external(
     secret_store: SecretStore | None,
     stop_event: threading.Event,
     check_owned: Callable[[], None],
+    native_supervisor: Any = None,
+    attempt_id: str | None = None,
 ) -> LLMResult:
     """Dispatch outside the transaction; simulations use the shared adapter contract."""
     check_owned()
@@ -502,6 +519,9 @@ def _invoke_external(
             replace(request, stop_event=stop_event, check_owned=check_owned),
             simulated=simulated,
             fake_scenario=fake_scenario,
+            candidate=candidate,
+            native_supervisor=native_supervisor,
+            attempt_id=attempt_id,
         )
         check_owned()
         return result
@@ -526,10 +546,19 @@ def _invoke_harness(
     *,
     simulated: bool,
     fake_scenario: dict[str, Any] | None,
+    candidate: dict[str, Any] | None = None,
+    native_supervisor: Any = None,
+    attempt_id: str | None = None,
 ) -> LLMResult:
-    """Internal simulation only; real process ownership/read isolation remain gated."""
+    """Both execution paths use the same agent result and Council validation."""
     if not simulated:
-        raise AppError("council_harness_real_unverified", "Council harness is not verified", 422)
+        from agents_ide.engine.planning_native import run_native
+
+        if candidate is None or native_supervisor is None or attempt_id is None:
+            raise AppError(
+                "council_harness_real_unverified", "Planning process owner required", 422
+            )
+        return _agent_result(run_native(candidate, request, native_supervisor, attempt_id))
     scenario = dict(fake_scenario or {})
     responses = list(scenario.get("responses", []))
     node_id = request.role
@@ -572,6 +601,10 @@ def _invoke_harness(
         responses.append(response)
     # No workspace passed: even a scripted file edit is refused by FakeAgentAdapter.
     result = FakeAgentAdapter(parse_fake_scenario({"responses": responses})).run(request)
+    return _agent_result(result)
+
+
+def _agent_result(result: Any) -> LLMResult:
     return LLMResult(
         outcome=result.outcome,
         raw_text=result.raw_text,
@@ -605,6 +638,12 @@ def dispatch_planning_job(
             job = service.get_planning_job(session, job_id)
             return DispatchResult(PlanningState(job.state))
     call_stop, finished = threading.Event(), threading.Event()
+    from agents_ide.engine.planning_native import PlanningSupervisor
+    from agents_ide.worker.processes import ProcessRegistry
+
+    native_supervisor = PlanningSupervisor(
+        factory, ProcessRegistry(), job_id, claim.owner, claim.generation
+    )
 
     def check_owned() -> None:
         with factory() as session:
@@ -651,6 +690,8 @@ def dispatch_planning_job(
                     secret_store=secret_store,
                     stop_event=call_stop,
                     check_owned=check_owned,
+                    native_supervisor=native_supervisor,
+                    attempt_id=attempt_id,
                 )
             except AppError as exc:
                 result = LLMResult(
@@ -677,6 +718,7 @@ def dispatch_planning_job(
                 )
             _finish(factory, claim, attempt_id, result)
     finally:
+        native_supervisor.stop()
         finished.set()
         watcher.join(timeout=2)
         with factory() as session:

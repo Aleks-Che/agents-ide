@@ -33,7 +33,11 @@ def initialize(rpc):
 def start_turn(rpc, thread_id, model, prompt):
     result = rpc.call(
         "turn/start",
-        {"threadId": thread_id, "model": model, "input": [{"type": "text", "text": prompt}]},
+        {
+            "threadId": thread_id,
+            "model": model,
+            "input": [{"type": "text", "text": prompt}],
+        },
     )
     return result.get("result", {}).get("turn", {}).get("id")
 
@@ -120,7 +124,10 @@ def codex_controls(executable, workspace, model):
                 report["completed_session_recovery"] = "supported"
             # Interrupt after observable progress, not just after request acceptance.
             turn_id = start_turn(
-                rpc, thread_id, model, "Count from 1 to 1000 in text, with no tools or file access."
+                rpc,
+                thread_id,
+                model,
+                "Count from 1 to 1000 in text, with no tools or file access.",
             )
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:

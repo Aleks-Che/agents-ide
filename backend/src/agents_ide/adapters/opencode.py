@@ -28,6 +28,8 @@ from agents_ide.adapters.base import (
     AgentResult,
     ExternalOutcome,
 )
+from agents_ide.adapters.model_catalog import CatalogModels, parameters_for
+from agents_ide.adapters.native_events import archive_native
 from agents_ide.errors import AppError
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -202,6 +204,9 @@ class OpenCodeAdapter(AgentAdapter):
         started = time.monotonic()
         sent = False
         done, ready, permission = threading.Event(), threading.Event(), threading.Event()
+        observed_output = threading.Event()
+        activity_message_ids: set[str] = set()
+        message_roles: dict[str, str] = {}
         errors: list[Exception] = []
         threads: list[threading.Thread] = []
         deadline = min(request.deadline_at or float("inf"), time.time() + self.timeout_seconds)
@@ -226,6 +231,12 @@ class OpenCodeAdapter(AgentAdapter):
                 request.check_owned()
             if (request.stop_event and request.stop_event.is_set()) or time.time() >= deadline:
                 raise InterruptedError
+
+        def observe_output(message_id: Any) -> None:
+            if isinstance(message_id, str):
+                activity_message_ids.add(message_id)
+            else:
+                observed_output.set()
 
         try:
             check()
@@ -297,6 +308,7 @@ class OpenCodeAdapter(AgentAdapter):
                 if sid != self.external_session_id:
                     return
                 kind = event["type"]
+                archive_native(request.emit_event, "opencode", kind, event, str(sid))
                 if kind == "permission.asked":
                     permission.set()
                     permission_id = validate_id(props.get("id"))
@@ -328,13 +340,19 @@ class OpenCodeAdapter(AgentAdapter):
                 elif kind == "message.part.delta" and props.get("field") == "text":
                     delta = props.get("delta")
                     if isinstance(delta, str):
+                        if delta:
+                            observe_output(props.get("messageID"))
                         emit("attempt.text_delta", {"text": delta, "session_id": sid})
                 elif kind == "message.part.updated" and isinstance(part, dict):
+                    if part.get("type") in {"text", "reasoning", "tool"}:
+                        observe_output(part.get("messageID"))
                     if part.get("type") == "tool":
                         emit("agent.tool_call", {"session_id": sid, "part": part})
                     elif isinstance(props.get("delta"), str):
                         emit("attempt.text_delta", {"text": props["delta"], "session_id": sid})
                 elif kind == "message.updated" and isinstance(info, dict):
+                    if isinstance(info.get("id"), str) and isinstance(info.get("role"), str):
+                        message_roles[info["id"]] = info["role"]
                     emit(
                         "attempt.progress",
                         {
@@ -342,6 +360,23 @@ class OpenCodeAdapter(AgentAdapter):
                             "message_id": validate_id(info.get("id")),
                             "role": info.get("role"),
                         },
+                    )
+                elif kind in {"session.status", "session.error", "session.idle"}:
+                    emit(
+                        "attempt.progress",
+                        {"session_id": sid, "native_type": kind, "details": props},
+                    )
+                elif kind in {"todo.updated", "session.diff"}:
+                    emit(
+                        "agent.plan_updated",
+                        {"session_id": sid, "native_type": kind, "details": props},
+                    )
+                elif kind == "message.part.delta":
+                    if props.get("delta"):
+                        observe_output(props.get("messageID"))
+                    emit(
+                        "agent.output_delta",
+                        {"session_id": sid, "native_type": kind, "details": props},
                     )
 
             async def event_loop() -> None:
@@ -455,6 +490,7 @@ class OpenCodeAdapter(AgentAdapter):
                 or info.get("role") != "assistant"
             ):
                 return fail("invalid_provider_payload", ExternalOutcome.INVALID_FORMAT)
+            archive_native(request.emit_event, "opencode", "message.completed", payload, resume)
             emit(
                 "attempt.progress",
                 {
@@ -470,6 +506,37 @@ class OpenCodeAdapter(AgentAdapter):
                 emit("agent.session_aborted", {"session_id": resume})
                 return fail("interrupted", ExternalOutcome.RETRYABLE_FAILURE, safe=True)
             if info.get("error"):
+                native_error = info["error"]
+                usage = info.get("tokens", {})
+                zero_usage = isinstance(usage, dict) and usage == {
+                    "input": 0,
+                    "output": 0,
+                    "reasoning": 0,
+                    "cache": {"read": 0, "write": 0},
+                }
+                zero_usage = zero_usage and all(
+                    type(value) is int
+                    for value in (
+                        usage["input"],
+                        usage["output"],
+                        usage["reasoning"],
+                        usage["cache"]["read"],
+                        usage["cache"]["write"],
+                    )
+                )
+                data = native_error.get("data", {}) if isinstance(native_error, dict) else {}
+                if (
+                    isinstance(native_error, dict)
+                    and native_error.get("name") == "APIError"
+                    and isinstance(data, dict)
+                    and data.get("statusCode") == 401
+                    and data.get("isRetryable") is False
+                    and parts == []
+                    and zero_usage
+                    and not observed_output.is_set()
+                    and all(message_roles.get(mid) == "user" for mid in tuple(activity_message_ids))
+                ):
+                    return fail("provider_unauthorized", ExternalOutcome.UNAVAILABLE, safe=True)
                 # Provider errors can follow useful tools/text; do not guess no_effect.
                 return fail("provider_result_unknown", ExternalOutcome.UNKNOWN)
             if info.get("finish") not in {"stop", "end_turn", "length"}:
@@ -567,11 +634,17 @@ class OpenCodeAdapter(AgentAdapter):
             raise OpenCodeConfigurationError("Use an explicit provider/model identifier")
         # These are model options, not arbitrary HTTP/config overrides. Unknown options
         # are rejected rather than silently accepting a different effective request.
-        if request.params:
-            raise OpenCodeConfigurationError(
-                "OpenCode model parameters require a verified capability mapping"
+        try:
+            native_params = parameters_for(
+                "opencode",
+                request.model_id,
+                request.params,
+                self.session.settings.get("model_metadata", {}),
             )
+        except AppError as exc:
+            raise OpenCodeConfigurationError(exc.message) from None
         body = {
+            **native_params,
             "model": {"providerID": provider, "modelID": model},
             "parts": [
                 {"type": "text", "text": request.prompt},
@@ -694,19 +767,35 @@ def list_opencode_models(
     )
     if not isinstance(data, dict) or not isinstance(data.get("providers"), list):
         raise ValueError("Invalid provider catalog")
-    return tuple(
-        sorted(
-            {
-                f"{p['id']}/{m}"
-                for p in data["providers"]
-                if isinstance(p, dict)
-                and isinstance(p.get("id"), str)
-                and isinstance(p.get("models"), dict)
-                for m in p["models"]
-                if isinstance(m, str)
+    metadata: dict[str, dict[str, Any]] = {}
+    for provider in data["providers"]:
+        if (
+            not isinstance(provider, dict)
+            or not isinstance(provider.get("id"), str)
+            or not isinstance(provider.get("models"), dict)
+        ):
+            continue
+        for key, model in provider["models"].items():
+            if not isinstance(key, str) or not isinstance(model, dict):
+                continue
+            variants = model.get("variants", {})
+            context = (
+                model.get("limit", {}).get("context")
+                if isinstance(model.get("limit"), dict)
+                else None
+            )
+            metadata[f"{provider['id']}/{key}"] = {
+                "source": "native_catalog",
+                "reasoning_efforts": [
+                    name
+                    for name, options in variants.items()
+                    if isinstance(options, dict) and options.get("reasoningEffort") == name
+                ]
+                if isinstance(variants, dict)
+                else [],
+                "context_window": context if type(context) is int and context > 0 else None,
             }
-        )
-    )
+    return CatalogModels(metadata)
 
 
 def decode_attachment(value: Any) -> bytes | None:

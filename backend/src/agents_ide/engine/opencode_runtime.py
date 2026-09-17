@@ -261,7 +261,10 @@ class OpenCodeRuntime:
             self.username,
             self.password,
             str(self.workspace_path),
-            {"permission_mode": "no_tools"},
+            {
+                "permission_mode": "no_tools",
+                "model_metadata": getattr(self.cached_models, "metadata", {}),
+            },
             self.server_version,
         )
 

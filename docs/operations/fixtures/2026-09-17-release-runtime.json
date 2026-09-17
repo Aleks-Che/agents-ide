@@ -1,0 +1,15 @@
+{
+  "files_verified": 171,
+  "source_matches": true,
+  "bundled_ui": true,
+  "archive_sha256": "cb879ac4f7e00431b375febc2ce057e9fc916273d914c12bd460eabd7bcd70ca",
+  "launcher": "running",
+  "ui": 200,
+  "worker": "running",
+  "restart": true,
+  "stopped": true,
+  "python": "3.12.7",
+  "dev_dependencies": false,
+  "separate_clean_windows": false,
+  "physical_reboot": false
+}

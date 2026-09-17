@@ -142,6 +142,24 @@ def test_provider_error_in_successful_http_is_not_success(server):
     assert "private-provider-error" not in repr(result)
 
 
+@pytest.mark.parametrize("prior_output", [False, True])
+def test_native_provider_401_is_safe_only_without_prior_output(server, prior_output):
+    handler, adapter, request = server
+    handler.auth_only_error = not prior_output
+    handler.response_error = {
+        "name": "APIError",
+        "data": {"statusCode": 401, "isRetryable": False, "message": "Synthetic key rejected"},
+    }
+    result = adapter.run(request)
+    if prior_output:
+        assert result.outcome == ExternalOutcome.UNKNOWN
+        assert not result.no_effect
+    else:
+        assert result.outcome == ExternalOutcome.UNAVAILABLE
+        assert result.error.code == "provider_unauthorized"
+        assert result.error.retry_safety == "safe" and result.no_effect
+
+
 def test_http_forbidden_is_permission_failure_without_fallback(server):
     handler, adapter, request = server
     handler.response_status = 403

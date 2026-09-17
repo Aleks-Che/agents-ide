@@ -144,7 +144,8 @@ def probe_codex(executable, workspace, model):
     rpc = CodexRpc(executable, workspace)
     try:
         result = rpc.call(
-            "initialize", {"clientInfo": {"name": "agents_ide_probe", "version": "0.1.0"}}
+            "initialize",
+            {"clientInfo": {"name": "agents_ide_probe", "version": "0.1.0"}},
         )
         observe(
             report,
@@ -156,7 +157,12 @@ def probe_codex(executable, workspace, model):
         result = rpc.call("model/list", {})
         models = result.get("result", {}).get("data", [])
         report["models"] = [item["id"] for item in models]
-        observe(report, "list_models", bool(models), {"method": "model/list", "count": len(models)})
+        observe(
+            report,
+            "list_models",
+            bool(models),
+            {"method": "model/list", "count": len(models)},
+        )
         if not model:
             model = next((item["id"] for item in models if item.get("isDefault")), None)
         if not model:
@@ -229,7 +235,10 @@ def probe_codex(executable, workspace, model):
                     "threadId": thread_id,
                     "model": model,
                     "input": [
-                        {"type": "text", "text": "Count from 1 to 1000 in text. Do not use tools."}
+                        {
+                            "type": "text",
+                            "text": "Count from 1 to 1000 in text. Do not use tools.",
+                        }
                     ],
                 },
             )
@@ -252,7 +261,12 @@ def probe_codex(executable, workspace, model):
         report["probe_error"] = type(error).__name__
     finally:
         report["events"] = rpc.events
-        observe(report, "stream_events", bool(rpc.events), {"observed_count": len(rpc.events)})
+        observe(
+            report,
+            "stream_events",
+            bool(rpc.events),
+            {"observed_count": len(rpc.events)},
+        )
         rpc.close()
     if report["capabilities"]["model_result"] == "supported":
         report["transport_gate"] = "go"

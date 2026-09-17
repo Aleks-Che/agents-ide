@@ -46,7 +46,7 @@ Fake/локальный HTTP/strict process fixture не подтверждаю�
 | A61–A62 | test_stage2a_model_groups, test_stage2a_review; settings/member-params.spec | API/UI групп и схемные параметры |
 | A63–A67 | test_stage4_review, test_stage6a_review, test_stage6b_review, test_stage7_review | Fallback по snapshot; межharness с реальными моделями отдельно |
 | A68–A70 | test_stage4_review, test_stage9_selection_summary; group-summary.spec | Группы при restart/repair/resume/retention |
-| A71–A74 | test_stage9a_*, council.spec | LLM direct/group и fake agent; real Council harness заблокирован |
+| A71–A74 | test_stage9a_*, council.spec | LLM/agent direct/group, Windows native Council; полная нативная матрица ещё проверяется |
 
 Backend-наборы находятся в [integration](../../backend/tests/integration),
 [unit](../../backend/tests/unit), [recovery](../../backend/tests/recovery);
@@ -79,7 +79,7 @@ worker running, launcher stop/start, dev-зависимости отсутств
 
 - Полная автономная запись и recovery незавершённых операций Codex/OpenCode,
   capability конкретных моделей и реальный межharness fallback: B-001/B-002.
-- Council через реальные harness с read isolation; LLM-only/fake это не заменяют.
+- Полный Council с нативным merger и реальная матрица сбоев. Два нативных участника и фактическая read isolation уже проверены 17.09.2026; подробности ниже.
 - Реальная перезагрузка Windows, установка на отдельной чистой Windows-машине
   и пользовательский Task Scheduler. Рестарт процессов и новый venv отмечаются отдельно.
 - Удалённый CI должен пройти на поддержанных Windows/Linux, а пропущенные
@@ -88,3 +88,34 @@ worker running, launcher stop/start, dev-зависимости отсутств
 До закрытия этих условий все A01–A74 не отмечаются как полностью пройденные.
 Повторение: [README](../../README.md), [эксплуатация](OPERATIONS.md),
 [реальные интеграции](../integrations/CAPABILITIES.md).
+
+
+## Дополнение 17.09.2026
+
+Реальный смешанный Council получил два принятых черновика от Codex gpt-5.6-sol и
+OpenCode MiniMax-M3; локальный HTTP-merger создал готовую ревизию. Все owned processes
+остановлены. Нативный sandbox Codex 0.153.4 проверен без модели: разрешённый файл
+читается, соседний synthetic .env и запись внутри/снаружи каталога запрещены.
+Первый запуск нового приватного cwd давал Windows 267; фиксированная безвредная
+команда подготовки повторяется ровно один раз только для этой ошибки до обращения
+к модели. [Итоговый probe](../integrations/fixtures/2026-09-17-council-private-sandbox.json).
+8.3, SUBST, путь длиннее 260 символов и запрет замены удерживаемого каталога прошли
+реальные Windows-тесты. Полная цепочка Git/harness под каждым алиасом остаётся V-003.
+
+Первый общий прогон после изменений: Windows 708 passed / 4 failed; исправленные
+Codex-сценарии и последние изменения проверены отдельно (51 passed). Linux/WSL
+Python 3.12: 692 passed / 2 failed / 19 skipped. Исправлены переносимая фикстура
+недоступного секрета и interval rollback при переводе часов назад. 35 браузерных
+сценариев прошли; устаревший тест запрета всех agent Council заменён проверкой
+атомарного серверного отказа при неверной конфигурации и прошёл отдельно.
+Повторный общий Windows: 720 passed / 1 failed (устаревшее ожидание fingerprint);
+после исправления целевой набор — 56 passed. Linux: 696 passed / 1 тот же failed /
+24 Windows-only skipped; после исправления 132 passed / 1 Windows-only skipped.
+Все новые Windows path tests прошли на Windows. UI member-params — 3 passed.
+Полные и целевые прогоны учитываются раздельно в [журнале](../IMPLEMENTATION_LOG.md).
+
+Новая поставка 17.09 проверена по 171 SHA-256, включая миграции 0018/0019 и MIT.
+После offline установки в отдельный runtime-only venv Python 3.12.7 прошли migrate,
+pairing, UI=200, worker=running и stop/start/stop. Данные и порт изолированы;
+dev-зависимости не установлены. [Отчёт](fixtures/2026-09-17-release-runtime.json).
+Это проверка текущего Windows-хоста; чистая ОС и физический reboot остаются открытыми.

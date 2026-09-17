@@ -19,6 +19,7 @@ interface MemberParamsEditorProps {
   params: Record<string, unknown>
   drafts: Record<string, ParamDraft>
   harnessHint: boolean
+  supportedReasoningEfforts?: string[]
   onParams: (next: Record<string, unknown>, removed?: string) => void
   onDraft: (key: string, draft: ParamDraft | null) => void
 }
@@ -28,6 +29,7 @@ export function MemberParamsEditor({
   params,
   drafts,
   harnessHint,
+  supportedReasoningEfforts,
   onParams,
   onDraft,
 }: MemberParamsEditorProps) {
@@ -35,7 +37,11 @@ export function MemberParamsEditor({
   const entries = Object.entries(params)
   const used = new Set(entries.map(([name]) => name))
   const available = MODEL_PARAM_DESCRIPTORS.filter(
-    (descriptor) => !used.has(descriptor.name),
+    (descriptor) =>
+      !used.has(descriptor.name) &&
+      (!supportedReasoningEfforts ||
+        (descriptor.name === 'reasoning_effort' &&
+          supportedReasoningEfforts.length > 0)),
   )
   const selected = available.some(
     (descriptor) => descriptor.name === pendingName,
@@ -46,7 +52,13 @@ export function MemberParamsEditor({
   function addParam() {
     const descriptor = descriptorFor(selected)
     if (!descriptor) return
-    onParams({ ...params, [descriptor.name]: defaultParamValue(descriptor) })
+    onParams({
+      ...params,
+      [descriptor.name]:
+        descriptor.name === 'reasoning_effort' && supportedReasoningEfforts
+          ? supportedReasoningEfforts[0]
+          : defaultParamValue(descriptor),
+    })
     setPendingName('')
   }
 
@@ -63,10 +75,22 @@ export function MemberParamsEditor({
   return (
     <div className="member-params">
       {entries.map(([name, value]) => {
-        const descriptor = descriptorFor(name)
+        const baseDescriptor = descriptorFor(name)
+        const descriptor =
+          name === 'reasoning_effort' &&
+          supportedReasoningEfforts &&
+          baseDescriptor
+            ? { ...baseDescriptor, options: supportedReasoningEfforts }
+            : baseDescriptor
         const draftKey = `${memberKey}:${name}`
         const draft = drafts[draftKey]
-        const error = draft?.error ?? validateParamValue(name, value)
+        const error =
+          draft?.error ??
+          (supportedReasoningEfforts &&
+          (name !== 'reasoning_effort' ||
+            !supportedReasoningEfforts.includes(String(value)))
+            ? 'Параметр или значение не поддерживается выбранной моделью.'
+            : validateParamValue(name, value))
         const inputId = `param-${draftKey}`
         const hintId = `${inputId}-hint`
         const errorId = `${inputId}-error`
@@ -200,9 +224,9 @@ export function MemberParamsEditor({
       ) : null}
       {harnessHint ? (
         <p className="hint">
-          Если кандидат включён, реальный запуск OpenCode/Codex с его
-          параметрами пока отклоняется предстартовой проверкой: подтверждённого
-          сопоставления параметров нет. Simulated-режим допускает их.
+          Для реального запуска параметры должны быть подтверждены свежим
+          каталогом выбранной модели. Обновите профиль через проверку
+          подключения. Simulated-режим допускает общий набор параметров.
         </p>
       ) : null}
     </div>

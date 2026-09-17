@@ -431,6 +431,7 @@ class HarnessProfile(ApiOutput):
     executable_path: str | None
     settings: dict[str, Any]
     catalog_models: list[str]
+    model_capabilities: dict[str, dict[str, Any]] = Field(default_factory=dict)
     catalog_fetched_at: datetime | None
     catalog_ttl_seconds: int
     last_test_status: str | None
@@ -441,9 +442,16 @@ class HarnessProfile(ApiOutput):
     updated_at: datetime
 
 
+class HarnessCatalogModel(ApiOutput):
+    id: str
+    source: str = "cache"
+    reasoning_efforts: list[str] = Field(default_factory=list)
+    context_window: int | None = None
+
+
 class HarnessProfileCatalog(ApiOutput):
     status: Literal["unverified", "fresh", "stale"]
-    models: list[dict[str, str]]
+    models: list[HarnessCatalogModel]
     fetched_at: datetime | None
     ttl_seconds: int
 
