@@ -17,10 +17,8 @@ import {
 import '@xyflow/react/dist/style.css'
 import { ApiError } from '../../api/client'
 import {
-  bindingsApi,
   describeBindingError,
   templatesApi,
-  type PipelineBinding,
   type PipelineTemplate,
   type PipelineVersion,
 } from '../../api/bindings'
@@ -100,15 +98,11 @@ const nodeTypes = { pipeline: PipelineNode }
 export function GraphEditor({
   templateId,
   initialVersion,
-  projectId,
   onClose,
-  onCreated,
 }: {
   templateId: string
   initialVersion?: PipelineVersion
-  projectId: string | null
   onClose: () => void
-  onCreated: (binding: PipelineBinding) => void
 }) {
   const template = useQuery({
     queryKey: ['graph_editor_template', templateId],
@@ -184,9 +178,7 @@ export function GraphEditor({
       schemas={schemas.data}
       capabilities={capabilities.data}
       resources={resources.data}
-      projectId={projectId}
       onClose={onClose}
-      onCreated={onCreated}
     />
   )
 }
@@ -197,18 +189,14 @@ function GraphEditorForm({
   schemas,
   capabilities,
   resources,
-  projectId,
   onClose,
-  onCreated,
 }: {
   template: PipelineTemplate
   initialVersion?: PipelineVersion
   schemas: NodeSchemas
   capabilities: Capabilities
   resources: EditorResources
-  projectId: string | null
   onClose: () => void
-  onCreated: (binding: PipelineBinding) => void
 }) {
   const csrf = useCsrfToken(),
     client = useQueryClient()
@@ -228,7 +216,6 @@ function GraphEditorForm({
     key: string
     report: GraphReport
   } | null>(null)
-  const [published, setPublished] = useState<PipelineVersion | null>(null)
   const [closeRequested, setCloseRequested] = useState(false)
   const [reloadRequested, setReloadRequested] = useState(false)
   const [localError, setLocalError] = useState('')
@@ -251,13 +238,11 @@ function GraphEditorForm({
   const refs = useMemo(() => contextReferences(doc.graph), [doc.graph])
   const immutable = template.kind === 'system' || template.archived
   const operation = useMutation({
-    mutationFn: async (
-      action: 'save' | 'publish' | 'validate' | 'export' | 'reload' | 'bind',
-    ) => {
+    mutationFn: async (action: 'save' | 'validate' | 'export' | 'reload') => {
       setLocalError('')
       setNotice('')
       if (action === 'save') {
-        const result = await templatesApi.updateDraft(
+        const result = await templatesApi.save(
           template.id,
           { ...doc, expected_version: revision },
           csrf,
@@ -266,45 +251,13 @@ function GraphEditorForm({
         setDoc(next)
         setSaved(JSON.stringify(next))
         setRevision(result.version)
-        setNotice('Черновик сохранён.')
-        await client.invalidateQueries({ queryKey: ['templates'] })
-      } else if (action === 'publish') {
-        const validation = await graphsApi.validate(doc, csrf)
-        setReportState({ key: docKey, report: validation })
-        if (!validation.ok) return
-        const exported = await graphsApi.export(doc, csrf)
-        const versions = await templatesApi.listVersions(template.id)
-        const existing = versions.find(
-          (version) => version.execution_hash === exported.execution_hash,
-        )
-        if (existing) {
-          if (existing.origin !== doc.origin)
-            throw new Error(
-              'Граф с тем же исполнением уже опубликован с другим происхождением. Для импортированной версии создайте отдельный шаблон; происхождение черновика сохранено.',
-            )
-          const current = await templatesApi.get(template.id)
-          if (current.version !== revision)
-            throw new ApiError(409, {
-              code: 'version_conflict',
-              message: 'Черновик изменён в другом месте',
-              details: {},
-              request_id: '',
-              retryable: false,
-            })
-          setPublished(existing)
-          setNotice(
-            `Исполнение уже опубликовано в v${existing.version_number}. Раскладка сохранена в черновике.`,
-          )
-          return
-        }
-        const version = await templatesApi.publishDraft(
-          template.id,
-          { expected_version: revision },
-          csrf,
-        )
-        setPublished(version)
-        setNotice(`Сохранена версия v${version.version_number}.`)
-        await client.invalidateQueries({ queryKey: ['template_versions'] })
+        setNotice('Шаблон сохранён. Существующие привязки обновлены.')
+        await Promise.all([
+          client.invalidateQueries({ queryKey: ['templates'] }),
+          client.invalidateQueries({ queryKey: ['template_versions'] }),
+          client.invalidateQueries({ queryKey: ['saved_template'] }),
+          client.invalidateQueries({ queryKey: ['bindings'] }),
+        ])
       } else if (action === 'validate') {
         const validation = await graphsApi.validate(doc, csrf)
         setReportState({ key: docKey, report: validation })
@@ -324,15 +277,7 @@ function GraphEditorForm({
         setSelectedNodeId(null)
         setSelectedEdgeId(null)
         setReloadRequested(false)
-        setPublished(null)
         setCanvasRevision((value) => value + 1)
-      } else if (action === 'bind') {
-        const binding = await bindingsApi.create(
-          published!.id,
-          { project_id: projectId!, name: template.name.slice(0, 120) },
-          csrf,
-        )
-        onCreated(binding)
       }
     },
     onError: (error) => {
@@ -364,7 +309,6 @@ function GraphEditorForm({
   }, [dirty])
   const change = (next: GraphDocument) => {
     setDoc(next)
-    setPublished(null)
     setLocalError('')
     setNotice('')
   }
@@ -495,8 +439,7 @@ function GraphEditorForm({
             <span className="eyebrow">КОНСТРУКТОР</span>
             <h2 id="graph-editor-title">{template.name}</h2>
             <span className="muted">
-              Ревизия {revision} ·{' '}
-              {dirty ? 'Есть несохранённые правки' : 'Черновик сохранён'} ·{' '}
+              {dirty ? 'Есть несохранённые правки' : 'Шаблон сохранён'} ·{' '}
               {doc.origin === 'imported' ? 'импорт' : 'локально'}
             </span>
           </div>
@@ -511,17 +454,10 @@ function GraphEditorForm({
             </button>
             <button
               type="button"
-              disabled={!dirty || immutable || !csrf}
+              disabled={immutable || !csrf}
               onClick={() => operation.mutate('save')}
             >
-              Сохранить черновик
-            </button>
-            <button
-              type="button"
-              disabled={dirty || immutable || !csrf}
-              onClick={() => operation.mutate('publish')}
-            >
-              Сохранить версию
+              Сохранить
             </button>
             <button
               type="button"
@@ -553,8 +489,8 @@ function GraphEditorForm({
               operation.error.body.code === 'version_conflict' && (
                 <>
                   <p>
-                    Серверная ревизия изменилась. Ваши правки сохранены в
-                    редакторе. Скачайте их перед загрузкой новой ревизии.
+                    Шаблон изменён в другом месте. Ваши правки остались в
+                    редакторе. Скачайте их перед загрузкой сохранённого шаблона.
                   </p>
                   <button
                     type="button"
@@ -562,13 +498,13 @@ function GraphEditorForm({
                       downloadJson(doc, `${template.name}-draft.json`)
                     }
                   >
-                    Скачать мой черновик
+                    Скачать мои правки
                   </button>
                   <button
                     type="button"
                     onClick={() => setReloadRequested(true)}
                   >
-                    Загрузить серверный черновик
+                    Загрузить сохранённый шаблон
                   </button>
                 </>
               )}
@@ -576,9 +512,9 @@ function GraphEditorForm({
         )}
         {reloadRequested && (
           <div className="editor-banner" role="alert">
-            Заменить текущие правки серверной ревизией?
+            Заменить текущие правки сохранённым шаблоном?
             <button type="button" onClick={() => operation.mutate('reload')}>
-              Заменить черновик
+              Заменить мои правки
             </button>
             <button type="button" onClick={() => setReloadRequested(false)}>
               Отмена
@@ -589,24 +525,6 @@ function GraphEditorForm({
           <p role="status" className="editor-banner">
             {notice}
           </p>
-        )}
-        {published && (
-          <div className="editor-banner">
-            Версия v{published.version_number} · execution_hash{' '}
-            <code>{published.execution_hash}</code>
-            {projectId && (
-              <button
-                type="button"
-                disabled={dirty}
-                onClick={() => operation.mutate('bind')}
-              >
-                Создать привязку v{published.version_number}
-              </button>
-            )}
-            <span className="hint">
-              Настройте привязку и запустите версию из диалога проекта.
-            </span>
-          </div>
         )}
         <div className="graph-workspace">
           <aside className="graph-palette" aria-label="Палитра узлов">

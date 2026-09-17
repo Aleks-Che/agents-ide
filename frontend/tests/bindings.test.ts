@@ -165,3 +165,75 @@ describe('describeBindingError from bindings module', () => {
     expect(describeBindingError(null)).toBe('Неизвестная ошибка')
   })
 })
+
+describe('preflight catalog recovery', () => {
+  const missing = {
+    ok: false,
+    execution_hash: null,
+    warnings: [],
+    errors: [
+      {
+        code: 'harness_catalog_unverified',
+        message: 'Refresh',
+        details: { harness_profile_id: 'h1' },
+      },
+      {
+        code: 'harness_catalog_unverified',
+        message: 'Refresh',
+        details: { harness_profile_id: 'h1' },
+      },
+    ],
+  }
+  it('refreshes each affected harness once and repeats the same check', async () => {
+    const fetch = captureFetch()
+    fetch
+      .mockResolvedValueOnce(stubJsonResponse(200, missing))
+      .mockResolvedValueOnce(stubJsonResponse(200, { status: 'fresh' }))
+      .mockResolvedValueOnce(
+        stubJsonResponse(200, {
+          ok: true,
+          errors: [],
+          warnings: [],
+          execution_hash: 'new',
+          candidates: [],
+        }),
+      )
+    const report = await bindingsApi.preflight('b1', 'csrf', {
+      inputs: { task: 'same' },
+    })
+    expect(report.ok).toBe(true)
+    expect(report.execution_hash).toBe('new')
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+      '/api/bindings/b1/preflight',
+      '/api/harness_profiles/h1/models/refresh?force=true',
+      '/api/bindings/b1/preflight',
+    ])
+    expect(fetch.mock.calls[0][1].body).toBe(fetch.mock.calls[2][1].body)
+    expect(fetch.mock.calls[1][1].headers.get('X-CSRF-Token')).toBe('csrf')
+  })
+  it('stops after one refresh when a model is still missing', async () => {
+    const fetch = captureFetch()
+    fetch
+      .mockResolvedValueOnce(stubJsonResponse(200, missing))
+      .mockResolvedValueOnce(stubJsonResponse(200, { status: 'fresh' }))
+      .mockResolvedValueOnce(stubJsonResponse(200, missing))
+    expect((await bindingsApi.preflight('b1', 'csrf')).ok).toBe(false)
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+  it('reports catalog failure without pretending preflight succeeded', async () => {
+    const fetch = captureFetch()
+    fetch
+      .mockResolvedValueOnce(stubJsonResponse(200, missing))
+      .mockResolvedValueOnce(
+        stubJsonResponse(422, {
+          code: 'harness_catalog_unavailable',
+          message: 'Cannot load models',
+          details: {},
+        }),
+      )
+    await expect(bindingsApi.preflight('b1', 'csrf')).rejects.toThrow(
+      'Cannot load models',
+    )
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+})

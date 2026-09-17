@@ -212,15 +212,20 @@ def file_manifest(workspace: Path) -> dict[str, dict[str, Any]]:
             .split("\0"),
         )
     )
-    # Ignored files are protected too; never stage or transmit their contents.
+    # Protect individual ignored files, but do not traverse ignored trees such
+    # as node_modules, virtualenvs or local databases. They cannot enter staging.
     ignored = set(
         filter(
             None,
-            run_git(workspace, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"])
+            run_git(
+                workspace,
+                ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
+            )
             .decode()
             .split("\0"),
         )
     )
+    ignored = {path for path in ignored if not path.endswith("/")}
     paths.update(ignored)
     if len(paths) > MAX_FILES:
         raise GitCommitError("git_manifest_limit", "Workspace manifest exceeds file limit")

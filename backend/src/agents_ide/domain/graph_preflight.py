@@ -581,6 +581,13 @@ def _candidates(
                         from agents_ide.services.harness import current_model_metadata
 
                         metadata = current_model_metadata(resource)
+                        if candidate["params"] and candidate["model_id"] not in metadata:
+                            raise AppError(
+                                "harness_catalog_unverified",
+                                "Обновите каталог моделей: настройки harness изменились "
+                                "или модель ещё не проверена",
+                                422,
+                            )
                         parameters_for(
                             resource.harness_kind,
                             candidate["model_id"],
@@ -597,7 +604,11 @@ def _candidates(
                                 exc.code,
                                 exc.message,
                                 node_id,
-                                details={"member_id": candidate["id"]},
+                                details={
+                                    "member_id": candidate["id"],
+                                    "harness_profile_id": resource.id,
+                                    "model_id": candidate["model_id"],
+                                },
                             )
                         )
             row["destination"] = {

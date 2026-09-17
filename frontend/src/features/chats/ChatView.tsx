@@ -33,6 +33,7 @@ interface ChatViewProps {
   draftText: string
   onDraftChange: (text: string) => void
   onArchived: (id: string) => void
+  onOpenTemplates: (templateId?: string) => void
 }
 
 export function ChatView({
@@ -41,6 +42,7 @@ export function ChatView({
   onArchived,
   draftText,
   onDraftChange,
+  onOpenTemplates,
 }: ChatViewProps) {
   const client = useQueryClient()
   const csrf = useCsrfToken()
@@ -178,9 +180,9 @@ export function ChatView({
               projectValue.archived ||
               chat.archived
             }
-            aria-label="Запустить задание"
+            aria-label="Запустить шаблон"
           >
-            Запустить
+            Запустить шаблон
           </button>
           <button
             type="button"
@@ -309,6 +311,7 @@ export function ChatView({
           bindingsLoading={bindings.isLoading}
           bindingsError={bindings.error}
           onRetryBindings={() => void bindings.refetch()}
+          onOpenTemplates={onOpenTemplates}
           onClose={() => {
             setLaunchOpen(false)
             setPlanningSource(null)

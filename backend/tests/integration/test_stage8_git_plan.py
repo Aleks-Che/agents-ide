@@ -329,3 +329,30 @@ def test_deleted_path_recovery_uses_the_same_manifest(repository):
     result = git.execute(repository, value, operation)
     recovered = git.execute(repository, value, operation, recover_only=True)
     assert recovered.sha == result.sha
+
+
+def test_ignored_dependency_tree_does_not_exhaust_manifest_or_freshness_budget(
+    repository, monkeypatch
+):
+    from agents_ide.engine.context_sources import workspace_hash
+
+    (repository / ".gitignore").write_text("node_modules/\n")
+    command(repository, "add", ".gitignore")
+    command(repository, "commit", "-qm", "ignore dependencies")
+    deps = repository / "node_modules"
+    deps.mkdir()
+    for i in range(10):
+        (deps / f"dependency{i}.js").write_text("dependency")
+    monkeypatch.setattr(git, "MAX_FILES", 5)
+    manifest = git.file_manifest(repository)
+    assert not any(path.startswith("node_modules/") for path in manifest)
+    original = workspace_hash(repository)
+    assert original
+    (deps / "dependency0.js").write_text("updated dependency")
+    assert workspace_hash(repository) == original
+    (repository / "src" / "a.txt").write_text("changed source")
+    assert workspace_hash(repository) != original
+    (repository / "new.txt").write_text("untracked source")
+    assert "new.txt" in git.file_manifest(repository)
+    (repository / "README.md").unlink()
+    assert git.file_manifest(repository)["README.md"] == {"missing": True}

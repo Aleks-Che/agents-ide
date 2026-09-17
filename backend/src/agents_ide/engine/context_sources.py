@@ -141,6 +141,28 @@ def workspace_hash(workspace: Path) -> str | None:
     digest = hashlib.sha256()
     count = total = 0
     try:
+        # Git defines the source tree; dependencies and local data must not
+        # exhaust the proof budget. Explicit context sources are read separately.
+        if (workspace / ".git").exists():
+            output = _git_output(
+                workspace, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]
+            )
+            if output is None:
+                return None
+            paths = sorted(set(filter(None, output.split("\0"))))
+            if len(paths) > 10000:
+                return None
+            for relative in paths:
+                if not _safe_relative(relative):
+                    continue
+                if not (workspace / relative).exists() and not (workspace / relative).is_symlink():
+                    continue
+                raw = read_workspace_file(workspace, relative, 64 * 1024 * 1024 - total)
+                total += len(raw)
+                digest.update(relative.encode())
+                digest.update(b"\0")
+                digest.update(hashlib.sha256(raw).digest())
+            return digest.hexdigest()
         for directory, dirs, names in os.walk(workspace, followlinks=False):
             dirs[:] = sorted(
                 d for d in dirs if d not in {".git", "__pycache__", ".pytest_cache", ".ruff_cache"}

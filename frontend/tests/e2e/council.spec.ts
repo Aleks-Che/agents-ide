@@ -258,7 +258,7 @@ test('Council recovers creation, reviews complete plan, confirms revision and su
     await page.getByRole('button', { name: 'Использовать план в Run…' }).click()
     dialog = page.getByRole('dialog', { name: 'Запустить задание' })
     await dialog
-      .getByLabel('Привязка', { exact: true })
+      .getByLabel('Шаблон проекта', { exact: true })
       .selectOption(binding.id)
     await expect(dialog.getByText(/Подтверждённый план Council:/)).toBeVisible()
     await dialog.getByRole('button', { name: 'Запустить preflight' }).click()
@@ -685,7 +685,7 @@ test('Council with a single accepted draft can be promoted to a degraded plan', 
     await page.getByRole('button', { name: 'Использовать план в Run…' }).click()
     dialog = page.getByRole('dialog', { name: 'Запустить задание' })
     await dialog
-      .getByLabel('Привязка', { exact: true })
+      .getByLabel('Шаблон проекта', { exact: true })
       .selectOption(binding.id)
     await dialog.getByRole('button', { name: 'Запустить preflight' }).click()
     const start = dialog.getByRole('button', { name: 'Запустить', exact: true })

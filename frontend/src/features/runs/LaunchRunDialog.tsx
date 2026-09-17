@@ -15,6 +15,7 @@ import type { Chat, Project } from '../../api/projects'
 import { Modal } from '../../app/Modal'
 import { formatDateTime, shortHash } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
+import { AttachTemplateDialog } from '../bindings/AttachTemplateDialog'
 import { ConfirmedPlanSelect } from '../planning/ConfirmedPlanSelect'
 import { ObjectFields } from '../pipelines/SchemaFields'
 import { object } from '../pipelines/graph'
@@ -49,6 +50,7 @@ interface LaunchRunDialogProps {
   bindingsLoading: boolean
   bindingsError: unknown
   onRetryBindings: () => void
+  onOpenTemplates: (templateId?: string) => void
   onClose: () => void
   onLaunched: (run: RunRecord) => void
 }
@@ -62,6 +64,7 @@ export function LaunchRunDialog({
   bindingsLoading,
   bindingsError,
   onRetryBindings,
+  onOpenTemplates,
   onClose,
   onLaunched,
 }: LaunchRunDialogProps) {
@@ -72,6 +75,13 @@ export function LaunchRunDialog({
   )
   const [mode, setMode] = useState<LaunchMode>('binding')
   const [bindingId, setBindingId] = useState('')
+  const [attachOpen, setAttachOpen] = useState(false)
+  const [attachedBinding, setAttachedBinding] =
+    useState<PipelineBinding | null>(null)
+  const availableBindings =
+    attachedBinding && !bindings.some((item) => item.id === attachedBinding.id)
+      ? [...bindings, attachedBinding]
+      : bindings
   const [executionMode, setExecutionMode] = useState<'real' | 'simulated'>(
     'real',
   )
@@ -98,7 +108,7 @@ export function LaunchRunDialog({
   })
   const [pending, setPending] = useState<StartRequest | null>(storage.body)
   const sending = useRef(false)
-  const selectedBinding = bindings.find(
+  const selectedBinding = availableBindings.find(
     (binding) => binding.id === bindingId && !binding.archived,
   )
   const version = useQuery({
@@ -246,410 +256,437 @@ export function LaunchRunDialog({
     launch.mutate(body)
   }
   return (
-    <Modal
-      onClose={onClose}
-      busy={launch.isPending || check.isPending}
-      labelledBy="launch-run-title"
-    >
-      <form className="dialog wide launch-dialog" onSubmit={submit}>
-        <header>
-          <h3 id="launch-run-title">Запустить задание</h3>
-          <button
-            type="button"
-            className="quiet"
-            aria-label="Закрыть"
-            onClick={onClose}
-          >
-            ×
-          </button>
-        </header>
-        <p className="hint">
-          Проект: <strong>{project.name}</strong> · Диалог:{' '}
-          <strong>{chat.title}</strong>
-        </p>
-        {storage.error ? (
-          <p role="alert" className="error">
-            {storage.error}
-          </p>
-        ) : null}
-        {pending ? (
-          <section aria-label="Неподтверждённый запуск">
-            <p role="status">
-              Ответ на запуск не подтверждён. Повтор отправит тот же запрос и
-              вернёт уже созданный Run, если сервер успел его сохранить.
-            </p>
-            <p>
-              Ключ: <code>{pending.idempotency_key}</code> · режим{' '}
-              {pending.execution_mode}
-              {pending.single_agent ? (
-                <>
-                  {' '}
-                  · одиночный агент <code>{pending.single_agent.role}</code>
-                </>
-              ) : null}
-            </p>
-            <details>
-              <summary>Сохранённый запрос</summary>
-              <pre>{JSON.stringify(pending, null, 2)}</pre>
-            </details>
-          </section>
-        ) : (
-          <>
-            <fieldset className="mode-toggle">
-              <legend>Режим запуска</legend>
-              <label>
-                <input
-                  type="radio"
-                  name="launch-mode-kind"
-                  checked={mode === 'binding'}
-                  onChange={() => {
-                    setMode('binding')
-                    check.reset()
-                    setTrustedKey(null)
-                  }}
-                />
-                Привязка проекта
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="launch-mode-kind"
-                  checked={mode === 'single_agent'}
-                  onChange={() => {
-                    setMode('single_agent')
-                    check.reset()
-                    setTrustedKey(null)
-                  }}
-                />
-                Одиночный агент
-              </label>
-            </fieldset>
-            {bindingsError ? (
-              <p role="alert" className="error">
-                Не удалось загрузить привязки: {launchError(bindingsError)}{' '}
-                <button type="button" onClick={onRetryBindings}>
-                  Повторить загрузку привязок
-                </button>
-              </p>
-            ) : null}
-            {bindingsLoading ? (
-              <p role="status">Загружаем привязки проекта…</p>
-            ) : null}
-            <label htmlFor="launch-binding">Привязка</label>
-            <select
-              id="launch-binding"
-              value={bindingId}
-              onChange={(event) => {
-                setBindingId(event.target.value)
-                setSingleNodeId('')
-                setSingleSelection({ kind: null })
-                setSingleParametersText('{}')
-                check.reset()
-                setTrustedKey(null)
-              }}
-              disabled={bindingsLoading || Boolean(bindingsError)}
+    <>
+      <Modal
+        onClose={onClose}
+        busy={launch.isPending || check.isPending}
+        labelledBy="launch-run-title"
+      >
+        <form className="dialog wide launch-dialog" onSubmit={submit}>
+          <header>
+            <h3 id="launch-run-title">Запустить задание</h3>
+            <button
+              type="button"
+              className="quiet"
+              aria-label="Закрыть"
+              onClick={onClose}
             >
-              <option value="">Выберите привязку</option>
-              {bindings
-                .filter((binding) => !binding.archived)
-                .map((binding) => (
-                  <option key={binding.id} value={binding.id}>
-                    {binding.name}
-                  </option>
-                ))}
-            </select>
-            {!bindingsLoading &&
-            !bindingsError &&
-            !bindings.some((binding) => !binding.archived) ? (
-              <p className="hint">
-                Нет доступных привязок. Создайте привязку из версии в Шаблонах.
+              ×
+            </button>
+          </header>
+          <p className="hint">
+            Проект: <strong>{project.name}</strong> · Диалог:{' '}
+            <strong>{chat.title}</strong>
+          </p>
+          {storage.error ? (
+            <p role="alert" className="error">
+              {storage.error}
+            </p>
+          ) : null}
+          {pending ? (
+            <section aria-label="Неподтверждённый запуск">
+              <p role="status">
+                Ответ на запуск не подтверждён. Повтор отправит тот же запрос и
+                вернёт уже созданный Run, если сервер успел его сохранить.
               </p>
-            ) : null}
-            {bindingId && !selectedBinding ? (
-              <p role="alert">
-                Выбранная привязка недоступна. Выберите другую.
-              </p>
-            ) : null}
-            <fieldset className="mode-toggle">
-              <legend>Режим исполнения</legend>
-              <label>
-                <input
-                  type="radio"
-                  name="launch-execution-mode"
-                  checked={executionMode === 'real'}
-                  onChange={() => setExecutionMode('real')}
-                />
-                Реальный
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="launch-execution-mode"
-                  checked={executionMode === 'simulated'}
-                  onChange={() => setExecutionMode('simulated')}
-                />
-                Имитация (fake)
-              </label>
-            </fieldset>
-            {version.isLoading ? (
-              <p role="status">Загружаем граф версии…</p>
-            ) : null}
-            {version.error ? (
-              <p role="alert" className="error">
-                {launchError(version.error)}{' '}
-                <button type="button" onClick={() => void version.refetch()}>
-                  Повторить загрузку версии
-                </button>
-              </p>
-            ) : null}
-            {mode === 'single_agent' && selectedBinding ? (
-              <>
-                {resourceState.loading ? (
-                  <p role="status">Загружаем исполнителей…</p>
+              <p>
+                Ключ: <code>{pending.idempotency_key}</code> · режим{' '}
+                {pending.execution_mode}
+                {pending.single_agent ? (
+                  <>
+                    {' '}
+                    · одиночный агент <code>{pending.single_agent.role}</code>
+                  </>
                 ) : null}
-                {resourceState.errors.map((error, index) => (
-                  <p role="alert" className="error" key={index}>
-                    Не удалось загрузить исполнителей: {launchError(error)}{' '}
-                    <button type="button" onClick={resourceState.retry}>
-                      Повторить загрузку исполнителей
-                    </button>
-                  </p>
-                ))}
-                <SingleAgentForm
-                  nodes={nodes}
-                  loaded={Boolean(version.data)}
-                  nodeId={singleNodeId}
-                  onNode={(nodeId) => {
-                    setSingleNodeId(nodeId)
-                    setSingleSelection({ kind: null })
-                    setSingleParametersText('{}')
-                    check.reset()
-                    setTrustedKey(null)
-                  }}
-                  selection={singleSelection}
-                  onSelection={(draft) => {
-                    setSingleSelection(draft)
-                    check.reset()
-                    setTrustedKey(null)
-                  }}
-                  parametersText={singleParametersText}
-                  onParameters={(text) => {
-                    setSingleParametersText(text)
-                    check.reset()
-                    setTrustedKey(null)
-                  }}
-                  resources={resources}
-                />
-              </>
-            ) : null}
-            {version.data ? (
-              <p className="hint">
-                Схема {version.data.schema_version} · возможности графа:{' '}
-                {version.data.required_features.join(', ') || 'базовый граф'}.
-                Capability исполнителей и права отображаются в preflight.
               </p>
-            ) : null}
-            {version.data ? (
               <details>
-                <summary>Граф и настройки версии</summary>
-                <pre>
-                  {JSON.stringify(
-                    {
-                      graph: version.data.graph,
-                      settings: version.data.settings,
-                    },
-                    null,
-                    2,
-                  )}
-                </pre>
+                <summary>Сохранённый запрос</summary>
+                <pre>{JSON.stringify(pending, null, 2)}</pre>
               </details>
-            ) : null}
-            {version.data ? (
-              <details>
-                <summary>Схема входов и значения версии</summary>
-                <pre>
-                  {JSON.stringify(
-                    {
-                      input_schema: version.data.graph.input_schema ?? {},
-                      defaults: version.data.inputs,
-                    },
-                    null,
-                    2,
-                  )}
-                </pre>
-              </details>
-            ) : null}
-            {planningSource ? (
-              <p className="hint">
-                Подтверждённый план Council: {planningSource.job_id.slice(0, 8)}
-                , ревизия {planningSource.revision_number}. Текст, ответы и
-                критерии будут зафиксированы в Run; их нельзя заменить входами
-                ниже.
-              </p>
-            ) : null}
-            <ConfirmedPlanSelect
-              projectId={project.id}
-              chatId={chat.id}
-              value={planningSource}
-              onChange={setPlanningSource}
-            />
-            {version.data && (
-              <LaunchInputsForm
-                schema={object(version.data.graph.input_schema) as Schema}
-                inputsText={inputsText}
-                onChange={setInputsText}
-              />
-            )}
-            <label htmlFor="launch-inputs">Входы запуска (JSON)</label>
-            <textarea
-              id="launch-inputs"
-              rows={6}
-              value={inputsText}
-              onChange={(event) => setInputsText(event.target.value)}
-            />
-            <p className="hint">
-              Эти поля дополняют и переопределяют входы версии. Сообщения
-              диалога и выбранный черновик передаются отдельно; они не заменяют
-              обязательные входы графа.
-            </p>
-            <label>
-              <input
-                type="checkbox"
-                checked={useDraft}
-                disabled={!draft.trim()}
-                onChange={(event) => setUseDraft(event.target.checked)}
-              />
-              Включить текущий черновик в запуск
-            </label>
-            {useDraft ? (
-              <pre aria-label="Черновик для запуска">{draft}</pre>
-            ) : null}
-            <p className="hint">
-              Сохранённые сообщения диалога войдут в снимок на момент запуска.
-              Черновик не публикуется в ленту и остаётся в редакторе.
-            </p>
-            <details>
-              <summary>Лимиты и фильтр команд</summary>
-              <label htmlFor="launch-limits">Лимиты запуска (JSON)</label>
-              <textarea
-                id="launch-limits"
-                rows={3}
-                value={limitsText}
-                onChange={(event) => setLimitsText(event.target.value)}
-              />
-              <p className="hint">
-                max_calls, max_node_visits, max_backward_transitions,
-                max_duration_seconds. Пустой объект сохраняет лимиты привязки.
-              </p>
-              <label htmlFor="launch-commands">Фильтр команд (JSON)</label>
-              <textarea
-                id="launch-commands"
-                rows={2}
-                value={commandsText}
-                onChange={(event) => setCommandsText(event.target.value)}
-              />
-              <p className="hint">
-                null — наследовать; [] — не выполнять команды; массив ID —
-                выполнить только выбранные. Обязательные команды проверит
-                сервер.
-              </p>
-            </details>
-            <section className="preflight-summary" aria-label="Preflight">
-              <header>
-                <strong>Проверка перед запуском</strong>
-                <button
-                  type="button"
-                  className="quiet"
-                  disabled={
-                    !selectedBinding ||
-                    !version.data ||
-                    Boolean(version.error) ||
-                    Boolean(bindingsError) ||
-                    !csrf ||
-                    (mode === 'single_agent' && !selectedNode)
-                  }
-                  onClick={() => {
-                    setTrustedKey(null)
-                    launch.reset()
-                    check.mutate()
-                  }}
-                >
-                  {check.isPending ? 'Проверяем…' : 'Запустить preflight'}
-                </button>
-              </header>
-              {check.error ? (
+            </section>
+          ) : (
+            <>
+              <fieldset className="mode-toggle">
+                <legend>Режим запуска</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="launch-mode-kind"
+                    checked={mode === 'binding'}
+                    onChange={() => {
+                      setMode('binding')
+                      check.reset()
+                      setTrustedKey(null)
+                    }}
+                  />
+                  Шаблон целиком
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="launch-mode-kind"
+                    checked={mode === 'single_agent'}
+                    onChange={() => {
+                      setMode('single_agent')
+                      check.reset()
+                      setTrustedKey(null)
+                    }}
+                  />
+                  Одиночный агент
+                </label>
+              </fieldset>
+              {bindingsError ? (
                 <p role="alert" className="error">
-                  {launchError(check.error)}
+                  Не удалось загрузить привязки: {launchError(bindingsError)}{' '}
+                  <button type="button" onClick={onRetryBindings}>
+                    Повторить загрузку привязок
+                  </button>
                 </p>
               ) : null}
-              {!checked ? (
+              {bindingsLoading ? (
+                <p role="status">Загружаем привязки проекта…</p>
+              ) : null}
+              <label htmlFor="launch-binding">Шаблон проекта</label>
+              <select
+                id="launch-binding"
+                value={bindingId}
+                onChange={(event) => {
+                  setBindingId(event.target.value)
+                  setSingleNodeId('')
+                  setSingleSelection({ kind: null })
+                  setSingleParametersText('{}')
+                  check.reset()
+                  setTrustedKey(null)
+                }}
+                disabled={bindingsLoading || Boolean(bindingsError)}
+              >
+                <option value="">Выберите шаблон проекта</option>
+                {availableBindings
+                  .filter((binding) => !binding.archived)
+                  .map((binding) => (
+                    <option key={binding.id} value={binding.id}>
+                      {binding.name}
+                    </option>
+                  ))}
+              </select>
+              {!bindingsLoading &&
+              !bindingsError &&
+              !availableBindings.some((binding) => !binding.archived) ? (
                 <p className="hint">
-                  Проверьте текущие входы и режим перед запуском. Изменение
-                  формы требует новой проверки.
+                  В проект пока не добавлены шаблоны. Выберите шаблон кнопкой
+                  ниже — он появится в этом списке.
                 </p>
-              ) : (
-                <>
-                  <LaunchPreview
-                    report={checked.report}
-                    resolved={checked.resolved.data}
-                    singleAgent={checked.singleAgent}
+              ) : null}
+              <button
+                type="button"
+                className="quiet"
+                onClick={() => setAttachOpen(true)}
+              >
+                Добавить шаблон в проект
+              </button>
+              {bindingId && !selectedBinding ? (
+                <p role="alert">
+                  Выбранная привязка недоступна. Выберите другую.
+                </p>
+              ) : null}
+              <fieldset className="mode-toggle">
+                <legend>Режим исполнения</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="launch-execution-mode"
+                    checked={executionMode === 'real'}
+                    onChange={() => setExecutionMode('real')}
                   />
-                  {checked.resolved.error ? (
-                    <p className="error">
-                      Происхождение ролей: {checked.resolved.error}
+                  Реальный
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="launch-execution-mode"
+                    checked={executionMode === 'simulated'}
+                    onChange={() => setExecutionMode('simulated')}
+                  />
+                  Имитация (fake)
+                </label>
+              </fieldset>
+              {version.isLoading ? (
+                <p role="status">Загружаем граф шаблона…</p>
+              ) : null}
+              {version.error ? (
+                <p role="alert" className="error">
+                  {launchError(version.error)}{' '}
+                  <button type="button" onClick={() => void version.refetch()}>
+                    Повторить загрузку шаблона
+                  </button>
+                </p>
+              ) : null}
+              {mode === 'single_agent' && selectedBinding ? (
+                <>
+                  {resourceState.loading ? (
+                    <p role="status">Загружаем исполнителей…</p>
+                  ) : null}
+                  {resourceState.errors.map((error, index) => (
+                    <p role="alert" className="error" key={index}>
+                      Не удалось загрузить исполнителей: {launchError(error)}{' '}
+                      <button type="button" onClick={resourceState.retry}>
+                        Повторить загрузку исполнителей
+                      </button>
                     </p>
-                  ) : null}
-                  {requiresTrust ? (
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={trustedKey === formKey}
-                        onChange={(event) =>
-                          setTrustedKey(event.target.checked ? formKey : null)
-                        }
-                      />
-                      Доверяю импортированной конфигурации, входам и назначениям
-                      из этой проверки
-                    </label>
-                  ) : null}
+                  ))}
+                  <SingleAgentForm
+                    nodes={nodes}
+                    loaded={Boolean(version.data)}
+                    nodeId={singleNodeId}
+                    onNode={(nodeId) => {
+                      setSingleNodeId(nodeId)
+                      setSingleSelection({ kind: null })
+                      setSingleParametersText('{}')
+                      check.reset()
+                      setTrustedKey(null)
+                    }}
+                    selection={singleSelection}
+                    onSelection={(draft) => {
+                      setSingleSelection(draft)
+                      check.reset()
+                      setTrustedKey(null)
+                    }}
+                    parametersText={singleParametersText}
+                    onParameters={(text) => {
+                      setSingleParametersText(text)
+                      check.reset()
+                      setTrustedKey(null)
+                    }}
+                    resources={resources}
+                  />
                 </>
+              ) : null}
+              {version.data ? (
+                <p className="hint">
+                  Схема {version.data.schema_version} · возможности графа:{' '}
+                  {version.data.required_features.join(', ') || 'базовый граф'}.
+                  Capability исполнителей и права отображаются в preflight.
+                </p>
+              ) : null}
+              {version.data ? (
+                <details>
+                  <summary>Граф и настройки шаблона</summary>
+                  <pre>
+                    {JSON.stringify(
+                      {
+                        graph: version.data.graph,
+                        settings: version.data.settings,
+                      },
+                      null,
+                      2,
+                    )}
+                  </pre>
+                </details>
+              ) : null}
+              {version.data ? (
+                <details>
+                  <summary>Схема входов и значения шаблона</summary>
+                  <pre>
+                    {JSON.stringify(
+                      {
+                        input_schema: version.data.graph.input_schema ?? {},
+                        defaults: version.data.inputs,
+                      },
+                      null,
+                      2,
+                    )}
+                  </pre>
+                </details>
+              ) : null}
+              {planningSource ? (
+                <p className="hint">
+                  Подтверждённый план Council:{' '}
+                  {planningSource.job_id.slice(0, 8)}, ревизия{' '}
+                  {planningSource.revision_number}. Текст, ответы и критерии
+                  будут зафиксированы в Run; их нельзя заменить входами ниже.
+                </p>
+              ) : null}
+              <ConfirmedPlanSelect
+                projectId={project.id}
+                chatId={chat.id}
+                value={planningSource}
+                onChange={setPlanningSource}
+              />
+              {version.data && (
+                <LaunchInputsForm
+                  schema={object(version.data.graph.input_schema) as Schema}
+                  inputsText={inputsText}
+                  onChange={setInputsText}
+                />
               )}
-            </section>
-          </>
-        )}
-        {launch.error ? (
-          <div className="error" role="alert">
-            <p>{launchError(launch.error)}</p>
-            {launch.error instanceof ApiError ? (
-              <pre>{JSON.stringify(launch.error.body.details, null, 2)}</pre>
-            ) : null}
-          </div>
-        ) : null}
-        <footer>
-          <button type="button" className="quiet" onClick={onClose}>
-            Закрыть
-          </button>
-          <button
-            type="submit"
-            disabled={
-              !csrf ||
-              Boolean(storage.error) ||
-              (!pending &&
-                (!ready ||
-                  Boolean(bindingsError) ||
-                  !selectedBinding ||
-                  (mode === 'single_agent' && !singleAgentReady)))
-            }
-          >
-            {launch.isPending
-              ? 'Запускаем…'
-              : pending
-                ? 'Повторить тот же запуск'
-                : 'Запустить'}
-          </button>
-        </footer>
-      </form>
-    </Modal>
+              <label htmlFor="launch-inputs">Входы запуска (JSON)</label>
+              <textarea
+                id="launch-inputs"
+                rows={6}
+                value={inputsText}
+                onChange={(event) => setInputsText(event.target.value)}
+              />
+              <p className="hint">
+                Эти поля дополняют и переопределяют входы шаблона. Сообщения
+                диалога и выбранный черновик передаются отдельно; они не
+                заменяют обязательные входы графа.
+              </p>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={useDraft}
+                  disabled={!draft.trim()}
+                  onChange={(event) => setUseDraft(event.target.checked)}
+                />
+                Включить текущий черновик в запуск
+              </label>
+              {useDraft ? (
+                <pre aria-label="Черновик для запуска">{draft}</pre>
+              ) : null}
+              <p className="hint">
+                Сохранённые сообщения диалога войдут в снимок на момент запуска.
+                Черновик не публикуется в ленту и остаётся в редакторе.
+              </p>
+              <details>
+                <summary>Лимиты и фильтр команд</summary>
+                <label htmlFor="launch-limits">Лимиты запуска (JSON)</label>
+                <textarea
+                  id="launch-limits"
+                  rows={3}
+                  value={limitsText}
+                  onChange={(event) => setLimitsText(event.target.value)}
+                />
+                <p className="hint">
+                  max_calls, max_node_visits, max_backward_transitions,
+                  max_duration_seconds. Пустой объект сохраняет лимиты привязки.
+                </p>
+                <label htmlFor="launch-commands">Фильтр команд (JSON)</label>
+                <textarea
+                  id="launch-commands"
+                  rows={2}
+                  value={commandsText}
+                  onChange={(event) => setCommandsText(event.target.value)}
+                />
+                <p className="hint">
+                  null — наследовать; [] — не выполнять команды; массив ID —
+                  выполнить только выбранные. Обязательные команды проверит
+                  сервер.
+                </p>
+              </details>
+              <section className="preflight-summary" aria-label="Preflight">
+                <header>
+                  <strong>Проверка перед запуском</strong>
+                  <button
+                    type="button"
+                    className="quiet"
+                    disabled={
+                      !selectedBinding ||
+                      !version.data ||
+                      Boolean(version.error) ||
+                      Boolean(bindingsError) ||
+                      !csrf ||
+                      (mode === 'single_agent' && !selectedNode)
+                    }
+                    onClick={() => {
+                      setTrustedKey(null)
+                      launch.reset()
+                      check.mutate()
+                    }}
+                  >
+                    {check.isPending ? 'Проверяем…' : 'Запустить preflight'}
+                  </button>
+                </header>
+                {check.error ? (
+                  <p role="alert" className="error">
+                    {launchError(check.error)}
+                  </p>
+                ) : null}
+                {!checked ? (
+                  <p className="hint">
+                    Проверьте текущие входы и режим перед запуском. Изменение
+                    формы требует новой проверки.
+                  </p>
+                ) : (
+                  <>
+                    <LaunchPreview
+                      report={checked.report}
+                      resolved={checked.resolved.data}
+                      singleAgent={checked.singleAgent}
+                    />
+                    {checked.resolved.error ? (
+                      <p className="error">
+                        Происхождение ролей: {checked.resolved.error}
+                      </p>
+                    ) : null}
+                    {requiresTrust ? (
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={trustedKey === formKey}
+                          onChange={(event) =>
+                            setTrustedKey(event.target.checked ? formKey : null)
+                          }
+                        />
+                        Доверяю импортированной конфигурации, входам и
+                        назначениям из этой проверки
+                      </label>
+                    ) : null}
+                  </>
+                )}
+              </section>
+            </>
+          )}
+          {launch.error ? (
+            <div className="error" role="alert">
+              <p>{launchError(launch.error)}</p>
+              {launch.error instanceof ApiError ? (
+                <pre>{JSON.stringify(launch.error.body.details, null, 2)}</pre>
+              ) : null}
+            </div>
+          ) : null}
+          <footer>
+            <button type="button" className="quiet" onClick={onClose}>
+              Закрыть
+            </button>
+            <button
+              type="submit"
+              disabled={
+                !csrf ||
+                Boolean(storage.error) ||
+                (!pending &&
+                  (!ready ||
+                    Boolean(bindingsError) ||
+                    !selectedBinding ||
+                    (mode === 'single_agent' && !singleAgentReady)))
+              }
+            >
+              {launch.isPending
+                ? 'Запускаем…'
+                : pending
+                  ? 'Повторить тот же запуск'
+                  : 'Запустить'}
+            </button>
+          </footer>
+        </form>
+      </Modal>
+      {attachOpen ? (
+        <AttachTemplateDialog
+          fixedProject={project}
+          onClose={() => setAttachOpen(false)}
+          onCreated={(binding) => {
+            setAttachedBinding(binding)
+            setBindingId(binding.id)
+            setSingleNodeId('')
+            setSingleSelection({ kind: null })
+            setSingleParametersText('{}')
+            check.reset()
+            setTrustedKey(null)
+            setAttachOpen(false)
+          }}
+          onEdit={(templateId) => onOpenTemplates(templateId)}
+        />
+      ) : null}
+    </>
   )
 }
 
@@ -756,8 +793,8 @@ function SingleAgentForm({
       </header>
       {loaded && nodes.length === 0 ? (
         <p className="hint">
-          Граф этой версии не объявляет AgentTask/LLMRequest с ролью. Одиночный
-          запуск недоступен — используйте запуск привязки.
+          Граф этого шаблона не объявляет AgentTask/LLMRequest с ролью.
+          Одиночный запуск недоступен — используйте запуск привязки.
         </p>
       ) : null}
       <label htmlFor="single-role">Узел и роль</label>

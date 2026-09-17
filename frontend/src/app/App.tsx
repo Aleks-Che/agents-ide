@@ -206,6 +206,7 @@ function SignedInShell({
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [view, setView] = useState<MainView>('chats')
+  const [editorTemplateId, setEditorTemplateId] = useState<string | null>(null)
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>('harnesses')
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -250,7 +251,7 @@ function SignedInShell({
           onSelect={(project) => {
             setSelectedProject(project)
             if (project.id !== selectedProject?.id) setSelectedChatId(null)
-            setView('chats')
+            if (view !== 'library') setView('chats')
           }}
         />
         <nav className="sidebar-nav" aria-label="Разделы">
@@ -267,7 +268,10 @@ function SignedInShell({
             type="button"
             className={`quiet nav-button${view === 'library' ? ' selected' : ''}`}
             aria-pressed={view === 'library'}
-            onClick={() => setView('library')}
+            onClick={() => {
+              setEditorTemplateId(null)
+              setView('library')
+            }}
           >
             Шаблоны
           </button>
@@ -367,9 +371,14 @@ function SignedInShell({
             />
           ) : view === 'library' ? (
             <LibraryView
-              key={selectedProject?.id ?? 'library'}
               projects={(projects.data ?? []) as Project[]}
               selectedProjectId={selectedProject?.id ?? null}
+              initialEditorTemplateId={editorTemplateId}
+              onSelectProject={(project) => {
+                if (project.id !== selectedProject?.id) setSelectedChatId(null)
+                setSelectedProject(project)
+              }}
+              onOpenChats={() => setView('chats')}
             />
           ) : view === 'runs' ? (
             <RunsView
@@ -385,6 +394,10 @@ function SignedInShell({
               projectId={selectedProject.id}
               chat={selectedChat}
               draftText={drafts[selectedChat?.id ?? ''] ?? ''}
+              onOpenTemplates={(templateId) => {
+                setEditorTemplateId(templateId ?? null)
+                setView('library')
+              }}
               onDraftChange={(text) => {
                 if (selectedChat)
                   setDrafts((previous) => ({
@@ -407,7 +420,7 @@ function SignedInShell({
           )}
         </main>
         <footer>
-          <span>Запуск привязки доступен из диалога проекта.</span>
+          <span>Откройте диалог проекта и нажмите «Запустить шаблон».</span>
           <button
             type="button"
             className="quiet"

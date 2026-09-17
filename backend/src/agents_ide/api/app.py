@@ -73,10 +73,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.secrets = SecretStore(settings.data_dir / "secrets")
         from agents_ide.services.presets import install_all
+        from agents_ide.services.templates import sync_saved_template_bindings
 
         def install_presets() -> None:
             with app.state.session_factory() as session:
                 install_all(session)
+                sync_saved_template_bindings(session)
                 session.commit()
 
         await asyncio.to_thread(install_presets)

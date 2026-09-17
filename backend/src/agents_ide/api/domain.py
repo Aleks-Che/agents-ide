@@ -388,6 +388,25 @@ def update_draft_endpoint(
     return templates.update_draft(session, template_id, payload)
 
 
+@router.put("/templates/{template_id}/save", response_model=PipelineTemplate)
+def save_template_endpoint(
+    session: SessionDep, template_id: str, payload: PipelineDraftUpdate
+) -> PipelineTemplate:
+    return templates.save_template(session, template_id, payload)
+
+
+@router.get("/templates/{template_id}/saved", response_model=PipelineVersion | None)
+def saved_template_endpoint(session: SessionDep, template_id: str) -> PipelineVersion | None:
+    return templates.saved_definition(session, template_id)
+
+
+@router.post("/templates/{template_id}/bindings", response_model=PipelineBinding, status_code=201)
+def attach_template_endpoint(
+    session: SessionDep, template_id: str, payload: PipelineBindingCreate
+) -> PipelineBinding:
+    return templates.attach_template(session, template_id, payload)
+
+
 @router.post("/templates/{template_id}/publish", response_model=PipelineVersion, status_code=201)
 def publish_draft_endpoint(
     session: SessionDep,

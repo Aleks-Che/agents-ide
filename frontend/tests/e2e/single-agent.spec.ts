@@ -100,7 +100,7 @@ for (const kind of ['agent', 'llm'] as const) {
     await page.reload()
     await page.getByRole('option', { name: new RegExp(project.name) }).click()
     await page.getByRole('option', { name: new RegExp(chat.title) }).click()
-    await page.getByRole('button', { name: 'Запустить задание' }).click()
+    await page.getByRole('button', { name: 'Запустить шаблон' }).click()
     const dialog = page.getByRole('dialog')
     const versionRoute = `**/api/versions/${version.id}`
     await page.route(versionRoute, (route) =>
@@ -115,7 +115,7 @@ for (const kind of ['agent', 'llm'] as const) {
       }),
     )
     await dialog
-      .getByLabel('Привязка', { exact: true })
+      .getByLabel('Шаблон проекта', { exact: true })
       .selectOption(binding.id)
 
     // Loading a version must remain recoverable in both launch modes.
@@ -233,7 +233,7 @@ for (const kind of ['agent', 'llm'] as const) {
     await page.reload()
     await page.getByRole('option', { name: new RegExp(project.name) }).click()
     await page.getByRole('option', { name: new RegExp(chat.title) }).click()
-    await page.getByRole('button', { name: 'Запустить задание' }).click()
+    await page.getByRole('button', { name: 'Запустить шаблон' }).click()
     await dialog
       .getByRole('button', { name: 'Повторить тот же запуск' })
       .click()

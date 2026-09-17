@@ -182,12 +182,8 @@ def copy_template(
         created_at=now,
         updated_at=now,
     )
-    latest = session.scalar(
-        select(PipelineVersionModel)
-        .where(PipelineVersionModel.template_id == source.id)
-        .order_by(PipelineVersionModel.version_number.desc())
-        .limit(1)
-    )
+    saved = saved_definition(session, source.id)
+    latest = session.get(PipelineVersionModel, saved.id) if saved else None
     session.add(model)
     session.flush()
     if latest is not None:
@@ -262,7 +258,12 @@ def archive_template(session: Session, template_id: str, expected_version: int) 
 
 
 def create_version(
-    session: Session, template_id: str, payload: PipelineVersionCreate, *, _system: bool = False
+    session: Session,
+    template_id: str,
+    payload: PipelineVersionCreate,
+    *,
+    _system: bool = False,
+    _reuse: bool = False,
 ) -> PipelineVersion:
     begin_write(session)
     template = get_or_404(session, PipelineTemplateModel, template_id)
@@ -301,6 +302,21 @@ def create_version(
         }
     )
     policy_hash = content_hash(policy_payload)
+    if _reuse:
+        existing = session.scalar(
+            select(PipelineVersionModel).where(
+                PipelineVersionModel.template_id == template_id,
+                PipelineVersionModel.execution_hash == execution_hash,
+            )
+        )
+        if existing is not None:
+            if existing.origin != payload.origin:
+                raise AppError(
+                    "template_origin_conflict",
+                    "Сохраните импортированный граф в отдельный шаблон",
+                    409,
+                )
+            return version_from_model(existing)
     now = utc_now()
     model = PipelineVersionModel(
         id=new_id(),
@@ -722,6 +738,125 @@ def publish_draft(session: Session, template_id: str, expected_version: int) -> 
     except ValidationError:
         raise AppError("draft_incomplete", "Черновик не содержит структуры графа", 422) from None
     return create_version(session, template_id, payload)
+
+
+def save_template(
+    session: Session, template_id: str, payload: PipelineDraftUpdate
+) -> PipelineTemplate:
+    """Save once and advance existing bindings atomically; runs keep their snapshots."""
+    from pydantic import ValidationError
+
+    saved = update_draft(session, template_id, payload)
+    try:
+        definition = PipelineVersionCreate.model_validate(saved.draft.model_dump())
+    except ValidationError:
+        raise AppError(
+            "graph_validation_failed", "Добавьте узлы и связи перед сохранением шаблона", 422
+        ) from None
+    version = create_version(session, template_id, definition, _reuse=True)
+    _advance_bindings(session, template_id, version.id)
+    return saved
+
+
+def _advance_bindings(session: Session, template_id: str, version_id: str) -> int:
+    bindings = session.scalars(
+        select(PipelineBindingModel).where(
+            PipelineBindingModel.version_id.in_(
+                select(PipelineVersionModel.id).where(
+                    PipelineVersionModel.template_id == template_id
+                )
+            ),
+            PipelineBindingModel.archived_at.is_(None),
+            PipelineBindingModel.version_id != version_id,
+        )
+    ).all()
+    for binding in bindings:
+        binding.version_id = version_id
+        binding.revision += 1
+        binding.updated_at = utc_now()
+    session.flush()
+    return len(bindings)
+
+
+def sync_saved_template_bindings(session: Session) -> int:
+    """Upgrade legacy pinned bindings at startup without changing any run snapshots.
+
+    Only already saved definitions are used: an unpublished draft is never
+    promoted here. Repeating startup leaves current bindings and revisions alone.
+    """
+    begin_write(session)
+    template_ids = session.scalars(
+        select(PipelineTemplateModel.id).where(
+            PipelineTemplateModel.kind == "user",
+            PipelineTemplateModel.archived_at.is_(None),
+            PipelineTemplateModel.id.in_(
+                select(PipelineVersionModel.template_id)
+                .join(
+                    PipelineBindingModel,
+                    PipelineBindingModel.version_id == PipelineVersionModel.id,
+                )
+                .where(PipelineBindingModel.archived_at.is_(None))
+            ),
+        )
+    ).all()
+    updated = 0
+    for template_id in template_ids:
+        definition = saved_definition(session, template_id)
+        if definition is not None:
+            updated += _advance_bindings(session, template_id, definition.id)
+    return updated
+
+
+def saved_definition(session: Session, template_id: str) -> PipelineVersion | None:
+    """Resolve the saved document, including a return to a previously used definition."""
+    from agents_ide.domain.graph_validation import definition_hash, validate_graph
+
+    template = get_or_404(session, PipelineTemplateModel, template_id)
+    draft = json.loads(template.draft_json)
+    report = validate_graph(draft.get("graph", {}), inputs=draft.get("inputs", {}))
+    if report.ok:
+        digest = definition_hash(
+            {
+                "graph": draft["graph"],
+                "required_features": sorted(
+                    set(draft.get("required_features", [])) | set(report.features)
+                ),
+                "inputs": draft.get("inputs", {}),
+                "settings": PipelineDraft.model_validate(draft).settings.model_dump(
+                    exclude_none=True
+                ),
+                "schema_version": template.schema_version,
+            }
+        )
+        current = session.scalar(
+            select(PipelineVersionModel).where(
+                PipelineVersionModel.template_id == template_id,
+                PipelineVersionModel.execution_hash == digest,
+            )
+        )
+        if current is not None:
+            return version_from_model(current)
+    # Compatibility with templates published before unified saving.
+    latest = session.scalar(
+        select(PipelineVersionModel)
+        .where(PipelineVersionModel.template_id == template_id)
+        .order_by(PipelineVersionModel.version_number.desc())
+        .limit(1)
+    )
+    return version_from_model(latest) if latest else None
+
+
+def attach_template(
+    session: Session, template_id: str, payload: PipelineBindingCreate
+) -> PipelineBinding:
+    begin_write(session)
+    template = get_or_404(session, PipelineTemplateModel, template_id)
+    if template.archived_at is not None:
+        raise AppError("template_archived", "Шаблон удалён из списка", 409)
+    definition = saved_definition(session, template_id)
+    if definition is None:
+        raise AppError("template_not_saved", "Сначала сохраните шаблон в конструкторе", 422)
+    return create_binding(session, definition.id, payload)
 
 
 def _binding_has_active_runs(session: Session, binding_id: str) -> bool:

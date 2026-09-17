@@ -93,6 +93,31 @@ export const templatesApi = {
       csrf,
     )
   },
+  save(
+    templateId: string,
+    body: ApiSchemas['PipelineDraftUpdate'],
+    csrf: string,
+  ): Promise<PipelineTemplate> {
+    return request<PipelineTemplate>(
+      `/templates/${templateId}/save`,
+      { method: 'PUT', body: JSON.stringify(body) },
+      csrf,
+    )
+  },
+  saved(templateId: string): Promise<PipelineVersion | null> {
+    return request<PipelineVersion | null>(`/templates/${templateId}/saved`)
+  },
+  attach(
+    templateId: string,
+    body: ApiSchemas['PipelineBindingCreate'],
+    csrf: string,
+  ): Promise<PipelineBinding> {
+    return request<PipelineBinding>(
+      `/templates/${templateId}/bindings`,
+      { method: 'POST', body: JSON.stringify(body) },
+      csrf,
+    )
+  },
   listVersions(templateId: string): Promise<PipelineVersion[]> {
     return request<PipelineVersion[]>(`/templates/${templateId}/versions`)
   },
@@ -141,13 +166,28 @@ export const bindingsApi = {
     body: ApiSchemas['PreflightRequest'] = {},
   ): Promise<PreflightReport> {
     // ValidationReport serializes its preview fields at the response root.
-    const { ok, errors, warnings, execution_hash, ...preview } = await request<
-      Omit<PreflightReport, 'preview'> & Record<string, unknown>
-    >(
-      `/bindings/${bindingId}/preflight`,
-      { method: 'POST', body: JSON.stringify(body) },
-      csrf,
+    const check = () =>
+      request<Omit<PreflightReport, 'preview'> & Record<string, unknown>>(
+        `/bindings/${bindingId}/preflight`,
+        { method: 'POST', body: JSON.stringify(body) },
+        csrf,
+      )
+    let report = await check()
+    const refresh = new Set(
+      report.errors
+        .filter((issue) => issue.code === 'harness_catalog_unverified')
+        .map((issue) => issue.details?.harness_profile_id)
+        .filter((id): id is string => typeof id === 'string'),
     )
+    for (const id of refresh) {
+      await request(
+        `/harness_profiles/${encodeURIComponent(id)}/models/refresh?force=true`,
+        { method: 'POST' },
+        csrf,
+      )
+    }
+    if (refresh.size) report = await check()
+    const { ok, errors, warnings, execution_hash, ...preview } = report
     return { ok, errors, warnings, execution_hash, preview }
   },
   list(query: BindingQuery = {}): Promise<PipelineBinding[]> {

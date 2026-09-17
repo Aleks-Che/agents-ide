@@ -31,6 +31,7 @@ export function ContextMenu({
   }, [target])
 
   useEffect(() => {
+    const anchor = target.trigger.getBoundingClientRect()
     const dismissOutside = (event: PointerEvent) => {
       if (event.target instanceof Node && !ref.current?.contains(event.target))
         onClose()
@@ -38,6 +39,10 @@ export function ContextMenu({
     const dismissOnScroll = (event: Event) => {
       if (event.target instanceof Node && ref.current?.contains(event.target))
         return
+      // A scrollIntoView event can arrive after the menu has opened. Dismiss
+      // only if its anchor actually moved since opening.
+      const current = target.trigger.getBoundingClientRect()
+      if (current.x === anchor.x && current.y === anchor.y) return
       onClose()
     }
     document.addEventListener('pointerdown', dismissOutside)
@@ -48,7 +53,7 @@ export function ContextMenu({
       window.removeEventListener('resize', onClose)
       window.removeEventListener('scroll', dismissOnScroll, true)
     }
-  }, [onClose])
+  }, [onClose, target])
 
   const closeAndFocus = () => {
     target.trigger.focus({ preventScroll: true })

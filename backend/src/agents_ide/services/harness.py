@@ -202,10 +202,15 @@ def invalidate_native_catalog(session: Session, model: HarnessProfileModel) -> N
 
 
 def current_model_metadata(model: HarnessProfileModel) -> dict[str, Any]:
+    """Last confirmed options for this executable/account/configuration.
+
+    TTL controls catalog refresh, not validity of already confirmed parameters.
+    Dispatch fetches and validates the live catalog again. A changed native
+    fingerprint still invalidates all cached options immediately.
+    """
     if (
         model.catalog_fingerprint != fingerprint(model.harness_kind, model.executable_path)
         or model.catalog_fetched_at is None
-        or utc_now() - model.catalog_fetched_at > model.catalog_ttl_seconds
     ):
         return {}
     metadata: dict[str, Any] = json.loads(model.catalog_metadata_json or "{}")

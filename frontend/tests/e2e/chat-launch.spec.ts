@@ -65,12 +65,14 @@ test('chat launch checks actual inputs and mode, retries a lost response after r
     idempotency_key: randomUUID(),
   })
   await page.getByLabel('Новое сообщение').fill('draft for this run')
-  await page.getByRole('button', { name: 'Запустить задание' }).click()
+  await page.getByRole('button', { name: 'Запустить шаблон' }).click()
   const dialog = page.getByRole('dialog')
   await expect(
     dialog.getByRole('button', { name: 'Запустить', exact: true }),
   ).toBeDisabled()
-  await dialog.getByLabel('Привязка', { exact: true }).selectOption(binding.id)
+  await dialog
+    .getByLabel('Шаблон проекта', { exact: true })
+    .selectOption(binding.id)
   await dialog.getByLabel('Имитация (fake)').check()
   await dialog.getByRole('button', { name: 'Запустить preflight' }).click()
   await expect(
@@ -135,7 +137,7 @@ test('chat launch checks actual inputs and mode, retries a lost response after r
   await page.reload()
   await page.getByRole('option', { name: new RegExp(project.name) }).click()
   await page.getByRole('option', { name: new RegExp(chat.title) }).click()
-  await page.getByRole('button', { name: 'Запустить задание' }).click()
+  await page.getByRole('button', { name: 'Запустить шаблон' }).click()
   await dialog.getByRole('button', { name: 'Повторить тот же запуск' }).click()
   await expect(dialog.getByRole('alert')).toContainText('test session renewed')
   await dialog.getByRole('button', { name: 'Повторить тот же запуск' }).click()
@@ -169,9 +171,11 @@ test('import consent is explicit and a binding changed after preflight cannot la
   page,
 }) => {
   const { project, chat, binding } = await setup(page, true)
-  await page.getByRole('button', { name: 'Запустить задание' }).click()
+  await page.getByRole('button', { name: 'Запустить шаблон' }).click()
   const dialog = page.getByRole('dialog')
-  await dialog.getByLabel('Привязка', { exact: true }).selectOption(binding.id)
+  await dialog
+    .getByLabel('Шаблон проекта', { exact: true })
+    .selectOption(binding.id)
   await dialog.getByLabel('Входы запуска (JSON)').fill('{"task":"import test"}')
   await dialog.getByLabel('Имитация (fake)').check()
   await dialog.getByRole('button', { name: 'Запустить preflight' }).click()
@@ -292,14 +296,16 @@ test('launch displays group order and actual node overrides, and surfaces bindin
   await page.reload()
   await page.getByRole('option', { name: new RegExp(project.name) }).click()
   await page.getByRole('option', { name: /Chat / }).click()
-  await page.getByRole('button', { name: 'Запустить задание' }).click()
+  await page.getByRole('button', { name: 'Запустить шаблон' }).click()
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByRole('alert')).toContainText('test offline')
   await page.unroute('**/api/bindings?*')
   await dialog
     .getByRole('button', { name: 'Повторить загрузку привязок' })
     .click()
-  await dialog.getByLabel('Привязка', { exact: true }).selectOption(grouped.id)
+  await dialog
+    .getByLabel('Шаблон проекта', { exact: true })
+    .selectOption(grouped.id)
   await expect(dialog.getByRole('option', { name: binding.name })).toHaveCount(
     0,
   )

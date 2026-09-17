@@ -11446,6 +11446,58 @@
         ]
       }
     },
+    "/api/templates/{template_id}/bindings": {
+      "post": {
+        "operationId": "attach_template_endpoint_api_templates__template_id__bindings_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineBindingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineBinding"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Attach Template Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
     "/api/templates/{template_id}/copy": {
       "post": {
         "operationId": "copy_template_endpoint_api_templates__template_id__copy_post",
@@ -11597,6 +11649,108 @@
           }
         },
         "summary": "Publish Draft Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/templates/{template_id}/save": {
+      "put": {
+        "operationId": "save_template_endpoint_api_templates__template_id__save_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineDraftUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineTemplate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Template Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/templates/{template_id}/saved": {
+      "get": {
+        "operationId": "saved_template_endpoint_api_templates__template_id__saved_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PipelineVersion"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Saved Template Endpoint Api Templates  Template Id  Saved Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Saved Template Endpoint",
         "tags": [
           "domain"
         ]

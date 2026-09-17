@@ -12,15 +12,15 @@ import {
   templatesApi,
   type PipelineBinding,
   type PipelineTemplate,
-  type PipelineVersion,
   type PresetSummary,
 } from '../../api/bindings'
 import { groupsApi, harnessApi, connectionsApi } from '../../api/settings'
 import type { Project } from '../../api/projects'
 import { useCsrfToken } from '../../app/session'
-import { formatDateTime, shortHash } from '../../app/format'
+import { formatDateTime } from '../../app/format'
 import { BindingEditor, type BindingEditorResources } from './BindingEditor'
 import { Modal } from '../../app/Modal'
+import { AttachTemplateDialog } from './AttachTemplateDialog'
 const GraphEditor = lazy(() =>
   import('../pipelines/GraphEditor').then((module) => ({
     default: module.GraphEditor,
@@ -30,9 +30,18 @@ const GraphEditor = lazy(() =>
 interface LibraryViewProps {
   projects: Project[]
   selectedProjectId: string | null
+  initialEditorTemplateId?: string | null
+  onSelectProject: (project: Project) => void
+  onOpenChats: () => void
 }
 
-export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
+export function LibraryView({
+  projects,
+  selectedProjectId,
+  initialEditorTemplateId,
+  onSelectProject,
+  onOpenChats,
+}: LibraryViewProps) {
   const client = useQueryClient()
   const csrf = useCsrfToken()
   const templates = useQuery({
@@ -113,10 +122,13 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
   const selectedProject =
     projects.find((p) => p.id === selectedProjectId) ?? null
   const [openBindingId, setOpenBindingId] = useState<string | null>(null)
+  const [attach, setAttach] = useState<{ templateId?: string } | null>(null)
+  const [attachNotice, setAttachNotice] = useState('')
   const [copyPreset, setCopyPreset] = useState<PresetSummary | null>(null)
   const [copyTemplate, setCopyTemplate] = useState<PipelineTemplate | null>(
     null,
   )
+  const [renaming, setRenaming] = useState<PipelineTemplate | null>(null)
   const [menu, setMenu] = useState<
     | (ContextMenuTarget & {
         template: PipelineTemplate
@@ -125,14 +137,16 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
     | null
   >(null)
   const closeMenu = useCallback(() => setMenu(null), [])
+  const [bindingMenu, setBindingMenu] = useState<
+    (ContextMenuTarget & { binding: PipelineBinding }) | null
+  >(null)
+  const closeBindingMenu = useCallback(() => setBindingMenu(null), [])
   const [editPreset, setEditPreset] = useState(false)
-  const [openTemplate, setOpenTemplate] = useState<PipelineTemplate | null>(
-    null,
-  )
   const [editor, setEditor] = useState<{
     templateId: string
-    version?: PipelineVersion
-  } | null>(null)
+  } | null>(
+    initialEditorTemplateId ? { templateId: initialEditorTemplateId } : null,
+  )
   const [creating, setCreating] = useState(false)
   const [templateName, setTemplateName] = useState('')
   const createTemplate = useMutation({
@@ -188,12 +202,28 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
       void client.invalidateQueries({ queryKey: ['templates'] })
     },
   })
+  const removeBinding = useMutation({
+    mutationFn: (binding: PipelineBinding) =>
+      bindingsApi.archive(binding.id, binding.version, csrf),
+    onSuccess: (removed) => {
+      client.setQueryData<PipelineBinding[]>(
+        ['bindings', { projectId: removed.project_id, includeArchived: false }],
+        (previous = []) => previous.filter((item) => item.id !== removed.id),
+      )
+      setOpenBindingId((current) => (current === removed.id ? null : current))
+      void client.invalidateQueries({ queryKey: ['bindings'] })
+    },
+    onError: () => {
+      void client.invalidateQueries({ queryKey: ['bindings'] })
+    },
+  })
   const openMenu = (
     target: ContextMenuTarget,
     template: PipelineTemplate,
     preset?: PresetSummary,
   ) => {
     if (!removeTemplate.isPending) removeTemplate.reset()
+    setBindingMenu(null)
     setMenu({ ...target, template, preset })
   }
   const beginCopy = (edit: boolean) => {
@@ -214,20 +244,33 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
       <header className="main-header">
         <div>
           <span className="eyebrow">ШАБЛОНЫ</span>
-          <h2 id="library-title">Шаблоны, версии и привязки</h2>
+          <h2 id="library-title">Шаблоны и привязки</h2>
           <span className="muted">
-            Копируйте встроенный пресет в пользовательский шаблон,
-            просматривайте версии и настраивайте выбор моделей для проекта.
+            Сохраните шаблон, создайте привязку к проекту и запустите из диалога
+            кнопкой «Запустить шаблон».
           </span>
         </div>
-        <button
-          type="button"
-          disabled={!csrf}
-          onClick={() => setCreating(true)}
-        >
-          Новый шаблон
-        </button>
+        <div className="actions">
+          <button type="button" disabled={!csrf} onClick={() => setAttach({})}>
+            Создать привязку
+          </button>
+          <button
+            type="button"
+            disabled={!csrf}
+            onClick={() => setCreating(true)}
+          >
+            Новый шаблон
+          </button>
+        </div>
       </header>
+      {attachNotice ? (
+        <p className="hint" role="status">
+          {attachNotice}{' '}
+          <button type="button" onClick={onOpenChats}>
+            Перейти к диалогам
+          </button>
+        </p>
+      ) : null}
       <div className="library-grid">
         {[groups, llmGroups, harnesses, connections].some(
           (query) => query.isLoading,
@@ -290,8 +333,7 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
                   </span>
                   <span className="meta">
                     <span>
-                      Роли: {Object.keys(preset.roles).join(', ') || '—'} ·
-                      версия {shortHash(preset.preset_version, 12)}
+                      Роли: {Object.keys(preset.roles).join(', ') || '—'}
                     </span>
                   </span>
                 </li>
@@ -321,10 +363,7 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
                     <span className="muted">{tpl.description}</span>
                   ) : null}
                   <span className="meta">
-                    <span>
-                      Обновлён {formatDateTime(tpl.updated_at)} · ревизия{' '}
-                      {tpl.version}
-                    </span>
+                    <span>Обновлён {formatDateTime(tpl.updated_at)}</span>
                   </span>
                 </li>
               ))}
@@ -352,6 +391,11 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
               Привязки проекта
             </span>
           </header>
+          {selectedProject ? (
+            <p className="hint">
+              Проект: <strong>{selectedProject.name}</strong>
+            </p>
+          ) : null}
           {!selectedProject ? (
             <p className="panel-empty">
               Выберите проект слева, чтобы увидеть и редактировать его привязки.
@@ -373,24 +417,27 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
             </div>
           ) : bindingsData.length === 0 ? (
             <p className="panel-empty">
-              Привязок ещё нет. Создайте первую из шаблона с опубликованной
-              версией.
+              Шаблоны ещё не привязаны. Нажмите «Создать привязку» и выберите
+              шаблон.
             </p>
           ) : (
             <ul className="panel-list" aria-label="Привязки проекта">
               {bindingsData.map((binding) => (
-                <li key={binding.id} className="profile-item">
+                <li
+                  key={binding.id}
+                  className="profile-item"
+                  tabIndex={0}
+                  {...contextMenuHandlers((target) => {
+                    if (!removeBinding.isPending) removeBinding.reset()
+                    setMenu(null)
+                    setBindingMenu({ ...target, binding })
+                  })}
+                >
                   <header>
                     <strong>{binding.name}</strong>
-                    <span className="pill">
-                      версия {shortHash(binding.version_id, 7)}
-                    </span>
                   </header>
                   <span className="meta">
-                    <span>
-                      Ревизия {binding.version} ·{' '}
-                      {binding.archived ? 'архив' : 'активна'}
-                    </span>
+                    <span>{binding.archived ? 'архив' : 'активна'}</span>
                     <span className="muted">
                       {binding.branch_policy === 'current'
                         ? 'ветка: current'
@@ -398,28 +445,62 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
                       · {binding.dirty_policy}
                     </span>
                   </span>
-                  <button
-                    type="button"
-                    className="quiet"
-                    onClick={() => setOpenBindingId(binding.id)}
-                    disabled={[groups, llmGroups, harnesses, connections].some(
-                      (query) => !query.data || query.isError,
-                    )}
-                  >
-                    Параметры…
-                  </button>
                 </li>
               ))}
             </ul>
           )}
+          {removeBinding.variables?.project_id === selectedProjectId && (
+            <>
+              {removeBinding.isPending ? (
+                <p role="status">Удаляем привязку…</p>
+              ) : null}
+              {removeBinding.error ? (
+                <p role="alert" className="error">
+                  Не удалось удалить «{removeBinding.variables.name}».{' '}
+                  {renderLibraryError(removeBinding.error)}
+                </p>
+              ) : null}
+            </>
+          )}
         </section>
       </div>
+      {bindingMenu && bindingMenu.binding.project_id === selectedProjectId ? (
+        <ContextMenu
+          target={bindingMenu}
+          label={`Действия с привязкой «${bindingMenu.binding.name}»`}
+          onClose={closeBindingMenu}
+          items={[
+            {
+              label: 'Параметры…',
+              onSelect: () => setOpenBindingId(bindingMenu.binding.id),
+              disabled:
+                removeBinding.isPending ||
+                [groups, llmGroups, harnesses, connections].some(
+                  (query) => !query.data || query.isError,
+                ),
+            },
+            {
+              label: 'Удалить',
+              onSelect: () => removeBinding.mutate(bindingMenu.binding),
+              danger: true,
+              disabled: !csrf || removeBinding.isPending,
+              title:
+                'Убрать привязку из списка; шаблон и история запусков сохранятся',
+            },
+          ]}
+        />
+      ) : null}
       {menu ? (
         <ContextMenu
           target={menu}
           label={`Действия с шаблоном «${menu.template.name}»`}
           onClose={closeMenu}
           items={[
+            {
+              label: 'Создать привязку',
+              onSelect: () => setAttach({ templateId: menu.template.id }),
+              disabled: !csrf,
+            },
             {
               label: 'Копировать',
               onSelect: () => beginCopy(false),
@@ -433,7 +514,15 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
               },
               disabled: !csrf,
             },
-            { label: 'Версии', onSelect: () => setOpenTemplate(menu.template) },
+            {
+              label: 'Переименовать',
+              onSelect: () => setRenaming(menu.template),
+              disabled: !csrf || menu.template.kind === 'system',
+              title:
+                menu.template.kind === 'system'
+                  ? 'Сначала создайте копию встроенного шаблона'
+                  : undefined,
+            },
             {
               label: 'Удалить',
               onSelect: () => removeTemplate.mutate(menu.template),
@@ -450,6 +539,25 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
           ]}
         />
       ) : null}
+      {attach ? (
+        <AttachTemplateDialog
+          initialProjectId={selectedProjectId}
+          initialTemplateId={attach.templateId}
+          onClose={() => setAttach(null)}
+          onCreated={(binding, project) => {
+            setAttach(null)
+            onSelectProject(project)
+            setAttachNotice(
+              `«${binding.name}» добавлен в проект «${project.name}».`,
+            )
+          }}
+          onEdit={(templateId, project) => {
+            setAttach(null)
+            if (project) onSelectProject(project)
+            setEditor({ templateId })
+          }}
+        />
+      ) : null}
       {copyPreset ? (
         <TemplateCopyDialog
           editAfterCopy={editPreset}
@@ -462,6 +570,13 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
           onSubmit={(name) =>
             copyPresetMutation.mutate({ preset: copyPreset, name })
           }
+        />
+      ) : null}
+      {renaming ? (
+        <TemplateRenameDialog
+          template={renaming}
+          csrf={csrf}
+          onClose={() => setRenaming(null)}
         />
       ) : null}
       {copyTemplate ? (
@@ -522,35 +637,10 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
         <Suspense fallback={<p role="status">Открываем конструктор…</p>}>
           <GraphEditor
             templateId={editor.templateId}
-            initialVersion={editor.version}
-            projectId={selectedProjectId}
             onClose={() => setEditor(null)}
-            onCreated={(binding) => {
-              setEditor(null)
-              void client
-                .invalidateQueries({ queryKey: ['bindings'] })
-                .then(() => setOpenBindingId(binding.id))
-            }}
           />
         </Suspense>
       )}
-      {openTemplate ? (
-        <TemplateVersionsDialog
-          template={openTemplate}
-          projectId={selectedProjectId}
-          onCreated={(binding) => {
-            setOpenTemplate(null)
-            void client
-              .invalidateQueries({ queryKey: ['bindings'] })
-              .then(() => setOpenBindingId(binding.id))
-          }}
-          onClose={() => setOpenTemplate(null)}
-          onEdit={(version) => {
-            setOpenTemplate(null)
-            setEditor({ templateId: openTemplate.id, version })
-          }}
-        />
-      ) : null}
       {openBindingId ? (
         <BindingEditor
           key={openBindingId}
@@ -566,6 +656,81 @@ export function LibraryView({ projects, selectedProjectId }: LibraryViewProps) {
         />
       ) : null}
     </section>
+  )
+}
+
+function TemplateRenameDialog({
+  template,
+  csrf,
+  onClose,
+}: {
+  template: PipelineTemplate
+  csrf: string
+  onClose: () => void
+}) {
+  const client = useQueryClient()
+  const [name, setName] = useState(template.name)
+  const [revision, setRevision] = useState(template.version)
+  const rename = useMutation({
+    mutationFn: () =>
+      templatesApi.update(
+        template.id,
+        { name: name.trim(), expected_version: revision },
+        csrf,
+      ),
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ['templates'] })
+      onClose()
+    },
+    onError: async (error) => {
+      if (error instanceof ApiError && error.body.code === 'version_conflict') {
+        const current = await templatesApi.get(template.id).catch(() => null)
+        if (current) setRevision(current.version)
+      }
+      void client.invalidateQueries({ queryKey: ['templates'] })
+    },
+  })
+  return (
+    <Modal
+      onClose={onClose}
+      busy={rename.isPending}
+      label="Переименовать шаблон"
+    >
+      <form
+        className="dialog"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (csrf && name.trim() && !rename.isPending) rename.mutate()
+        }}
+      >
+        <h3>Переименовать шаблон</h3>
+        <label>
+          Название шаблона
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            required
+            maxLength={120}
+          />
+        </label>
+        {rename.error ? (
+          <p role="alert" className="error">
+            {renderLibraryError(rename.error)}
+          </p>
+        ) : null}
+        <footer>
+          <button type="button" className="quiet" onClick={onClose}>
+            Отмена
+          </button>
+          <button
+            type="submit"
+            disabled={!csrf || !name.trim() || rename.isPending}
+          >
+            {rename.isPending ? 'Сохраняем…' : 'Сохранить'}
+          </button>
+        </footer>
+      </form>
+    </Modal>
   )
 }
 
@@ -616,7 +781,7 @@ function TemplateCopyDialog({
         <p className="hint">
           {isPreset
             ? `Будет создан пользовательский шаблон с графом и настройками пресета «${sourceName}».`
-            : `Будет скопирован шаблон «${sourceName}»: сохранённый черновик и последняя опубликованная версия, если она есть.`}{' '}
+            : `Будет скопирован шаблон «${sourceName}»: граф и его настройки.`}{' '}
           Дальнейшие правки относятся к вашей копии.
         </p>
         <label htmlFor="copy-preset-name">Название шаблона</label>
@@ -649,133 +814,12 @@ function TemplateCopyDialog({
   )
 }
 
-interface TemplateVersionsDialogProps {
-  template: PipelineTemplate
-  projectId: string | null
-  onCreated: (binding: PipelineBinding) => void
-  onClose: () => void
-  onEdit: (version: PipelineVersion) => void
-}
-
-function TemplateVersionsDialog({
-  template,
-  projectId,
-  onCreated,
-  onClose,
-  onEdit,
-}: TemplateVersionsDialogProps) {
-  const csrf = useCsrfToken()
-  const [name, setName] = useState(template.name.slice(0, 120))
-  const create = useMutation({
-    mutationFn: (versionId: string) =>
-      bindingsApi.create(
-        versionId,
-        { project_id: projectId!, name: name.trim() },
-        csrf,
-      ),
-    onSuccess: onCreated,
-  })
-  const versions = useQuery({
-    queryKey: ['template_versions', { templateId: template.id }],
-    queryFn: () => templatesApi.listVersions(template.id),
-  })
-  return (
-    <Modal
-      onClose={onClose}
-      busy={create.isPending}
-      labelledBy="versions-title"
-    >
-      <div className="dialog wide">
-        <header>
-          <h3 id="versions-title">Версии: {template.name}</h3>
-          <button type="button" className="quiet" onClick={onClose}>
-            ×
-          </button>
-        </header>
-        {projectId ? (
-          <>
-            <label htmlFor="new-binding-name">Название новой привязки</label>
-            <input
-              id="new-binding-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              maxLength={120}
-            />
-          </>
-        ) : (
-          <p>Выберите проект, чтобы создать привязку.</p>
-        )}
-        {create.error ? (
-          <p role="alert" className="error">
-            {renderLibraryError(create.error)}
-          </p>
-        ) : null}
-        {versions.isLoading ? (
-          <p role="status">Загружаем версии…</p>
-        ) : versions.error ? (
-          <p className="error">{renderLibraryError(versions.error)}</p>
-        ) : !versions.data?.length ? (
-          <p className="panel-empty">
-            Версий пока нет. Опубликуйте черновик, чтобы получить неизменяемую
-            версию.
-          </p>
-        ) : (
-          <ol className="panel-list">
-            {(versions.data as PipelineVersion[]).map((version) => (
-              <li key={version.id} className="profile-item">
-                <header>
-                  <strong>v{version.version_number}</strong>
-                  <span className="pill">
-                    {version.origin === 'imported' ? 'импорт' : 'локально'}
-                  </span>
-                </header>
-                <span className="meta">
-                  <span>
-                    {formatDateTime(version.created_at)} · hash{' '}
-                    {shortHash(version.execution_hash, 12)}
-                  </span>
-                  <span className="muted">
-                    execution_hash {shortHash(version.execution_hash)}
-                  </span>
-                </span>
-                <details>
-                  <summary>Входы и настройки версии</summary>
-                  <pre>
-                    {JSON.stringify(
-                      { inputs: version.inputs, settings: version.settings },
-                      null,
-                      2,
-                    )}
-                  </pre>
-                </details>
-                <button
-                  type="button"
-                  disabled={
-                    !projectId || !csrf || !name.trim() || create.isPending
-                  }
-                  onClick={() => create.mutate(version.id)}
-                >
-                  Создать привязку v{version.version_number}
-                </button>
-                {template.kind !== 'system' && (
-                  <button
-                    type="button"
-                    className="quiet"
-                    onClick={() => onEdit(version)}
-                  >
-                    Открыть v{version.version_number} в конструкторе
-                  </button>
-                )}
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
-    </Modal>
-  )
-}
-
 function renderLibraryError(error: unknown): string {
+  if (
+    error instanceof ApiError &&
+    error.body.code === 'binding_has_active_runs'
+  )
+    return 'Сначала завершите активные задания этой привязки.'
   if (error instanceof ApiError) return error.body.message
   if (error instanceof Error) return error.message
   return 'Не удалось загрузить данные.'

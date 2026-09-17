@@ -153,7 +153,7 @@ export function GraphTransfer({
             disabled={!complete || reviewedKey !== key || apply.isPending}
             onClick={() => apply.mutate()}
           >
-            Применить импорт к черновику
+            Применить импорт
           </button>
         </>
       )}

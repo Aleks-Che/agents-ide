@@ -56,7 +56,8 @@ export function RunsView({ project }: RunsViewProps) {
         <p className="error">{describeError(runs.error)}</p>
       ) : !runs.data?.length ? (
         <p className="panel-empty">
-          Запусков пока нет. Откройте диалог проекта и нажмите «Запустить».
+          Запусков пока нет. Откройте диалог проекта и нажмите «Запустить
+          шаблон».
         </p>
       ) : (
         <ul className="panel-list" aria-label="Все запуски проекта">

@@ -158,11 +158,9 @@ test('builds a repair cycle using forms, persists layout, publishes and runs its
   await expect(
     page.getByText('Параллельные выходы запрещены.', { exact: false }),
   ).toBeVisible()
-  await page
-    .getByRole('button', { name: 'Сохранить черновик', exact: true })
-    .click()
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toHaveText(
-    'Черновик сохранён.',
+    'Шаблон сохранён. Существующие привязки обновлены.',
   )
   let template = await templateByName(page, name)
   expect(template.draft.graph.edges).toHaveLength(6)
@@ -171,11 +169,9 @@ test('builds a repair cycle using forms, persists layout, publishes and runs its
     loop: { id: 'repair', max_iterations: 3 },
     assignments: { 'work.mode': { const: 'repair' } },
   })
-  await page
-    .getByRole('button', { name: 'Сохранить версию', exact: true })
-    .click()
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Сохранена версия v1',
+    'Шаблон сохранён',
   )
   const firstVersion = (
     await api(page, 'GET', `/templates/${template.id}/versions`)
@@ -188,17 +184,13 @@ test('builds a repair cycle using forms, persists layout, publishes and runs its
   await page.mouse.down()
   await page.mouse.move(box.x + 85, box.y + 85, { steps: 8 })
   await page.mouse.up()
-  await page
-    .getByRole('button', { name: 'Сохранить черновик', exact: true })
-    .click()
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Черновик сохранён',
+    'Шаблон сохранён',
   )
-  await page
-    .getByRole('button', { name: 'Сохранить версию', exact: true })
-    .click()
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Исполнение уже опубликовано в v1',
+    'Шаблон сохранён',
   )
   const secondVersion = (
     await api(page, 'GET', `/templates/${template.id}/versions`)
@@ -258,9 +250,9 @@ test('builds a repair cycle using forms, persists layout, publishes and runs its
   await page.reload()
   await page.getByRole('option', { name: new RegExp(project.name) }).click()
   await page.getByRole('option', { name: new RegExp(chat.title) }).click()
-  await page.getByRole('button', { name: 'Запустить задание' }).click()
+  await page.getByRole('button', { name: 'Запустить шаблон' }).click()
   await page
-    .getByRole('combobox', { name: 'Привязка', exact: true })
+    .getByRole('combobox', { name: 'Шаблон проекта', exact: true })
     .selectOption(binding.id)
   await page.getByLabel('Имитация (fake)').check()
   await page.getByRole('button', { name: 'Запустить preflight' }).click()
@@ -304,9 +296,9 @@ test('shows validation at a node and retains local edits when another editor sav
     .click()
   await expect(page.getByLabel('Промпт', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Удалить узел' }).click()
-  await page.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Черновик сохранён',
+    'Шаблон сохранён',
   )
   const template = await templateByName(page, name)
   await page.getByRole('button', { name: 'start_1', exact: true }).click()
@@ -317,7 +309,7 @@ test('shows validation at a node and retains local edits when another editor sav
     expected_version: template.version,
     inputs: { external: 'saved' },
   })
-  await page.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('alert')).toContainText(
     'Черновик изменён в другом месте',
   )
@@ -330,16 +322,17 @@ test('shows validation at a node and retains local edits when another editor sav
   ).toBeVisible()
   await page.getByRole('button', { name: 'Продолжить редактирование' }).click()
   await page
-    .getByRole('button', { name: 'Загрузить серверный черновик' })
+    .getByRole('button', { name: 'Загрузить сохранённый шаблон' })
     .click()
   await page
-    .getByRole('button', { name: 'Заменить черновик', exact: true })
+    .getByRole('button', { name: 'Заменить мои правки', exact: true })
     .click()
   await expect(page.getByRole('alert')).toHaveCount(0)
   await expect(
     page
       .getByRole('dialog')
-      .getByText(`Ревизия ${template.version + 1}`, { exact: false }),
+      .getByText('Шаблон сохранён', { exact: false })
+      .first(),
   ).toBeVisible()
 })
 
@@ -427,22 +420,20 @@ test('imports graph with explicit resource mapping, reviews backup candidates an
     .getByRole('combobox', { name: 'group / llm: foreign-group', exact: true })
     .selectOption(group.id)
   await expect(
-    page.getByRole('button', { name: 'Применить импорт к черновику' }),
+    page.getByRole('button', { name: 'Применить импорт' }),
   ).toBeDisabled()
   await page
     .getByLabel(
       'Я проверил программы, аргументы, роли, пути и назначения всех кандидатов',
     )
     .check()
-  await page
-    .getByRole('button', { name: 'Применить импорт к черновику' })
-    .click()
+  await page.getByRole('button', { name: 'Применить импорт' }).click()
   await expect(
     page.getByRole('heading', { name: 'Входы, роли и лимиты' }),
   ).toBeVisible()
-  await page.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Черновик сохранён',
+    'Шаблон сохранён',
   )
   const saved = await templateByName(page, name)
   expect(saved.draft.origin).toBe('imported')
@@ -455,9 +446,9 @@ test('imports graph with explicit resource mapping, reviews backup candidates an
     group.id,
   )
   expect(saved.draft.trusted).toBeUndefined()
-  await page.getByRole('button', { name: 'Сохранить версию' }).click()
+  await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Сохранена версия v1',
+    'Шаблон сохранён',
   )
   const version = (await api(page, 'GET', `/templates/${saved.id}/versions`))[0]
   expect(version.origin).toBe('imported')
@@ -520,9 +511,9 @@ test('edits Command lists, CollectContext sources and PlanControl using server s
     exact: true,
   })
   await defaults.getByLabel('task', { exact: true }).fill('Check the project')
-  await page.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Черновик сохранён',
+    'Шаблон сохранён',
   )
   const saved = await templateByName(page, name)
   expect(saved.draft.inputs.task).toBe('Check the project')
@@ -541,9 +532,9 @@ test('edits Command lists, CollectContext sources and PlanControl using server s
     operation: 'select_next',
     completion_policy: 'verified_only',
   })
-  await page.getByRole('button', { name: 'Сохранить версию' }).click()
+  await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Сохранена версия v1',
+    'Шаблон сохранён',
   )
 })
 
@@ -575,13 +566,13 @@ test('opens a preset copy and changes reviewer from agent to LLM without alterin
   await page
     .getByRole('combobox', { name: 'Тип исполнителя', exact: true })
     .selectOption('LLMRequest')
-  await page.getByRole('button', { name: 'Сохранить черновик' }).click()
+  await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Черновик сохранён',
+    'Шаблон сохранён',
   )
-  await page.getByRole('button', { name: 'Сохранить версию' }).click()
+  await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Сохранена версия v2',
+    'Шаблон сохранён',
   )
   const template = await templateByName(page, name)
   const version = (

@@ -70,9 +70,20 @@ test('library copies a preset and creates a project binding from its immutable v
     .locator('li.profile-item')
     .filter({ has: page.getByText(name, { exact: true }) })
     .click({ button: 'right' })
-  await page.getByRole('menuitem', { name: 'Версии', exact: true }).click()
-  await dialog.getByLabel('Название новой привязки').fill(`${name} binding`)
-  await dialog.getByRole('button', { name: 'Создать привязку v1' }).click()
+  await page
+    .getByRole('menuitem', { name: 'Создать привязку', exact: true })
+    .click()
+  await dialog.getByLabel('Название в проекте').fill(`${name} binding`)
+  await dialog
+    .getByRole('button', { name: 'Создать привязку', exact: true })
+    .click()
+  await expect(dialog).toHaveCount(0)
+  await page
+    .getByRole('list', { name: 'Привязки проекта' })
+    .getByRole('listitem')
+    .first()
+    .click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Параметры…' }).click()
   await expect(dialog.getByLabel('Название', { exact: true })).toHaveValue(
     `${name} binding`,
   )
@@ -87,6 +98,47 @@ test('library copies a preset and creates a project binding from its immutable v
   const updated = await api(page, 'GET', `/bindings/${bindings[0].id}`)
   expect(updated.limit_overrides).toEqual({ max_calls: 250 })
   expect(updated.project_id).toBe(p.id)
+
+  const list = page.getByRole('list', { name: 'Привязки проекта' })
+  const card = list
+    .getByRole('listitem')
+    .filter({ has: page.getByText(updated.name, { exact: true }) })
+  await expect(card.getByRole('button')).toHaveCount(0)
+  await card.focus()
+  await card.press('Shift+F10')
+  const menu = page.getByRole('menu', {
+    name: `Действия с привязкой «${updated.name}»`,
+  })
+  await expect(menu.getByRole('menuitem')).toHaveText(['Параметры…', 'Удалить'])
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  // A stale revision must keep the card; the refreshed revision allows retry.
+  await api(page, 'PATCH', `/bindings/${updated.id}`, {
+    expected_version: updated.version,
+    limit_overrides: { max_calls: 300 },
+  })
+  await card.click({ button: 'right' })
+  await menu.getByRole('menuitem', { name: 'Удалить', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText(
+    'Привязка изменена в другом месте',
+  )
+  await expect(card).toBeVisible()
+  await card.click({ button: 'right' })
+  await menu.getByRole('menuitem', { name: 'Удалить', exact: true }).click()
+  await expect(card).toHaveCount(0)
+  expect((await api(page, 'GET', `/bindings/${updated.id}`)).archived).toBe(
+    true,
+  )
+  const definition = await api(page, 'GET', `/versions/${updated.version_id}`)
+  expect(
+    (await api(page, 'GET', `/templates/${definition.template_id}`)).archived,
+  ).toBe(false)
+  await page.reload()
+  await page.getByRole('option', { name: new RegExp(p.name) }).click()
+  await page.getByRole('button', { name: 'Шаблоны', exact: true }).click()
+  await expect(
+    page.getByText('Шаблоны ещё не привязаны.', { exact: false }),
+  ).toBeVisible()
 })
 
 test('binding editor preserves drafts on conflict and repairs an archived group', async ({
@@ -112,7 +164,12 @@ test('binding editor preserves drafts on conflict and repairs an archived group'
     `/model_groups/${group.id}/archive?expected_revision=${group.revision}`,
   )
   await page.getByRole('button', { name: 'Шаблоны', exact: true }).click()
-  await page.getByRole('button', { name: 'Параметры…' }).click()
+  await page
+    .getByRole('list', { name: 'Привязки проекта' })
+    .getByRole('listitem')
+    .first()
+    .click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Параметры…' }).click()
   const dialog = page.getByRole('dialog')
   await expect(
     dialog.getByText('Группа недоступна', { exact: false }),
@@ -129,7 +186,12 @@ test('binding editor preserves drafts on conflict and repairs an archived group'
   let saved = await api(page, 'GET', `/bindings/${binding.id}`)
   expect(saved.role_parameters.verifier.temperature).toBe(0.3)
   expect(saved.model_selections.verifier.kind).toBe('direct')
-  await page.getByRole('button', { name: 'Параметры…' }).click()
+  await page
+    .getByRole('list', { name: 'Привязки проекта' })
+    .getByRole('listitem')
+    .first()
+    .click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Параметры…' }).click()
   await dialog.getByLabel('Название', { exact: true }).fill('local draft')
   await api(page, 'PATCH', `/bindings/${binding.id}`, {
     expected_version: saved.version,
