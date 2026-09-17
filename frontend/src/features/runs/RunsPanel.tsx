@@ -509,7 +509,7 @@ function Artifact({ artifact }: { artifact: ArtifactView }) {
   )
 }
 
-function ResolutionForm({
+export function ResolutionForm({
   run,
   onSubmit,
   onClose,

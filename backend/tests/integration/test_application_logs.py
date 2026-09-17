@@ -13,6 +13,34 @@ from agents_ide.services.application_logs import (
 )
 
 
+def test_native_fault_output_is_persisted_without_a_console(tmp_path):
+    script = (
+        "import faulthandler\n"
+        "from pathlib import Path\n"
+        "from agents_ide import logging as logs\n"
+        f"logs.configure_logging(Path({str(tmp_path)!r}), 'worker', 'INFO')\n"
+        "assert faulthandler.is_enabled()\n"
+        "faulthandler.dump_traceback(file=logs._fault_file)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, result.stderr
+    assert 'File "<string>"' in (tmp_path / "worker-fault.log").read_text(encoding="utf-8")
+
+
+def test_crash_exit_code_is_available_in_application_logs(tmp_path):
+    record = logging.LogRecord(
+        "launcher", logging.WARNING, "", 0, "launcher.child_exited", (), None
+    )
+    record.exit_code = 0xC0000005
+    record.exit_code_hex = "0xc0000005"
+    (tmp_path / "launcher.jsonl").write_text(JsonFormatter().format(record), encoding="utf-8")
+    report = read_application_logs(tmp_path)
+    assert report.entries[0].details["exit_code"] == 0xC0000005
+    assert report.entries[0].details["exit_code_hex"] == "0xc0000005"
+
+
 def test_migrated_database_is_ready_and_mismatch_is_explained(client, caplog):
     engine = client.app.state.engine
     assert check_database(engine)

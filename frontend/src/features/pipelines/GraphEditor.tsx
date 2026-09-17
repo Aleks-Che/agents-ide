@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
+import {
+  NodeHarnessSettings,
+  type HarnessExecutionOptions,
+} from '../settings/HarnessExecutionSettings'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Background,
@@ -404,9 +408,7 @@ function GraphEditorForm({
     target: e.target,
     sourceHandle: e.when,
     selected: e.id === selectedEdgeId,
-    label: [e.when, e.label, e.loop ? `↩ ${e.loop.max_iterations}` : '']
-      .filter(Boolean)
-      .join(' · '),
+    label: [e.when, e.label, e.loop ? '↩' : ''].filter(Boolean).join(' · '),
     markerEnd: { type: MarkerType.ArrowClosed },
     type: 'smoothstep',
     style: {
@@ -721,6 +723,7 @@ function GraphEditorForm({
                         'visual',
                         'config',
                         'expression',
+                        'timeout_seconds',
                       ]}
                       onChange={(next) =>
                         updateNode(next as typeof selectedNode)
@@ -778,6 +781,7 @@ function GraphEditorForm({
                         exclude={[
                           'generate_message',
                           'message_generation',
+                          'harness_settings',
                           ...(selectedNode.type === 'GitCommit' &&
                           selectedNode.config?.generate_message === true
                             ? ['message']
@@ -794,6 +798,21 @@ function GraphEditorForm({
                         }
                       />
                     )}
+                    {selectedNode.type === 'AgentTask' ? (
+                      <NodeHarnessSettings
+                        value={
+                          (selectedNode.config?.harness_settings ??
+                            {}) as Record<string, HarnessExecutionOptions>
+                        }
+                        onChange={(harness_settings) => {
+                          const config = { ...selectedNode.config }
+                          if (Object.keys(harness_settings).length)
+                            config.harness_settings = harness_settings
+                          else delete config.harness_settings
+                          updateNode({ ...selectedNode, config })
+                        }}
+                      />
+                    ) : null}
                     {selectedNode.type === 'GitCommit' ? (
                       <GitCommitMessageEditor
                         key={selectedNode.id}
@@ -1173,7 +1192,8 @@ function EdgeEditor({
       )}
       <p className="hint">
         Обычный узел имеет один выход; Condition — по одному true/false/unknown.
-        Обратный переход требует loop с ID и конечным max_iterations.
+        Обратный переход отмечается параметром loop. Число повторов не
+        ограничено.
       </p>
     </section>
   )
@@ -1200,7 +1220,7 @@ function GraphSettings({
   })
   return (
     <section>
-      <h3>Входы, роли и лимиты</h3>
+      <h3>Входы и роли</h3>
       <p>
         schema_version: {doc.schema_version}. Поддержаны:{' '}
         {capabilities.supported_schema.join(', ')}. Capability:{' '}
@@ -1315,31 +1335,10 @@ function GraphSettings({
           </button>
         ))}
       </div>
-      <ObjectFields
-        label="Лимиты запуска"
-        schema={{
-          type: 'object',
-          properties: Object.fromEntries(
-            [
-              'max_calls',
-              'max_node_visits',
-              'max_backward_transitions',
-              'max_duration_seconds',
-            ].map((name) => [name, { type: 'integer', minimum: 1 }]),
-          ),
-          additionalProperties: { type: 'number', minimum: 0.001 },
-        }}
-        value={doc.settings.limit_overrides ?? {}}
-        onChange={(value) =>
-          onChange({
-            ...doc,
-            settings: {
-              ...doc.settings,
-              limit_overrides: value as Record<string, number>,
-            },
-          })
-        }
-      />
+      <p className="hint">
+        Выполнение без лимитов времени, вызовов и повторов. Остановить его можно
+        кнопкой STOP в диалоге.
+      </p>
       <ExecutionReview doc={doc} resources={resources} />
     </section>
   )

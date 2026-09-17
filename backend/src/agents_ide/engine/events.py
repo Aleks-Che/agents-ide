@@ -74,6 +74,10 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "error.technical",
         "attempt.retry_scheduled",
         "attempt.text_delta",
+        "agent.input_requested",
+        "agent.input_closed",
+        "agent.user_message",
+        "agent.user_message_status",
         "attempt.late_result",
         "process.supervised",
         "process.interrupted",
@@ -149,7 +153,9 @@ def append_event(
     if type_ in DETAIL_TYPES:
         run = session.get(Run, run_id)
         if run is not None:
-            if (run.detailed_event_count or 0) >= settings_for(session).detailed_events_limit:
+            if settings_for(session).enforce_execution_limits and (
+                (run.detailed_event_count or 0) >= settings_for(session).detailed_events_limit
+            ):
                 raise AppError(
                     "limit_exceeded",
                     "Лимит подробных событий Run",

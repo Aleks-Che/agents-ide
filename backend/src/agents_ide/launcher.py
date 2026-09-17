@@ -177,6 +177,7 @@ def run_launcher(settings: Settings) -> None:
                     if role in children:
                         # A venv wrapper can die before its Python child. Close the
                         # old role's Job before restarting it; other roles stay alive.
+                        exit_code = groups[role].exit_code()
                         groups[role].close()
                         retries[role] += 1
                         logging.warning(
@@ -185,6 +186,10 @@ def run_launcher(settings: Settings) -> None:
                                 "service": role,
                                 "pid": children[role].pid,
                                 "retries": retries[role],
+                                "exit_code": exit_code,
+                                "exit_code_hex": f"0x{exit_code & 0xFFFFFFFF:08x}"
+                                if exit_code is not None
+                                else None,
                             },
                         )
                         if retries[role] > 3:

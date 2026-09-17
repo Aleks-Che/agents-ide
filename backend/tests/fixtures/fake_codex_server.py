@@ -129,6 +129,10 @@ class Handler:
         if method == "turn/interrupt":
             self.active[params["turnId"]].set()
             return {}
+        if method == "turn/steer":
+            if params["expectedTurnId"] not in self.active:
+                raise ValueError("No active turn")
+            return {"turnId": params["expectedTurnId"]}
         raise ValueError("Unknown method")
 
     def save(self):
@@ -165,7 +169,25 @@ class Handler:
             if not event.wait(5):
                 raise ValueError("No valid approval response")
         prompt = params["input"][0]["text"]
+        if prompt == "ask user":
+            event = threading.Event()
+            self.approvals["question-1"] = ("user_input", event)
+            self.send(
+                {
+                    "method": "item/tool/requestUserInput",
+                    "id": "question-1",
+                    "params": {
+                        **scope,
+                        "itemId": "question-tool",
+                        "questions": [{"id": "choice", "question": "Which file?", "options": []}],
+                    },
+                }
+            )
+            if not event.wait(5):
+                raise ValueError("No user response")
         text = os.environ.get("FAKE_CODEX_FINAL_TEXT", "hello from codex")
+        if os.environ.get("FAKE_CODEX_LARGE_RESPONSE"):
+            text = "x" * (11 * 1024 * 1024)
         if "force_decision=" in prompt:
             text = json.dumps({"verdict": "passed", "feedback": "fixture"})
         item = {"id": "answer", "type": "agentMessage", "text": text, "phase": "final_answer"}

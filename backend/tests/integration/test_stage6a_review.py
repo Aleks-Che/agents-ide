@@ -16,7 +16,6 @@ from sqlalchemy import select
 
 from agents_ide.adapters.base import AgentAdapterRequest, ExternalOutcome
 from agents_ide.adapters.opencode import (
-    MAX_EVENT_BYTES,
     OpenCodeAdapter,
     ResponseLimit,
     RunSession,
@@ -243,7 +242,44 @@ def test_split_sse_utf8_multiline_and_bound():
     events = list(sse_events(bytes([b]) for b in payload))
     assert events[0]["properties"]["delta"] == "тест"
     with pytest.raises(ResponseLimit):
-        list(sse_events([b"data:" + b"x" * MAX_EVENT_BYTES]))
+        list(sse_events([b"data:" + b"x" * 1024], limit=1024))
+
+
+def test_large_tool_events_and_long_stream_do_not_abort(server):
+    handler, adapter, request = server
+    events = []
+    result = adapter.run(
+        replace(request, prompt="large tool stream", emit_event=lambda t, p: events.append((t, p)))
+    )
+    assert result.succeeded, result
+    assert not handler.aborts
+    tools = [p for t, p in events if t == "agent.tool_call"]
+    assert len(tools) == 110
+    assert all(p["status"] == "completed" and p["summary"] == "status.md" for p in tools)
+    assert all(len(json.dumps(p)) < 1000 for p in tools)
+    archived = [p for t, p in events if t == "agent.native_event"]
+    assert sum(len(json.dumps(p)) for p in archived) > 10 * 1024 * 1024
+
+
+def test_sse_accepts_single_frame_above_old_response_limit():
+    event = {"type": "message.part.updated", "properties": {"output": "x" * (11 * 1024 * 1024)}}
+    body = b"data: " + json.dumps(event).encode() + b"\n\n"
+    assert list(sse_events(body[i : i + 65536] for i in range(0, len(body), 65536))) == [event]
+
+
+def test_explicit_node_deadline_is_not_replaced_by_adapter_default(server):
+    handler, adapter, request = server
+    adapter.timeout_seconds = 0.1
+    handler.delay = 0.4
+    assert adapter.run(replace(request, deadline_at=time.time() + 5)).succeeded
+
+
+def test_stream_error_keeps_diagnostic_reason(server):
+    handler, adapter, request = server
+    handler.close_stream = True
+    result = adapter.run(request)
+    assert result.error.code == "event_stream_lost"
+    assert result.error.details["reason"] == "event_stream_error"
 
 
 @pytest.mark.parametrize(
@@ -276,6 +312,65 @@ def test_environment_does_not_inherit_provider_or_runtime_injection(monkeypatch)
     assert env["OPENCODE_SERVER_PASSWORD"] == "local-password"
 
 
+def test_native_environment_preserves_user_tools_and_policy():
+    env = server_environment("local-password", permission_mode="native")
+    assert "permission" not in json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    assert "OPENCODE_DISABLE_PROJECT_CONFIG" not in env
+    validate_settings({"permission_mode": "native", "auto_approve": True})
+
+
+@pytest.mark.parametrize("automatic", [True, False])
+def test_native_permission_reply_is_explicit_or_automatic(server, automatic):
+    handler, adapter, request = server
+    adapter.session = replace(
+        adapter.session, settings={"permission_mode": "native", "auto_approve": automatic}
+    )
+    events, incoming = [], []
+
+    def emit(kind, payload):
+        events.append((kind, payload))
+        if kind == "agent.input_requested":
+            incoming.append(
+                {
+                    "command_id": "approve",
+                    "permission_id": payload["permission_id"],
+                    "permission_reply": "once",
+                    "text": "approve",
+                }
+            )
+
+    result = adapter.run(
+        replace(
+            request,
+            prompt="permission slow",
+            emit_event=emit,
+            receive_message=lambda: incoming.pop(0) if incoming else None,
+        )
+    )
+    assert result.succeeded
+    assert handler.requests[0]["body"]["permission"] == []
+    replies = [r for r in handler.requests if r["path"].startswith("/permission/")]
+    assert len(replies) == 1 and replies[0]["body"] == {"reply": "once"}
+    assert not handler.aborts
+    assert any(t == "agent.input_requested" for t, _ in events) != automatic
+    assert any(t == "agent.permission_resolved" for t, _ in events)
+
+
+def test_broken_tool_stream_is_aborted_not_returned_as_success(server):
+    handler, adapter, request = server
+    events = []
+    result = adapter.run(
+        replace(
+            request, prompt="broken tool stream slow", emit_event=lambda t, p: events.append((t, p))
+        )
+    )
+    assert result.outcome == ExternalOutcome.INVALID_FORMAT
+    assert result.error.code == "provider_tool_protocol_invalid"
+    assert not result.no_effect
+    assert handler.aborts
+    assert len([e for e in events if e[0] == "attempt.text_delta"]) <= 17
+
+
 @pytest.fixture
 def launch_fixture(monkeypatch, tmp_path):
     original = ProcessGroup.start
@@ -301,6 +396,7 @@ def seed(
     group=False,
     permission_mode="no_tools",
     prompt="force_decision=passed",
+    node_overrides=None,
 ):
     client, headers = authenticated
 
@@ -357,6 +453,7 @@ def seed(
                     "prompt": prompt,
                     "response_format": "json",
                     "model_selection": selection,
+                    **({"harness_settings": node_overrides[i]} if node_overrides else {}),
                 },
             }
             for i, role in enumerate(roles)
@@ -457,6 +554,28 @@ def test_runner_keeps_password_isolates_roles_and_persists_sessions(
         == 3
     )
     assert not runner.registry.by_run(run["id"])
+
+
+def test_node_overrides_reach_preflight_runtime_and_do_not_reuse_other_permissions(
+    authenticated, settings, tmp_path, launch_fixture
+):
+    overrides = [
+        {"opencode": {"permission_mode": "native", "auto_approve": True}},
+        {"opencode": {"permission_mode": "no_tools", "auto_approve": False}},
+    ]
+    run, _ = seed(
+        authenticated, tmp_path, roles=("implementer", "implementer"), node_overrides=overrides
+    )
+    runner = runner_for(authenticated[0], settings)
+    assert runner.execute(run["id"]).final_state == "completed"
+    launches, trace = launch_fixture
+    assert len(launches) == 2
+    assert "--pure" not in launches[0][0] and "--pure" in launches[1][0]
+    rows = [json.loads(line) for line in trace.read_text().splitlines()]
+    sessions = [row["body"] for row in rows if row["path"] == "/session"]
+    assert len(sessions) == 2
+    assert sessions[0]["permission"] == []
+    assert sessions[1]["permission"] == [{"permission": "*", "pattern": "*", "action": "deny"}]
 
 
 def test_group_auth_fallback_uses_new_native_session(
@@ -625,3 +744,37 @@ def test_catalog_probe_does_not_overwrite_concurrent_profile_edit(authenticated,
     with client.app.state.session_factory() as db:
         row = db.get(HarnessProfile, profile["id"])
         assert row.name == "edited" and row.catalog_models_json == "[]"
+
+
+@pytest.mark.parametrize("kind,mode", [("codex", "workspace_write"), ("opencode", "native")])
+def test_global_execution_settings_persist_and_reject_invalid_auto_approval(
+    authenticated, kind, mode
+):
+    client, headers = authenticated
+    profile = client.post(
+        "/api/harness_profiles",
+        headers=headers,
+        json={"name": f"config-{kind}", "harness_kind": kind},
+    ).json()
+    url = f"/api/harness_profiles/{profile['id']}"
+    response = client.patch(
+        url,
+        headers=headers,
+        json={
+            "expected_version": profile["version"],
+            "settings": {"permission_mode": mode, "auto_approve": True},
+        },
+    )
+    assert response.status_code == 200, response.text
+    updated = response.json()
+    assert client.get(url).json()["settings"] == {"permission_mode": mode, "auto_approve": True}
+    invalid = client.patch(
+        url,
+        headers=headers,
+        json={
+            "expected_version": updated["version"],
+            "settings": {"permission_mode": mode, "auto_approve": "yes"},
+        },
+    )
+    assert invalid.status_code == 409
+    assert client.get(url).json()["settings"]["auto_approve"] is True

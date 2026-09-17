@@ -189,6 +189,7 @@ export function switchExecutor(
     'model_selection',
     'model',
     'harness_profile_id',
+    'harness_settings',
     'connection_id',
     'expected_kind',
   ])

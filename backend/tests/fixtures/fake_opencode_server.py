@@ -154,6 +154,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/permission/"):
             self._send_json(200, True)
             return
+        if self.path.endswith("/prompt_async"):
+            self._send_json(204, {})
+            return
+        if self.path.startswith("/question/"):
+            self._send_json(200, True)
+            return
         if not self.path.endswith("/message"):
             self._send_json(404, {})
             return
@@ -176,6 +182,51 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(401, {"name": "ProviderAuthError"})
             return
         prompt = body["parts"][0]["text"]
+        if prompt == "large tool stream":
+            # Read output is duplicated in metadata by the real OpenCode server.
+            output = "file content " * 4000
+            for index in range(110):
+                self.publish(
+                    {
+                        "type": "message.part.updated",
+                        "properties": {
+                            "sessionID": sid,
+                            "part": {
+                                "id": f"part_{index}",
+                                "callID": f"call_{index}",
+                                "type": "tool",
+                                "tool": "read",
+                                "sessionID": sid,
+                                "state": {
+                                    "status": "completed",
+                                    "title": "status.md",
+                                    "input": {"filePath": "status.md"},
+                                    "output": output,
+                                    "metadata": {"preview": output},
+                                },
+                            },
+                        },
+                    }
+                )
+        if prompt == "broken tool stream slow":
+            for chunk in ["]<]mini", "max[>[<tool_call>"] * 10:
+                self.publish(
+                    {
+                        "type": "message.part.delta",
+                        "properties": {"sessionID": sid, "field": "text", "delta": chunk},
+                    }
+                )
+        if prompt == "ask user slow":
+            self.publish(
+                {
+                    "type": "question.asked",
+                    "properties": {
+                        "sessionID": sid,
+                        "id": "que_test",
+                        "questions": [{"question": "Which file?", "options": []}],
+                    },
+                }
+            )
         self.publish(
             {
                 "type": "message.part.delta",
@@ -189,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
                     "properties": {"sessionID": sid, "field": "text", "delta": "hello"},
                 }
             )
-        if self.pending_permission or prompt == "permission":
+        if self.pending_permission or prompt in {"permission", "permission slow"}:
             self.publish(
                 {
                     "type": "permission.asked",
@@ -198,7 +249,9 @@ class Handler(BaseHTTPRequestHandler):
             )
         if self.close_stream:
             self.publish(None)
-        deadline = time.monotonic() + (2 if "slow" in prompt else self.delay or 0.08)
+        deadline = time.monotonic() + (
+            2 if "slow" in prompt or prompt == "large tool stream" else self.delay or 0.08
+        )
         while time.monotonic() < deadline and sid not in self.aborts:
             time.sleep(0.02)
         text = "hello from opencode" + "x" * self.response_size

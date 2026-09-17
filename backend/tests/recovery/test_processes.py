@@ -77,3 +77,62 @@ def test_owned_stdio_transport(tmp_path):
         assert child.returncode == 0
     finally:
         group.close()
+
+
+def test_job_retains_child_exit_code(tmp_path):
+    group = ProcessGroup()
+    try:
+        child = group.start(
+            [sys.executable, "-c", "raise SystemExit(7)"], tmp_path, dict(os.environ)
+        )
+        assert wait_stopped([child], 5)
+        assert group.exit_code() == 7
+    finally:
+        group.close()
+
+
+def test_capture_tree_tolerates_root_exit_during_inspection(monkeypatch):
+    from types import SimpleNamespace
+
+    from agents_ide.worker import processes
+
+    entry = processes.ProcessRegistryEntry(
+        pid=123,
+        started_at=1,
+        create_time=1,
+        parent_pid=None,
+        executable=None,
+        kind="harness",
+        role="agent",
+        owner_generation=1,
+        run_id="test",
+        step_attempt_id=None,
+    )
+    monkeypatch.setattr(processes, "process_state", lambda *_: "alive")
+
+    def children(**kwargs):
+        raise psutil.NoSuchProcess(123)
+
+    monkeypatch.setattr(psutil, "Process", lambda *_: SimpleNamespace(children=children))
+    assert processes.capture_tree(entry)
+
+
+def test_tree_stop_retries_transient_inspection_failure(monkeypatch):
+    from agents_ide.worker import processes
+
+    entry = processes.ProcessRegistryEntry(
+        pid=123,
+        started_at=1,
+        create_time=1,
+        parent_pid=None,
+        executable=None,
+        kind="harness",
+        role="agent",
+        owner_generation=1,
+        run_id="test",
+        step_attempt_id=None,
+    )
+    captures = iter([False, True])
+    monkeypatch.setattr(processes, "capture_tree", lambda *_: next(captures))
+    monkeypatch.setattr(processes, "process_state", lambda *_: "dead")
+    assert processes.wait_descendants_stopped(entry, 0.5)

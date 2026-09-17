@@ -138,6 +138,10 @@ class Runner:
         self._current_evidence: dict[str, Any] = {}
         self._opencode_live: dict[str, Any] = {}
         self._codex_live: dict[str, Any] = {}
+        from agents_ide.operations.storage import settings_for
+
+        with session_factory() as session:
+            self.enforce_limits = settings_for(session).enforce_execution_limits
 
     @contextmanager
     def _write(self) -> Iterator[tuple[Session, Run]]:
@@ -211,6 +215,10 @@ class Runner:
     def _state(
         self, session: Session, run: Run, state: str, reason: WaitingReason | None = None
     ) -> RunnerResult:
+        if state not in {"running", "pause_requested"}:
+            from agents_ide.services.run_messages import close_messages
+
+            close_messages(session, run)
         previous = run.state
         self._persist(run)
         now = utc_now()
@@ -281,7 +289,15 @@ class Runner:
     def _waiting(
         self, code: str, details: dict[str, Any], visit: visits.VisitState | None = None
     ) -> RunnerResult:
-        self._close_harness_live()
+        try:
+            self._close_harness_live()
+        except AppError as exc:
+            if exc.code != "process_not_responding":
+                raise
+            # Cleanup must not erase the original failure or its attempt identity.
+            # An unconfirmed writer always needs reconciliation before any retry.
+            details = {**details, "shutdown_error": exc.code, "original_reason": code}
+            code = "unknown_external_result"
         reason = WaitingReason.model_validate(
             {
                 "code": code,
@@ -389,6 +405,9 @@ class Runner:
 
         evidence = recovery_evidence(self.session_factory, self.run_id, target)
         if evidence["stopped"]:
+            with self._write() as (session, run):
+                if run.stop_goal == "cancelled" and (control := self._apply_controls(session, run)):
+                    return control
             from agents_ide.engine.stage8 import reconcile_git
 
             try:
@@ -581,6 +600,8 @@ class Runner:
         try:
             from agents_ide.operations.storage import check_capacity
 
+            if control := self._controls():
+                return control
             if maintenance := self._maintenance_pause():
                 return maintenance
             with self.session_factory() as session:
@@ -749,8 +770,14 @@ class Runner:
                 if finished := self._finish_visit(node, visit, result):
                     return finished
             return RunnerResult(RunState.COMPLETED)
-        except ASTError:
-            return self._waiting("configuration_invalid", {"reason": "runtime_expression_invalid"})
+        except ASTError as exc:
+            return self._waiting(
+                "configuration_invalid",
+                {
+                    "reason": "runtime_expression_invalid",
+                    "message": str(exc),
+                },
+            )
         except AppError as exc:
             if exc.code in {"queue_job_lost", "database_unavailable"}:
                 raise
@@ -771,6 +798,7 @@ class Runner:
                 in {
                     "external_change_detected",
                     "unknown_external_result",
+                    "process_not_responding",
                     "missing_data",
                     "no_progress",
                     "signing_required",
@@ -810,6 +838,8 @@ class Runner:
         return effective_limits(self.snapshot, self.runtime)
 
     def _limit(self, operation: str) -> str | None:
+        if not self.enforce_limits:
+            return None
         limits = self._limits()
         elapsed = self.runtime["duration_seconds"] + (
             max(0, utc_now() - self.runtime["active_since"]) if self.runtime["active_since"] else 0
@@ -862,6 +892,19 @@ class Runner:
         profile_id = str(candidate.get("harness_profile_id") or "")
         profile = self.snapshot["dependencies"]["harness_profiles"].get(profile_id, {})
         harness_kind = profile.get("harness_kind")
+        from agents_ide.domain.harness_settings import effective_settings
+
+        node = next(
+            n
+            for n in self.snapshot["graph"]["nodes"]
+            if n["id"] == request.context_package["__node_id__"]
+        )
+        profile = {
+            **profile,
+            "settings": effective_settings(
+                harness_kind, profile.get("settings", {}), node.get("config", {})
+            ),
+        }
         if harness_kind == "opencode":
             return self._opencode_adapter(profile_id, profile, request)
         if harness_kind == "codex":
@@ -892,6 +935,9 @@ class Runner:
 
         validate_settings(profile.get("settings", {}))
         runtime = self._opencode_live.get(profile_id)
+        if runtime and runtime.permission_mode != profile["settings"]["permission_mode"]:
+            self._close_harness_live()
+            runtime = None
         if runtime is None:
             # There is at most one OpenCode listener per Run. A completed
             # candidate cannot leave another server alive during profile fallback.
@@ -903,6 +949,7 @@ class Runner:
                 attempt_id=self._attempt_id,
                 check_owned=self._check_owned,
                 stop_event=request.stop_event,
+                permission_mode=profile["settings"]["permission_mode"],
             )
             self._opencode_live[profile_id] = runtime
             with self._write() as (session, run):
@@ -914,7 +961,12 @@ class Runner:
                     attempt_id=self._attempt_id,
                 )
                 self._persist(run)
-        return OpenCodeAdapter(session=runtime.session())
+        native_session = runtime.session()
+        return OpenCodeAdapter(
+            session=replace(
+                native_session, settings={**native_session.settings, **profile["settings"]}
+            )
+        )
 
     def _codex_adapter(
         self,
@@ -949,7 +1001,9 @@ class Runner:
                 self._persist(run)
         return CodexAdapter(
             stream=runtime.stream,
-            session=runtime.session(),
+            session=replace(
+                runtime.session(), settings={**runtime.session().settings, **profile["settings"]}
+            ),
         )
 
     def _agent_session_key(self, candidate: dict[str, Any], role: str) -> str:
@@ -962,6 +1016,11 @@ class Runner:
                     "role": role,
                     "scope": self.runtime["work"].get("scope"),
                     "directory": self.snapshot["workspace"],
+                    "harness_settings": self.nodes.get(
+                        str(self.runtime.get("next_node_id", "")), {}
+                    )
+                    .get("config", {})
+                    .get("harness_settings", {}),
                 }
             ).encode()
         ).hexdigest()
@@ -1007,6 +1066,8 @@ class Runner:
                         "max_calls": max(
                             0, self._limits()["max_calls"] - self.runtime["external_calls"]
                         )
+                        if self.enforce_limits
+                        else None
                     }
                 ),
             },
@@ -1036,8 +1097,32 @@ class Runner:
     def _controls(self, *, allow_pause: bool = True) -> RunnerResult | None:
         if not self._stop_processes_if_requested():
             return self._waiting("process_not_responding", {"reason": "local_tree_alive"})
+        checkpoint_hash = self._control_checkpoint()
         with self._write() as (session, run):
-            return self._apply_controls(session, run, allow_pause=allow_pause)
+            return self._apply_controls(
+                session, run, allow_pause=allow_pause, checkpoint_hash=checkpoint_hash
+            )
+
+    def _control_checkpoint(self) -> str | None:
+        # Reading a large workspace while holding BEGIN IMMEDIATE starves the
+        # worker heartbeat and can turn STOP into lost ownership / recovery.
+        if self.simulated or not self.runtime.get("git"):
+            return None
+        with self.session_factory() as session:
+            run = session.get(Run, self.run_id)
+            needed = (
+                run
+                and run.state in {"pause_requested", "stop_requested"}
+                and run.stop_goal != "cancelled"
+            )
+        if not needed:
+            return None
+        checkpoint_hash = context_sources.workspace_hash(
+            Path(self.snapshot["workspace"]["workspace_path"])
+        )
+        if checkpoint_hash is None:
+            raise AppError("missing_data", "Workspace checkpoint unavailable", 409)
+        return checkpoint_hash
 
     def _stop_processes_if_requested(self, *, terminal: bool = False) -> bool:
         if self.registry is None or not self.registry.by_run(self.run_id):
@@ -1059,7 +1144,12 @@ class Runner:
         return True
 
     def _apply_controls(
-        self, session: Session, run: Run, *, allow_pause: bool = True
+        self,
+        session: Session,
+        run: Run,
+        *,
+        allow_pause: bool = True,
+        checkpoint_hash: str | None = None,
     ) -> RunnerResult | None:
         from agents_ide.services.run_controls import unsettled_attempts
 
@@ -1075,19 +1165,25 @@ class Runner:
             )
         )
         relevant = [c for c in commands if allow_pause or c.command_type != "pause"]
-        if not relevant or unsettled_attempts(session, run):
+        if not relevant:
             return None
         chosen = max(
             relevant,
             key=lambda c: ({"pause": 1, "stop": 2, "cancel": 3}[c.command_type], c.sequence),
         )
+        if unsettled_attempts(session, run):
+            from agents_ide.worker.processes import stored_processes_stopped
+
+            # Cancellation abandons the old run without claiming success or
+            # undoing effects. Its unknown attempts remain in the audit history.
+            if chosen.command_type != "cancel" or not stored_processes_stopped(session, run):
+                return None
         target = {"pause": "paused", "stop": "stopped", "cancel": "cancelled"}[chosen.command_type]
         if target in {"paused", "stopped"} and self.runtime.get("git") and not self.simulated:
-            from agents_ide.engine.context_sources import workspace_hash
-
-            checkpoint_hash = workspace_hash(Path(self.snapshot["workspace"]["workspace_path"]))
             if checkpoint_hash is None:
-                raise AppError("missing_data", "Workspace checkpoint unavailable", 409)
+                # A command arrived during the preceding probe. The next loop
+                # handles it before dispatching another node.
+                return None
             self.runtime["git_paused_workspace_hash"] = checkpoint_hash
         for command in commands:
             command.status = "applied" if command.id == chosen.id else "superseded"
@@ -1510,7 +1606,7 @@ class Runner:
                             evidence["required_failed"].append(key)
                     if not stale:
                         evidence["command_reports"].append({"artifact_id": row.id, **report})
-            if len(artifacts.encode(evidence).encode()) > cap:
+            if self.enforce_limits and len(artifacts.encode(evidence).encode()) > cap:
                 evidence["context"] = None
                 evidence["command_reports"] = [
                     {k: v for k, v in report.items() if k not in {"stdout", "stderr"}}
@@ -1550,10 +1646,12 @@ class Runner:
                     self._limits()["max_duration_seconds"] - self.runtime["duration_seconds"],
                 ),
             )
-            deadline = utc_now() + remaining
+            deadline = utc_now() + remaining if self.enforce_limits else None
             import time as time_module
 
-            monotonic_deadline = time_module.monotonic() + remaining
+            monotonic_deadline = (
+                time_module.monotonic() + remaining if self.enforce_limits else float("inf")
+            )
             with self._write() as (session, run):
                 attempt = visits.create_attempt(session, visit)
                 attempt.operation_id = new_id()
@@ -1948,7 +2046,7 @@ class Runner:
             + str(self.runtime.get("evidence_verifier", "unknown"))
         )
         returns = self.runtime.setdefault("evidence_returns", {})
-        if int(returns.get(scope, 0)) >= limit:
+        if self.enforce_limits and int(returns.get(scope, 0)) >= limit:
             return self._waiting(
                 "missing_data",
                 {"reason": "evidence_limit_exceeded", "scope": scope, "limit": limit},
@@ -2287,6 +2385,9 @@ class Runner:
                     _candidate: dict[str, Any] = candidate,
                 ) -> None:
                     allowed = {
+                        "agent.input_requested",
+                        "agent.input_closed",
+                        "agent.user_message_status",
                         "attempt.text_delta",
                         "attempt.progress",
                         "agent.session_created",
@@ -2305,6 +2406,11 @@ class Runner:
                     if type_ not in allowed:
                         raise ValueError("Adapter cannot emit state transitions")
                     with self._write() as (progress_session, progress_run):
+                        if type_ == "agent.user_message_status":
+                            from agents_ide.services.run_messages import finish_message
+
+                            finish_message(progress_session, progress_run, _attempt_id, payload)
+                            return
                         attempt_row = progress_session.get(StepAttempt, _attempt_id)
                         late = (
                             progress_run.current_attempt_id != _attempt_id
@@ -2394,19 +2500,31 @@ class Runner:
                     "emit_event": emit_progress,
                     "stop_event": threading.Event(),
                     "check_owned": self._check_owned,
-                    "deadline_at": utc_now()
-                    + min(
-                        node.get("timeout_seconds", 86400),
-                        max(
-                            0,
-                            self._limits()["max_duration_seconds"]
-                            - self.runtime["duration_seconds"],
-                        ),
-                    ),
+                    "deadline_at": (
+                        utc_now()
+                        + min(
+                            node.get("timeout_seconds", 86400),
+                            max(
+                                0,
+                                self._limits()["max_duration_seconds"]
+                                - self.runtime["duration_seconds"],
+                            ),
+                        )
+                    )
+                    if self.enforce_limits
+                    else None,
                 }
                 if node["type"] == "AgentTask":
+
+                    def receive_message(_attempt_id: str = attempt_id) -> dict[str, Any] | None:
+                        from agents_ide.services.run_messages import claim_message
+
+                        with self._write() as (message_session, message_run):
+                            return claim_message(message_session, message_run, _attempt_id)
+
                     request = AgentAdapterRequest(
                         **common,
+                        receive_message=receive_message,
                         workspace_path=str(self.data_dir / "simulated" / self.run_id)
                         if self.simulated
                         else self.snapshot["workspace"]["workspace_path"],
@@ -2481,11 +2599,7 @@ class Runner:
                     )
                 validation_error = self._normalize_result(config, result)
                 self._save_attempt(visit, attempt_id, result, validation_error)
-                if (
-                    result.outcome != ExternalOutcome.SUCCEEDED
-                    and result.no_effect
-                    and (control := self._controls())
-                ):
+                if result.outcome != ExternalOutcome.SUCCEEDED and (control := self._controls()):
                     return control
                 if result.outcome == ExternalOutcome.SUCCEEDED and validation_error is None:
                     return result
@@ -2495,7 +2609,8 @@ class Runner:
                         {
                             "node_id": node["id"],
                             "attempt_id": attempt_id,
-                            "reason": validation_error or "adapter_invalid_format",
+                            "reason": validation_error
+                            or (result.error.code if result.error else "adapter_invalid_format"),
                         },
                         visit,
                     )
@@ -2556,6 +2671,8 @@ class Runner:
                             "node_id": node["id"],
                             "attempt_id": attempt_id,
                             "outcome": result.outcome.value,
+                            "reason": result.error.code if result.error else "unknown",
+                            "details": result.error.details if result.error else {},
                         },
                         visit,
                     )
@@ -2637,7 +2754,10 @@ class Runner:
     ) -> str | None:
         if result.outcome != ExternalOutcome.SUCCEEDED:
             return None
-        if len(result.raw_text.encode("utf-8")) > artifacts.MAX_ARTIFACT_BYTES:
+        if (
+            self.enforce_limits
+            and len(result.raw_text.encode("utf-8")) > artifacts.MAX_ARTIFACT_BYTES
+        ):
             return "response_too_large"
         body = result.validated_result
         if config.get("response_format") == "json" or config.get("output_schema"):
@@ -2692,7 +2812,10 @@ class Runner:
         ):
             return "invalid_verdict"
         try:
-            if len(artifacts.encode(body).encode("utf-8")) > artifacts.MAX_ARTIFACT_BYTES:
+            if (
+                self.enforce_limits
+                and len(artifacts.encode(body).encode("utf-8")) > artifacts.MAX_ARTIFACT_BYTES
+            ):
                 return "response_too_large"
         except (ValueError, TypeError, RecursionError):
             return "invalid_result"
@@ -2974,6 +3097,7 @@ class Runner:
             self._close_harness_live()
         if not self._stop_processes_if_requested(terminal=node["type"] == "End"):
             return self._waiting("process_not_responding", {"reason": "local_tree_alive"}, visit)
+        checkpoint_hash = self._control_checkpoint()
         if node["type"] == "End" and self.snapshot.get("plan"):
             from agents_ide.engine.plan_control import plan_summary
 
@@ -3003,6 +3127,9 @@ class Runner:
             execution = session.get(StepExecution, visit.execution_id)
             assert execution is not None
             execution.status, execution.finished_at = "succeeded", utc_now()
+            from agents_ide.services.run_messages import close_messages
+
+            close_messages(session, run)
             if result:
                 execution.decision = {"passed": "true", "failed": "false"}.get(
                     result.decision or ""
@@ -3052,7 +3179,9 @@ class Runner:
             )
             if node["type"] == "End":
                 self.runtime["next_node_id"] = None
-                if control := self._apply_controls(session, run, allow_pause=False):
+                if control := self._apply_controls(
+                    session, run, allow_pause=False, checkpoint_hash=checkpoint_hash
+                ):
                     return control
                 # Pause at End is satisfied by completion, with an audited command.
                 for command in session.scalars(
@@ -3091,7 +3220,7 @@ class Runner:
                     if count >= loop["max_iterations"]
                     else None
                 )
-                if limit:
+                if limit and self.enforce_limits:
                     reason = WaitingReason(
                         code="limit_exceeded",
                         details={"limit": limit, "node_id": node["id"]},
@@ -3143,7 +3272,7 @@ class Runner:
                     previous.get("stalls", 0) + 1 if previous.get("signature") == signature else 0
                 )
                 self.runtime["plan_progress"][key] = {"signature": signature, "stalls": stalls}
-                if stalls >= 2:
+                if stalls >= 2 and self.enforce_limits:
                     reason = WaitingReason(
                         code="no_progress",
                         details={"node_id": node["id"], "scope": key},
@@ -3205,7 +3334,7 @@ class Runner:
                 },
                 visit,
             )
-            if control := self._apply_controls(session, run):
+            if control := self._apply_controls(session, run, checkpoint_hash=checkpoint_hash):
                 return control
         return None
 

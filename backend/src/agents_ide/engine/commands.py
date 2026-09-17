@@ -351,7 +351,11 @@ def _run_single(
         try:
             while chunk := source.read1(65536):
                 with lock:
-                    keep = min(len(chunk), max(0, spec.max_output_bytes - counts[0]))
+                    keep = (
+                        len(chunk)
+                        if deadline_at == float("inf")
+                        else min(len(chunk), max(0, spec.max_output_bytes - counts[0]))
+                    )
                     sink.extend(chunk[:keep])
                     counts[0] += keep
                     counts[1] += len(chunk) - keep
@@ -364,7 +368,11 @@ def _run_single(
         reader = threading.Thread(target=drain, args=(stream, sink), daemon=True)
         reader.start()
         readers.append(reader)
-    deadline = min(started + spec.timeout_seconds, deadline_at or float("inf"))
+    deadline = (
+        deadline_at
+        if deadline_at == float("inf")
+        else min(started + spec.timeout_seconds, deadline_at or float("inf"))
+    )
     status, reason = "completed", None
     tree: dict[int, psutil.Process] = {}
     try:

@@ -89,6 +89,8 @@
       },
       "type": {
         "enum": [
+          "agent.input_closed",
+          "agent.input_requested",
           "agent.message_delta",
           "agent.native_event",
           "agent.output_delta",
@@ -102,6 +104,8 @@
           "agent.session_resumed",
           "agent.tool_call",
           "agent.turn_started",
+          "agent.user_message",
+          "agent.user_message_status",
           "artifact.recorded",
           "assignment.applied",
           "attempt.finished",
@@ -186,6 +190,8 @@
   ],
   "event_version": 1,
   "events": [
+    "agent.input_closed",
+    "agent.input_requested",
     "agent.message_delta",
     "agent.native_event",
     "agent.output_delta",
@@ -199,6 +205,8 @@
     "agent.session_resumed",
     "agent.tool_call",
     "agent.turn_started",
+    "agent.user_message",
+    "agent.user_message_status",
     "artifact.recorded",
     "assignment.applied",
     "attempt.finished",
@@ -254,6 +262,8 @@
   "max_payload_bytes": 16384,
   "schema_version": "1.0.0",
   "types": [
+    "agent.input_closed",
+    "agent.input_requested",
     "agent.message_delta",
     "agent.native_event",
     "agent.output_delta",
@@ -267,6 +277,8 @@
     "agent.session_resumed",
     "agent.tool_call",
     "agent.turn_started",
+    "agent.user_message",
+    "agent.user_message_status",
     "artifact.recorded",
     "assignment.applied",
     "attempt.finished",

@@ -18,7 +18,12 @@ export const categories: Record<HistoryCategory, string> = {
 const prefixes: Record<HistoryCategory, string[]> = {
   all: [''],
   steps: ['run.', 'node.', 'transition.', 'attempt.'],
-  messages: ['agent.message_delta', 'attempt.text_delta'],
+  messages: [
+    'agent.message_delta',
+    'attempt.text_delta',
+    'agent.user_message',
+    'agent.input_',
+  ],
   tools: ['agent.tool_call', 'agent.permission_'],
   models: [
     'model_group.',
@@ -76,7 +81,45 @@ export function duration(start?: number | null, finish?: number | null) {
     : `${Math.floor(seconds / 60)} мин ${Math.floor(seconds % 60)} с`
 }
 
+export function toolProgress(event: EventEnvelope) {
+  const p = event.payload
+  const record = (v: unknown): Record<string, unknown> =>
+    v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+  const part = record(p.part)
+  const state = record(part.state)
+  const input = record(state.input)
+  const status = String(p.status ?? state.status ?? '')
+  const statuses: Record<string, string> = {
+    pending: 'ожидает',
+    running: 'выполняется',
+    completed: 'завершён',
+    succeeded: 'завершён',
+    failed: 'ошибка',
+    error: 'ошибка',
+  }
+  const id = p.call_id ?? part.callID ?? part.id
+  return {
+    id: id
+      ? `${event.step_attempt_id}:${p.session_id ?? ''}:${String(id)}`
+      : String(event.sequence),
+    text: [
+      p.tool ?? part.tool ?? p.name ?? 'Инструмент',
+      statuses[status] ?? status,
+      p.summary ??
+        state.title ??
+        input.command ??
+        input.filePath ??
+        input.pattern,
+    ]
+      .filter(Boolean)
+      .map(String)
+      .join(' · ')
+      .slice(0, 600),
+  }
+}
+
 export function eventPreview(event: EventEnvelope) {
+  if (event.type === 'agent.tool_call') return toolProgress(event).text
   const p = event.payload
   return [
     p.text,
@@ -127,6 +170,8 @@ export const waitingDescriptions: Record<string, string> = {
     'Рабочий каталог занят или изменился. Проверьте диагностику и устраните конфликт.',
   configuration_invalid:
     'Не хватает корректных настроек. Подробности указаны ниже.',
+  process_not_responding:
+    'Не удалось подтвердить остановку процесса агента. Подробности сохранены в журнале запуска.',
   no_progress:
     'Повторные шаги не дали прогресса. Проверьте отчёты и предоставьте данные решения.',
 }

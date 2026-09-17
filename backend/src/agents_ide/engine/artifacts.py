@@ -82,7 +82,11 @@ def record_artifact(
     if cleaned != payload.body:
         redactions.add("credentials")
     original_size = len(serialised.encode("utf-8"))
-    truncated = original_size > MAX_ARTIFACT_BYTES
+    from agents_ide.operations.storage import settings_for
+
+    truncated = (
+        settings_for(session).enforce_execution_limits and original_size > MAX_ARTIFACT_BYTES
+    )
     if truncated:
         # Keep a valid JSON envelope; byte limit includes escaping and metadata.
         preview = serialised.encode("utf-8")[: MAX_ARTIFACT_BYTES // 8].decode(

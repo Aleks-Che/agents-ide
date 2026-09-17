@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     session_seconds: int = Field(default=43200, ge=1, le=43200)
     pairing_seconds: int = Field(default=300, ge=1, le=300)
     log_level: str = "INFO"
+    # Legacy quotas are opt-in; saved templates must not silently cap automation.
+    enforce_execution_limits: bool = False
     run_artifact_bytes: int = Field(default=1024**3, ge=1024)
     data_budget_bytes: int = Field(default=10 * 1024**3, ge=1024)
     disk_reserve_bytes: int = Field(default=64 * 1024**2, ge=0)

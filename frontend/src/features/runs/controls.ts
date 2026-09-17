@@ -18,7 +18,7 @@ export function allowedCommands(
   return (states[run.state] ?? []).filter((command) => {
     if (
       run.waiting_reason &&
-      !run.waiting_reason.allowed_actions.includes(command)
+      !run.waiting_reason.allowed_actions.some((action) => action === command)
     )
       return false
     return (

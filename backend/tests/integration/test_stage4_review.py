@@ -421,6 +421,7 @@ def test_inconclusive_takes_unknown_not_repair(authenticated, tmp_path, settings
 def test_real_limits_stop_calls_and_do_not_reset_on_second_execute(
     authenticated, tmp_path, settings, monkeypatch, limits, loop_limit, expected, calls
 ):
+    settings.enforce_execution_limits = True
     run, factory = make_run(
         authenticated,
         tmp_path,
@@ -452,6 +453,104 @@ def test_real_limits_stop_calls_and_do_not_reset_on_second_execute(
             == calls
         )
     assert queue.claim_next_job(factory, worker_id="later", lease_seconds=30) is None
+
+
+def test_default_automation_ignores_saved_budgets_and_loop_limits(
+    authenticated, tmp_path, settings, monkeypatch
+):
+    assert not settings.enforce_execution_limits
+    graph = repair_graph(max_iterations=1)
+    for node in graph["nodes"]:
+        node["timeout_seconds"] = 1
+    run, factory = make_run(
+        authenticated,
+        tmp_path,
+        graph=graph,
+        overrides={
+            "limit_overrides": {
+                "max_calls": 1,
+                "max_node_visits": 1,
+                "max_backward_transitions": 1,
+                "max_duration_seconds": 1,
+            }
+        },
+    )
+    deadlines = []
+    original = FakeAgentAdapter.run
+
+    def record_deadline(self, request):
+        deadlines.append(request.deadline_at)
+        return original(self, request)
+
+    monkeypatch.setattr(FakeAgentAdapter, "run", record_deadline)
+    result, _ = execute(
+        run,
+        factory,
+        settings,
+        monkeypatch,
+        [verdict("failed", 1), verdict("failed", 2), verdict("passed", 3)],
+    )
+    assert result.final_state == "completed", result
+    assert deadlines == [None, None, None]
+    with factory() as session:
+        assert len(list(session.scalars(select(StepAttempt)))) == 6
+
+
+def test_default_artifacts_and_journal_ignore_saved_storage_quotas(
+    authenticated, tmp_path, settings
+):
+    from agents_ide.engine.events import append_event
+    from agents_ide.operations.storage import check_capacity
+
+    run, factory = make_run(authenticated, tmp_path)
+    settings.detailed_events_limit = 1
+    settings.run_artifact_bytes = 1024
+    settings.data_budget_bytes = 1024
+    body = "x" * (11 * 1024 * 1024)
+    with factory() as session:
+        for _ in range(3):
+            append_event(session, run["id"], "attempt.progress", {})
+        artifact = artifacts.record_artifact(
+            session, run["id"], artifacts.ArtifactPayload("result", body=body)
+        )
+        assert artifact.truncation_json is None
+        assert json.loads(artifact.body_json) == body
+        check_capacity(session, run["id"])
+        session.commit()
+
+
+def test_large_llm_result_is_saved_and_passed_whole_to_next_node(
+    authenticated, tmp_path, settings, monkeypatch
+):
+    text = "x" * (11 * 1024 * 1024)
+    graph = repair_graph()
+    graph["nodes"] = [graph["nodes"][0], graph["nodes"][2], graph["nodes"][1], graph["nodes"][-1]]
+    graph["nodes"][1]["config"].pop("response_format")
+    graph["nodes"][1]["config"].pop("output_schema")
+    graph["nodes"][2]["config"]["prompt"] = "{{ steps.check.latest.validated_result.text }}"
+    graph["edges"] = [
+        {"from": "s", "to": "check"},
+        {"from": "check", "to": "impl"},
+        {"from": "impl", "to": "e"},
+    ]
+    run, factory = make_run(authenticated, tmp_path, graph=graph)
+    received = []
+    original = FakeAgentAdapter.run
+
+    def receive(self, request):
+        received.append(request.prompt)
+        return original(self, request)
+
+    monkeypatch.setattr(FakeAgentAdapter, "run", receive)
+    result, _ = execute(
+        run,
+        factory,
+        settings,
+        monkeypatch,
+        [FakeResponse("check", 1, raw_text=text, validated_result={"text": text}, decision=None)],
+    )
+    assert result.final_state == "completed", result
+    assert received == [text]
 
 
 @pytest.mark.parametrize(
@@ -864,6 +963,7 @@ def test_cancel_before_retry_prevents_another_external_call(
 
 
 def test_timeout_does_not_apply_late_simulated_edits(authenticated, tmp_path, settings):
+    settings.enforce_execution_limits = True
     from agents_ide.worker.main import dispatch_once
 
     graph = repair_graph()

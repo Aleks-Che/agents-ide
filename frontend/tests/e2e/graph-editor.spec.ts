@@ -86,6 +86,9 @@ test('builds a repair cycle using forms, persists layout, publishes and runs its
   await reopen(page, name)
   await add(page, 'Start')
   await add(page, 'AgentTask', 'Implement the change')
+  await page.getByLabel('Свои настройки OpenCode').check()
+  await expect(page.getByLabel('Режим доступа')).toHaveValue('native')
+  await page.getByLabel('Автоматически одобрять действия').check()
   await page
     .getByRole('combobox', { name: 'Выбор модели', exact: true })
     .selectOption('direct')
@@ -164,6 +167,11 @@ test('builds a repair cycle using forms, persists layout, publishes and runs its
   )
   let template = await templateByName(page, name)
   expect(template.draft.graph.edges).toHaveLength(6)
+  expect(
+    template.draft.graph.nodes.find(
+      (node: { id: string }) => node.id === 'agenttask_1',
+    ).config.harness_settings,
+  ).toEqual({ opencode: { permission_mode: 'native', auto_approve: true } })
   expect(template.draft.graph.edges.at(-1)).toMatchObject({
     when: 'false',
     loop: { id: 'repair', max_iterations: 3 },
@@ -260,6 +268,7 @@ test('builds a repair cycle using forms, persists layout, publishes and runs its
     page.getByRole('button', { name: 'Запустить', exact: true }),
   ).toBeEnabled()
   await page.getByRole('button', { name: 'Запустить', exact: true }).click()
+  await page.getByRole('button', { name: 'Подробности', exact: true }).click()
   await expect(page.getByRole('heading', { name: /Run ·/ })).toBeVisible()
   const run = (await api(page, 'GET', `/runs?chat_id=${chat.id}`))[0]
   const result = execFileSync(

@@ -295,6 +295,25 @@ def _agent_or_llm_config(node_type: str) -> dict[str, Any]:
     base["properties"]["model_selection"] = MODEL_SELECTION.json_schema(
         ref_template="#/components/schemas/{model}"
     )
+    if node_type == "AgentTask":
+        base["properties"]["harness_settings"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                kind: {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "permission_mode": {"enum": modes},
+                        "auto_approve": {"type": "boolean"},
+                    },
+                }
+                for kind, modes in {
+                    "codex": ["read_only", "workspace_write", "full_access"],
+                    "opencode": ["native", "no_tools"],
+                }.items()
+            },
+        }
     return base
 
 
@@ -511,7 +530,7 @@ def required_features_for(graph: Mapping[str, Any]) -> list[str]:
                 features.add("command_filter_ref")
         if node_type == "LLMRequest" and any(
             key in node.get("config", {}).get("params", {})
-            for key in ("stream", "structured_output", "timeout_seconds")
+            for key in ("stream", "structured_output")
         ):
             features.add("llm_http_options")
         if node_type == "Condition":

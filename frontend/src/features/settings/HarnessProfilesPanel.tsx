@@ -1,4 +1,8 @@
 import { useState } from 'react'
+import {
+  HarnessExecutionSettings,
+  type HarnessExecutionOptions,
+} from './HarnessExecutionSettings'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Modal } from '../../app/Modal'
 import { useCsrfToken } from '../../app/session'
@@ -150,6 +154,9 @@ function HarnessSettingsForm({
   const client = useQueryClient()
   const [profile, setProfile] = useState(initial)
   const [model, setModel] = useState(defaultHarnessModel(initial))
+  const [execution, setExecution] = useState<HarnessExecutionOptions>(
+    initial.settings,
+  )
   const [error, setError] = useState(catalogError)
   const save = useMutation({
     mutationFn: () =>
@@ -157,7 +164,11 @@ function HarnessSettingsForm({
         profile.id,
         {
           expected_version: profile.version,
-          settings: { ...profile.settings, default_model: model || null },
+          settings: {
+            ...profile.settings,
+            ...execution,
+            default_model: model || null,
+          },
         },
         csrf,
       ),
@@ -185,7 +196,10 @@ function HarnessSettingsForm({
     },
   })
   const busy = save.isPending || refresh.isPending
-  const valid = !model || (!error && profile.catalog_models.includes(model))
+  const valid =
+    !model ||
+    model === defaultHarnessModel(profile) ||
+    (!error && profile.catalog_models.includes(model))
   return (
     <Modal onClose={onClose} busy={busy} labelledBy="harness-edit-title">
       <form
@@ -239,10 +253,12 @@ function HarnessSettingsForm({
           Выбранная модель подставляется при добавлении harness в группу; у
           каждого участника её можно изменить.
         </p>
-        <p className="hint">
-          Режим запуска ·{' '}
-          {String(profile.settings.permission_mode ?? 'не настроен')}
-        </p>
+        <HarnessExecutionSettings
+          kind={profile.harness_kind}
+          value={execution}
+          onChange={setExecution}
+          disabled={busy}
+        />
         {error ? (
           <p className="error" role="alert">
             {error}

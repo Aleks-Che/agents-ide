@@ -212,6 +212,10 @@ def load_latest_results(
             decision = TruthValue.UNKNOWN
         try:
             payload = json.loads(execution.validated_result_json)
+            # Plain-text agent output is also its report. Keep compatibility with
+            # already completed steps, without changing their stored result.
+            if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+                payload.setdefault("report", payload["text"])
             from agents_ide.domain.graph_ast import Value
 
             results[execution.node_id] = LatestResult(

@@ -1,7 +1,7 @@
-"""Bounded OpenCode HTTP/SSE transport; protocol fields come from server /doc.
+"""OpenCode HTTP/SSE transport; protocol fields come from server /doc.
 
-Only sessions with all native tools denied are supported until write isolation
-is independently verified. Catalog membership is never proof of provider access.
+Native mode preserves OpenCode's own permission policy and relays approvals.
+Context-only sessions deny tools. Catalog membership is not proof of provider access.
 """
 
 from __future__ import annotations
@@ -32,9 +32,7 @@ from agents_ide.adapters.model_catalog import CatalogModels, parameters_for
 from agents_ide.adapters.native_events import archive_native
 from agents_ide.errors import AppError
 
-MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
-MAX_EVENT_BYTES = 64 * 1024
 HEALTH_TIMEOUT_SECONDS = OPENCODE_HEALTH_TIMEOUT = 2.0
 STARTUP_TIMEOUT_SECONDS = 30.0
 DENY_TOOLS = [{"permission": "*", "pattern": "*", "action": "deny"}]
@@ -78,19 +76,19 @@ def validate_id(value: Any) -> str:
 
 
 def bounded_request(
-    client: httpx.Client, method: str, path: str, *, limit: int = MAX_RESPONSE_BYTES, **kwargs: Any
+    client: httpx.Client, method: str, path: str, *, limit: int | None = None, **kwargs: Any
 ) -> tuple[httpx.Response, bytes]:
     with client.stream(method, path, **kwargs) as response:
         body = bytearray()
         for chunk in response.iter_bytes():
-            if len(body) + len(chunk) > limit:
+            if limit is not None and len(body) + len(chunk) > limit:
                 raise ResponseLimit("OpenCode response exceeds limit")
             body.extend(chunk)
         return response, bytes(body)
 
 
-def sse_events(chunks: Iterable[bytes]) -> Iterator[dict[str, Any]]:
-    """Incremental UTF-8 SSE parsing, including split frames and multiline data."""
+def sse_events(chunks: Iterable[bytes], *, limit: int | None = None) -> Iterator[dict[str, Any]]:
+    """Incremental UTF-8 SSE parsing; optional caps are only for explicit probes."""
     buffer = bytearray()
     data: list[bytes] = []
     size = 0
@@ -101,7 +99,7 @@ def sse_events(chunks: Iterable[bytes]) -> Iterator[dict[str, Any]]:
             buffer = bytearray(rest)
             line = line.rstrip(b"\r")
             size += len(line)
-            if size > MAX_EVENT_BYTES:
+            if limit is not None and size > limit:
                 raise ResponseLimit("OpenCode event exceeds limit")
             if not line:
                 if data:
@@ -111,7 +109,7 @@ def sse_events(chunks: Iterable[bytes]) -> Iterator[dict[str, Any]]:
                 data, size = [], 0
             elif line.startswith(b"data:"):
                 data.append(bytes(line[5:].removeprefix(b" ")))
-        if size + len(buffer) > MAX_EVENT_BYTES:
+        if limit is not None and size + len(buffer) > limit:
             raise ResponseLimit("OpenCode event exceeds limit")
 
 
@@ -159,8 +157,8 @@ class OpenCodeAdapter(AgentAdapter):
         *,
         session: RunSession,
         startup_timeout: float = STARTUP_TIMEOUT_SECONDS,
-        timeout_seconds: float = 300,
-        max_response_bytes: int = MAX_RESPONSE_BYTES,
+        timeout_seconds: float | None = None,
+        max_response_bytes: int | None = None,
         health_timeout: float = HEALTH_TIMEOUT_SECONDS,
     ) -> None:
         self.base_url = _validate_loopback_url(session.base_url)
@@ -209,15 +207,32 @@ class OpenCodeAdapter(AgentAdapter):
         message_roles: dict[str, str] = {}
         errors: list[Exception] = []
         threads: list[threading.Thread] = []
-        deadline = min(request.deadline_at or float("inf"), time.time() + self.timeout_seconds)
+        questions: dict[str, list[dict[str, Any]]] = {}
+        approvals: set[str] = set()
+        malformed_output = threading.Event()
+        text_tail = ""
+        deadline = request.deadline_at or (
+            time.time() + self.timeout_seconds if self.timeout_seconds is not None else float("inf")
+        )
 
         def fail(code: str, outcome: ExternalOutcome, *, safe: bool = False) -> AgentResult:
+            details = {}
+            if code == "event_stream_lost" and errors:
+                error = errors[0]
+                details = {
+                    "reason": "event_size_limit"
+                    if isinstance(error, ResponseLimit)
+                    else "event_stream_timeout"
+                    if isinstance(error, httpx.TimeoutException)
+                    else "event_stream_error",
+                    "exception_type": type(error).__name__,
+                }
             return AgentResult(
                 outcome,
                 "",
                 None,
                 None,
-                error=AdapterError(code, code, "safe" if safe else "unknown"),
+                error=AdapterError(code, code, "safe" if safe else "unknown", details),
                 no_effect=safe,
                 elapsed_seconds=time.monotonic() - started,
             )
@@ -237,6 +252,16 @@ class OpenCodeAdapter(AgentAdapter):
                 activity_message_ids.add(message_id)
             else:
                 observed_output.set()
+
+        def text_delta(delta: str) -> None:
+            nonlocal text_tail
+            if malformed_output.is_set():
+                return
+            emit("attempt.text_delta", {"text": delta, "session_id": resume})
+            text_tail = (text_tail + delta)[-2048:]
+            if text_tail.count("]<]minimax[>[<tool_call>") >= 8:
+                malformed_output.set()
+                self.interrupt(str(resume))
 
         try:
             check()
@@ -271,7 +296,7 @@ class OpenCodeAdapter(AgentAdapter):
                         "/session",
                         json={
                             "title": f"agents-ide/{request.role}"[:128],
-                            "permission": DENY_TOOLS,
+                            "permission": self._permissions(),
                         },
                     )
                     if response.status_code != 200:
@@ -291,6 +316,7 @@ class OpenCodeAdapter(AgentAdapter):
                         "session_id": resume,
                         "server_version": self.server_version,
                         "resume_count": self._binding.resume_count,
+                        "permission_mode": self.session.settings.get("permission_mode", "no_tools"),
                     },
                 )
 
@@ -309,8 +335,21 @@ class OpenCodeAdapter(AgentAdapter):
                     return
                 kind = event["type"]
                 archive_native(request.emit_event, "opencode", kind, event, str(sid))
-                if kind == "permission.asked":
-                    permission.set()
+                if kind == "question.asked" and request.receive_message:
+                    from agents_ide.adapters.interaction import questions_for_ui
+
+                    question_id = validate_id(props.get("id"))
+                    question_list = questions_for_ui(props.get("questions"))
+                    questions[question_id] = question_list
+                    emit(
+                        "agent.input_requested",
+                        {"question_id": question_id, "questions": question_list},
+                    )
+                elif kind in {"question.replied", "question.rejected"}:
+                    question_id = str(props.get("requestID", ""))
+                    questions.pop(question_id, None)
+                    emit("agent.input_closed", {"question_id": question_id})
+                elif kind == "permission.asked":
                     permission_id = validate_id(props.get("id"))
                     emit(
                         "agent.permission_requested",
@@ -320,6 +359,48 @@ class OpenCodeAdapter(AgentAdapter):
                             "permission": props.get("permission"),
                         },
                     )
+                    if (
+                        self.session.settings.get("permission_mode") == "native"
+                        and self.session.settings.get("auto_approve") is True
+                    ):
+                        with self.client(timeout=2) as event_client:
+                            reply, _ = bounded_request(
+                                event_client,
+                                "POST",
+                                f"/permission/{permission_id}/reply",
+                                json={"reply": "once"},
+                            )
+                        if reply.status_code != 200:
+                            raise ValueError("Permission reply failed")
+                        emit(
+                            "agent.permission_resolved",
+                            {
+                                "session_id": sid,
+                                "permission_id": permission_id,
+                                "reply": "once",
+                                "automatic": True,
+                            },
+                        )
+                        return
+                    if (
+                        self.session.settings.get("permission_mode") == "native"
+                        and request.receive_message
+                    ):
+                        approvals.add(permission_id)
+                        emit(
+                            "agent.input_requested",
+                            {
+                                "kind": "permission",
+                                "question_id": f"permission:{permission_id}",
+                                "permission_id": permission_id,
+                                "permission": props.get("permission"),
+                                "patterns": props.get("patterns", []),
+                                "metadata": props.get("metadata", {}),
+                                "questions": [],
+                            },
+                        )
+                        return
+                    permission.set()
                     with self.client(timeout=2) as event_client:
                         reply, _ = bounded_request(
                             event_client,
@@ -337,19 +418,44 @@ class OpenCodeAdapter(AgentAdapter):
                             },
                         )
                     self.interrupt(str(sid))
+                elif kind == "permission.replied":
+                    permission_id = str(props.get("requestID", ""))
+                    approvals.discard(permission_id)
+                    emit("agent.input_closed", {"question_id": f"permission:{permission_id}"})
                 elif kind == "message.part.delta" and props.get("field") == "text":
                     delta = props.get("delta")
                     if isinstance(delta, str):
                         if delta:
                             observe_output(props.get("messageID"))
-                        emit("attempt.text_delta", {"text": delta, "session_id": sid})
+                        text_delta(delta)
                 elif kind == "message.part.updated" and isinstance(part, dict):
                     if part.get("type") in {"text", "reasoning", "tool"}:
                         observe_output(part.get("messageID"))
                     if part.get("type") == "tool":
-                        emit("agent.tool_call", {"session_id": sid, "part": part})
+                        state = part.get("state", {})
+                        inputs = state.get("input", {})
+                        summary = state.get("title") or next(
+                            (
+                                inputs[k]
+                                for k in ("command", "filePath", "pattern")
+                                if inputs.get(k)
+                            ),
+                            "",
+                        )
+                        # Full output is already archived above. Keep progress compact
+                        # so a large tool result does not evict the chat's event window.
+                        emit(
+                            "agent.tool_call",
+                            {
+                                "session_id": sid,
+                                "call_id": part.get("callID") or part.get("id"),
+                                "tool": part.get("tool"),
+                                "status": state.get("status"),
+                                "summary": str(summary)[:500],
+                            },
+                        )
                     elif isinstance(props.get("delta"), str):
-                        emit("attempt.text_delta", {"text": props["delta"], "session_id": sid})
+                        text_delta(props["delta"])
                 elif kind == "message.updated" and isinstance(info, dict):
                     if isinstance(info.get("id"), str) and isinstance(info.get("role"), str):
                         message_roles[info["id"]] = info["role"]
@@ -393,19 +499,15 @@ class OpenCodeAdapter(AgentAdapter):
                             else None,
                             trust_env=False,
                             follow_redirects=False,
-                            timeout=httpx.Timeout(20, connect=2),
+                            timeout=httpx.Timeout(None, connect=2),
                         ) as client,
                         client.stream("GET", "/event") as response,
                     ):
                         if response.status_code != 200:
                             raise ValueError("Event stream rejected")
                         pending = bytearray()
-                        total = 0
                         async for chunk in response.aiter_bytes():
                             pending.extend(chunk)
-                            total += len(chunk)
-                            if total > MAX_RESPONSE_BYTES:
-                                raise ResponseLimit("Event stream budget exceeded")
                             while True:
                                 lf, crlf = pending.find(b"\n\n"), pending.find(b"\r\n\r\n")
                                 positions = [(lf, 2), (crlf, 4)]
@@ -415,12 +517,15 @@ class OpenCodeAdapter(AgentAdapter):
                                 pos, size = min(positions)
                                 frame = bytes(pending[: pos + size])
                                 del pending[: pos + size]
-                                for event in sse_events([frame]):
+                                for event in sse_events([frame], limit=self.max_response_bytes):
                                     if event["type"] == "server.connected":
                                         ready.set()
                                     else:
                                         handle_event(event)
-                            if len(pending) > MAX_EVENT_BYTES:
+                            if (
+                                self.max_response_bytes is not None
+                                and len(pending) > self.max_response_bytes
+                            ):
                                 raise ResponseLimit("Event exceeds limit")
                         if not done.is_set():
                             raise ValueError("Event stream closed")
@@ -446,11 +551,81 @@ class OpenCodeAdapter(AgentAdapter):
                     ready.set()
 
             def watch() -> None:
+                next_input_poll = 0.0
                 while not done.wait(0.05):
                     try:
                         check()
                         if errors:
                             raise InterruptedError
+                        if sent and request.receive_message and time.monotonic() >= next_input_poll:
+                            next_input_poll = time.monotonic() + 0.4
+                            incoming = request.receive_message()
+                            if incoming:
+                                delivered, reason = False, None
+                                try:
+                                    question_id = incoming.get("question_id")
+                                    permission_id = incoming.get("permission_id")
+                                    data: dict[str, Any]
+                                    if permission_id:
+                                        if permission_id not in approvals or incoming.get(
+                                            "permission_reply"
+                                        ) not in {"once", "reject"}:
+                                            raise ValueError("permission_expired")
+                                        path = f"/permission/{validate_id(permission_id)}/reply"
+                                        data = {"reply": incoming["permission_reply"]}
+                                    elif question_id:
+                                        from agents_ide.adapters.interaction import question_answers
+
+                                        if question_id not in questions:
+                                            raise ValueError("question_expired")
+                                        path = f"/question/{validate_id(question_id)}/reply"
+                                        data = {
+                                            "answers": question_answers(
+                                                incoming, questions[question_id]
+                                            )
+                                        }
+                                    else:
+                                        path = f"/session/{resume}/prompt_async"
+                                        data = {
+                                            **body,
+                                            # Append to the active loop; never start an unowned
+                                            # turn if completion races with this message.
+                                            "noReply": True,
+                                            "parts": [{"type": "text", "text": incoming["text"]}],
+                                        }
+                                    with self.client(timeout=2) as input_client:
+                                        reply, _ = bounded_request(
+                                            input_client, "POST", path, json=data
+                                        )
+                                    delivered = reply.status_code in {200, 204}
+                                    if delivered and permission_id:
+                                        approvals.discard(permission_id)
+                                        emit(
+                                            "agent.permission_resolved",
+                                            {
+                                                "session_id": resume,
+                                                "permission_id": permission_id,
+                                                "reply": incoming["permission_reply"],
+                                            },
+                                        )
+                                        emit(
+                                            "agent.input_closed",
+                                            {"question_id": f"permission:{permission_id}"},
+                                        )
+                                    elif delivered and question_id:
+                                        questions.pop(question_id, None)
+                                        emit("agent.input_closed", {"question_id": question_id})
+                                    reason = None if delivered else "agent_rejected_message"
+                                except (httpx.HTTPError, OSError, ValueError):
+                                    reason = "delivery_unconfirmed"
+                                emit(
+                                    "agent.user_message_status",
+                                    {
+                                        "command_id": incoming["command_id"],
+                                        "delivered": delivered,
+                                        "reason": reason,
+                                    },
+                                )
                     except (AppError, InterruptedError):
                         self.interrupt(self.external_session_id or "")
                         return
@@ -466,7 +641,9 @@ class OpenCodeAdapter(AgentAdapter):
                     "event_stream_unavailable", ExternalOutcome.RETRYABLE_FAILURE, safe=True
                 )
             check()
-            with self.client(timeout=max(0.1, deadline - time.time())) as client:
+            with self.client(
+                timeout=max(0.1, deadline - time.time()) if math.isfinite(deadline) else None
+            ) as client:
                 sent = True
                 response, raw = bounded_request(
                     client,
@@ -479,6 +656,8 @@ class OpenCodeAdapter(AgentAdapter):
                 return self._http_failure(response.status_code, dispatched=True)
             if permission.is_set():
                 return fail("permission_denied", ExternalOutcome.PERMISSION_DENIED)
+            if malformed_output.is_set():
+                return fail("provider_tool_protocol_invalid", ExternalOutcome.INVALID_FORMAT)
             if errors:
                 return fail("event_stream_lost", ExternalOutcome.UNKNOWN)
             payload = json.loads(raw)
@@ -550,6 +729,8 @@ class OpenCodeAdapter(AgentAdapter):
             )
             if info.get("finish") == "length":
                 return fail("response_truncated", ExternalOutcome.INVALID_FORMAT)
+            if "]<]minimax[>[<tool_call>" in text:
+                return fail("provider_tool_protocol_invalid", ExternalOutcome.INVALID_FORMAT)
             usage = info.get("tokens", {})
             metrics = []
             if isinstance(usage, dict):
@@ -597,6 +778,8 @@ class OpenCodeAdapter(AgentAdapter):
         except (httpx.HTTPError, OSError, ValueError, TypeError, KeyError):
             if sent:
                 self.interrupt(self.external_session_id or "")
+            if malformed_output.is_set():
+                return fail("provider_tool_protocol_invalid", ExternalOutcome.INVALID_FORMAT)
             return fail(
                 "server_transport_error",
                 ExternalOutcome.UNKNOWN if sent else ExternalOutcome.RETRYABLE_FAILURE,
@@ -613,11 +796,17 @@ class OpenCodeAdapter(AgentAdapter):
             for thread in threads:
                 thread.join(timeout=2.5)
 
+    def _permissions(self) -> list[dict[str, str]]:
+        mode = self.session.settings.get("permission_mode", "no_tools")
+        if mode not in {"no_tools", "native"}:
+            raise OpenCodeConfigurationError("Unknown OpenCode permission mode")
+        return [] if mode == "native" else DENY_TOOLS
+
     def _validate_session(self, data: Any, expected: str) -> None:
         if not isinstance(data, dict) or data.get("id") != expected:
             raise ValueError("Session identity mismatch")
-        if data.get("permission") != DENY_TOOLS:
-            raise OpenCodeConfigurationError("Server did not confirm deny-all tool permissions")
+        if data.get("permission") != self._permissions():
+            raise OpenCodeConfigurationError("Server did not confirm the selected permission mode")
         from pathlib import Path
 
         if (
@@ -655,8 +844,6 @@ class OpenCodeAdapter(AgentAdapter):
                 },
             ],
         }
-        if len(json.dumps(body, ensure_ascii=False).encode("utf-8")) > MAX_REQUEST_BYTES:
-            raise OpenCodeConfigurationError("OpenCode request exceeds limit")
         return body
 
     @staticmethod

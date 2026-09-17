@@ -272,6 +272,7 @@ def test_retention_preserves_active_pinned_references_and_critical_evidence(
 def test_quota_rollback_keeps_critical_events_and_prevents_new_dispatch(
     authenticated, tmp_path, settings, monkeypatch
 ):
+    settings.enforce_execution_limits = True
     run, factory = make_run(authenticated, tmp_path)
     settings.detailed_events_limit = 1
     with factory() as session:
@@ -298,6 +299,7 @@ def test_quota_rollback_keeps_critical_events_and_prevents_new_dispatch(
 def test_disk_reserve_blocks_work_and_maintenance_is_fail_closed(
     authenticated, tmp_path, settings, monkeypatch
 ):
+    settings.enforce_execution_limits = True
     run, factory = make_run(authenticated, tmp_path)
     from agents_ide.operations import storage
 

@@ -70,6 +70,8 @@ def check_capacity(
     session: Session, run_id: str | None = None, *, extra: int = 0, check_events: bool = True
 ) -> None:
     settings = settings_for(session)
+    if not settings.enforce_execution_limits:
+        return
     if run_id:
         run = session.get(Run, run_id)
         if run and (run.artifact_bytes or 0) + extra > settings.run_artifact_bytes:

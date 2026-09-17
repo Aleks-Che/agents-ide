@@ -467,6 +467,43 @@
                       "minLength": 1,
                       "type": "string"
                     },
+                    "harness_settings": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "codex": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "auto_approve": {
+                              "type": "boolean"
+                            },
+                            "permission_mode": {
+                              "enum": [
+                                "read_only",
+                                "workspace_write",
+                                "full_access"
+                              ]
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "opencode": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "auto_approve": {
+                              "type": "boolean"
+                            },
+                            "permission_mode": {
+                              "enum": [
+                                "native",
+                                "no_tools"
+                              ]
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
                     "max_retries": {
                       "maximum": 5,
                       "minimum": 0,
@@ -1412,6 +1449,43 @@
             "harness_profile_id": {
               "minLength": 1,
               "type": "string"
+            },
+            "harness_settings": {
+              "additionalProperties": false,
+              "properties": {
+                "codex": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "auto_approve": {
+                      "type": "boolean"
+                    },
+                    "permission_mode": {
+                      "enum": [
+                        "read_only",
+                        "workspace_write",
+                        "full_access"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                },
+                "opencode": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "auto_approve": {
+                      "type": "boolean"
+                    },
+                    "permission_mode": {
+                      "enum": [
+                        "native",
+                        "no_tools"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "type": "object"
             },
             "max_retries": {
               "maximum": 5,

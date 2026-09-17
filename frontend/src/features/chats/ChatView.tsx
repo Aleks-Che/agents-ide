@@ -18,6 +18,8 @@ import {
 } from '../../api/projects'
 import { ChatRunsList, LaunchRunDialog } from '../runs/LaunchRunDialog'
 import { RunScreen } from '../runs/RunsPanel'
+import { ChatRunProgress } from '../runs/ChatRunProgress'
+import { runsApi } from '../../api/runs'
 import { formatDateTime } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
 import { CouncilPanel, CouncilReviewer } from '../planning/CouncilPanel'
@@ -48,6 +50,7 @@ export function ChatView({
   const csrf = useCsrfToken()
   const [launchOpen, setLaunchOpen] = useState(false)
   const [openRunId, setOpenRunId] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [lastLaunched, setLastLaunched] = useState<string | null>(null)
   const [councilOpen, setCouncilOpen] = useState(false)
   const [councilJobId, setCouncilJobId] = useState<string | null>(null)
@@ -61,6 +64,21 @@ export function ChatView({
     enabled: Boolean(chat),
     refetchInterval: 5000,
   })
+  const runs = useQuery({
+    queryKey: [
+      'runs_for_chat',
+      { projectId: projectId ?? '', chatId: chat?.id ?? '' },
+    ],
+    queryFn: () => runsApi.list({ projectId: projectId!, chatId: chat!.id }),
+    enabled: Boolean(projectId && chat),
+    refetchInterval: 3000,
+  })
+  const selectedRun =
+    runs.data?.find((run) => run.id === selectedRunId) ??
+    runs.data?.find(
+      (run) => !['completed', 'failed', 'cancelled'].includes(run.state),
+    ) ??
+    runs.data?.[0]
 
   const messages = useInfiniteQuery({
     queryKey: ['messages', { chatId: chat?.id ?? '' }],
@@ -181,8 +199,9 @@ export function ChatView({
               chat.archived
             }
             aria-label="Запустить шаблон"
+            title="START — запустить шаблон"
           >
-            Запустить шаблон
+            <span aria-hidden="true">▶</span> Запустить шаблон
           </button>
           <button
             type="button"
@@ -221,8 +240,7 @@ export function ChatView({
       ) : null}
       {lastLaunched ? (
         <p className="hint" role="status">
-          Запуск создан ({lastLaunched}). Следите за состоянием ниже и в разделе
-          «Запуски».
+          Запуск создан. Этапы и сообщения агента отображаются в этом диалоге.
         </p>
       ) : null}
       {archiveChat.error ? (
@@ -247,6 +265,15 @@ export function ChatView({
         loading={messages.isLoading}
         error={messages.error ? describeError(messages.error) : null}
       />
+      {selectedRun ? (
+        <ChatRunProgress
+          key={selectedRun.id}
+          runId={selectedRun.id}
+          onDetails={() => setOpenRunId(selectedRun.id)}
+          onNewRun={() => setLaunchOpen(true)}
+          onRestarted={(id) => setSelectedRunId(id)}
+        />
+      ) : null}
       <form
         className="composer"
         onSubmit={(event) => {
@@ -272,8 +299,8 @@ export function ChatView({
         ) : null}
         <footer>
           <span className="muted">
-            Сообщения и запуск сохраняются независимо. После запуска прогресс
-            будет виден в списке ниже.
+            Это заметка диалога. Для ответа работающему агенту используйте поле
+            внутри текущего этапа.
           </span>
           <button
             type="submit"
@@ -298,7 +325,10 @@ export function ChatView({
         <ChatRunsList
           projectId={projectId ?? ''}
           chatId={chat.id}
-          onSelectRun={setOpenRunId}
+          onSelectRun={(id) => {
+            setSelectedRunId(id)
+            setOpenRunId(id)
+          }}
         />
       </section>
       {launchOpen && projectValue ? (
@@ -320,7 +350,8 @@ export function ChatView({
             setLaunchOpen(false)
             setPlanningSource(null)
             setLastLaunched(run.id)
-            setOpenRunId(run.id)
+            setSelectedRunId(run.id)
+            void client.invalidateQueries({ queryKey: ['runs_for_chat'] })
           }}
         />
       ) : null}

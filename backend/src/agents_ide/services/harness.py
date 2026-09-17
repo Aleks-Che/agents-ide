@@ -77,7 +77,7 @@ def discover_harnesses(session: Session) -> list[HarnessProfile]:
                 executable_path=executable,
                 settings_json=to_json(
                     {
-                        "permission_mode": "read_only" if kind == "codex" else "no_tools",
+                        "permission_mode": "read_only" if kind == "codex" else "native",
                     }
                 ),
                 catalog_models_json="[]",
@@ -95,7 +95,7 @@ def discover_harnesses(session: Session) -> list[HarnessProfile]:
             model.catalog_fingerprint = None
         settings = json.loads(model.settings_json)
         if settings.get("permission_mode") is None:
-            settings["permission_mode"] = "read_only" if kind == "codex" else "no_tools"
+            settings["permission_mode"] = "read_only" if kind == "codex" else "native"
             model.settings_json = to_json(settings)
             model.version += 1
             model.updated_at = utc_now()
@@ -241,6 +241,14 @@ def update_harness(
         model.last_test_status = None
         model.last_test_at = None
     if payload.settings is not None:
+        from agents_ide.engine import codex_runtime, opencode_runtime
+
+        validator = (
+            codex_runtime.validate_settings
+            if model.harness_kind == "codex"
+            else opencode_runtime.validate_settings
+        )
+        validator(payload.settings, execution="permission_mode" in payload.settings)
         previous_settings = json.loads(model.settings_json)
         default_model = payload.settings.get("default_model")
         if default_model is not None and not isinstance(default_model, str):
@@ -254,9 +262,10 @@ def update_harness(
                     422,
                 )
         model.settings_json = to_json(payload.settings)
-        # IDE defaults do not change the native account or model catalog.
-        if {k: v for k, v in previous_settings.items() if k != "default_model"} != {
-            k: v for k, v in payload.settings.items() if k != "default_model"
+        # Execution permissions and IDE defaults do not change model options.
+        execution_keys = {"default_model", "permission_mode", "auto_approve", "approval_policy"}
+        if {k: v for k, v in previous_settings.items() if k not in execution_keys} != {
+            k: v for k, v in payload.settings.items() if k not in execution_keys
         }:
             model.last_test_status = None
             model.last_test_at = None

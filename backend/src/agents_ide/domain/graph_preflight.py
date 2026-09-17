@@ -107,6 +107,10 @@ def preflight(
             )
         )
     configuration, sources = resolve_configuration(binding, version, overrides)
+    from agents_ide.operations.storage import settings_for
+
+    if not settings_for(session).enforce_execution_limits:
+        configuration["limit_overrides"] = {}
     if single_agent is not None:
         filter_single_agent_configuration(configuration, sources, single_agent, graph)
     limit_caps = {
@@ -137,7 +141,7 @@ def preflight(
         "data_destinations": [],
         "permissions": {
             "status": "declared",
-            "autonomous_write": "blocked",
+            "autonomous_write": "per_harness_settings",
             "commands": "pinned_argv",
         },
         "dispatch_ready": False,
@@ -572,8 +576,13 @@ def _candidates(
                     else opencode_runtime.validate_settings
                 )
 
-                settings = json.loads(resource.settings_json)
+                from agents_ide.domain.harness_settings import effective_settings
+
+                settings = effective_settings(
+                    resource.harness_kind, json.loads(resource.settings_json), config
+                )
                 row["capabilities"]["permissions"] = settings.get("permission_mode", "unverified")
+                row["capabilities"]["auto_approve"] = settings.get("auto_approve", False)
                 if candidate["enabled"] and report.preview.get("execution_mode") == "real":
                     try:
                         validate_settings(settings)

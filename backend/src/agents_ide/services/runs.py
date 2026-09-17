@@ -28,6 +28,7 @@ from agents_ide.domain.schemas import (
     CommandAccepted,
     Run,
     RunCommand,
+    RunRestart,
     RunStart,
 )
 from agents_ide.domain.single_agent import (
@@ -198,6 +199,8 @@ def start_run(session: Session, payload: RunStart) -> Run:
             )
         ]
     configuration, sources = resolve_configuration(binding, version, payload.overrides)
+    if not settings_for(session).enforce_execution_limits:
+        configuration["limit_overrides"] = {}
     synthetic_graph = None
     if payload.single_agent is not None:
         synthetic_graph = build_single_agent_graph(version, payload.single_agent)
@@ -416,6 +419,57 @@ def get_run(session: Session, run_id: str) -> Run:
     return _run_from_model(get_or_404(session, RunModel, run_id))
 
 
+def restart_run(session: Session, run_id: str, payload: RunRestart) -> Run:
+    """Create fresh work and cancel its predecessor atomically; retain both histories.
+
+    Workspace reservations keep the replacement queued until the previous process
+    tree has stopped. Replaying a lost response returns the same replacement.
+    """
+    source = get_or_404(session, RunModel, run_id)
+    key = content_hash({"restart_of": run_id, "command_id": payload.command_id})
+    existing = session.scalar(select(RunModel).where(RunModel.idempotency_key == key))
+    if existing:
+        return _run_from_model(existing)
+    if not source.request_json:
+        raise AppError(
+            "restart_unavailable", "Откройте новый запуск: исходный запрос не сохранён", 409
+        )
+    request = json.loads(source.request_json)
+    request.update(idempotency_key=key, initiator="restart")
+    # Native templates restart their current saved configuration. Imported code
+    # still requires the exact reviewed execution hash.
+    if json.loads(source.snapshot_json).get("origin") != "imported":
+        request["trusted_execution_hash"] = None
+    replacement = start_run(session, RunStart.model_validate(request))
+    # start_run probes the workspace before opening the write transaction. Re-read
+    # the source here; a transition during those probes must not be overwritten.
+    session.refresh(source)
+    if source.state_version != payload.expected_state_version:
+        raise AppError(
+            "version_conflict", "Состояние задания изменилось. Повторите перезапуск", 409
+        )
+    if source.state not in _RUN_STATE_TERMINAL:
+        submit_command(
+            session,
+            run_id,
+            RunCommand(
+                command_id=payload.command_id,
+                command_type="cancel",
+                expected_state_version=source.state_version,
+            ),
+        )
+    from agents_ide.engine.events import append_event
+
+    append_event(
+        session,
+        run_id,
+        "control.applied",
+        {"command_type": "restart", "new_run_id": replacement.id},
+        command_id=payload.command_id,
+    )
+    return replacement
+
+
 def submit_command(session: Session, run_id: str, payload: RunCommand) -> CommandAccepted:
     begin_write(session)
     run = get_or_404(session, RunModel, run_id)
@@ -558,6 +612,8 @@ def _next_command_sequence(session: Session, run_id: str) -> int:
 
 
 def _command_allowed(command_type: str, state: str) -> bool:
+    if command_type == "message":
+        return state == "running"
     if state == "cancelled":
         return command_type == "cancel"
     if state in _RUN_STATE_TERMINAL:

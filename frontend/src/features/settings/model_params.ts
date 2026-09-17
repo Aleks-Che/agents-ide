@@ -111,15 +111,6 @@ export const MODEL_PARAM_DESCRIPTORS: readonly ParamDescriptor[] = [
     title: 'Структурированный ответ',
     hint: 'true или false',
   },
-  {
-    name: 'timeout_seconds',
-    kind: 'number',
-    title: 'Тайм-аут, с',
-    hint: 'число больше 0 и не больше 86400',
-    min: 0,
-    max: 86400,
-    exclusiveMin: true,
-  },
 ]
 
 export function descriptorFor(name: string): ParamDescriptor | undefined {
@@ -147,6 +138,8 @@ export function validateParamValue(
   name: string,
   value: unknown,
 ): string | null {
+  // Saved profiles may still carry the old timeout; it no longer limits runs.
+  if (name === 'timeout_seconds') return null
   const descriptor = descriptorFor(name)
   if (!descriptor) return `Неподдержанный параметр «${name}»`
   switch (descriptor.kind) {

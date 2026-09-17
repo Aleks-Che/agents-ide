@@ -321,6 +321,8 @@ test('installed harness settings select a native default without creating profil
     'C:/tools/codex.exe',
   )
   await dialog.getByLabel('Модель по умолчанию').selectOption('test/second')
+  await dialog.getByLabel('Режим доступа').selectOption('workspace_write')
+  await dialog.getByLabel('Автоматически одобрять действия').uncheck()
   await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(panel).toContainText('Модель по умолчанию · test/second')
   await panel.getByRole('button', { name: 'Обновить список' }).click()
@@ -329,6 +331,11 @@ test('installed harness settings select a native default without creating profil
   await expect(page.getByLabel('Модель по умолчанию')).toHaveValue(
     'test/second',
   )
+  await expect(page.getByLabel('Режим доступа')).toHaveValue('workspace_write')
+  await expect(
+    page.getByLabel('Автоматически одобрять действия'),
+  ).not.toBeChecked()
+  await page.screenshot({ path: '../.local/harness-execution-settings.png' })
   await page.keyboard.press('Escape')
   await page
     .getByRole('navigation', { name: 'Разделы настроек' })

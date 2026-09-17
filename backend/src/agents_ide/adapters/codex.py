@@ -1,4 +1,4 @@
-"""Bounded Codex App Server transport (schema: codex-cli 0.153.4).
+"""Codex App Server transport (schema: codex-cli 0.153.4).
 
 One reader and one dispatch owner per connection; writes remain available for
 interrupts. Native identifiers are opaque, not synthetic thread_/turn_ prefixes.
@@ -29,8 +29,6 @@ from agents_ide.adapters.model_catalog import CatalogModels, codex_metadata, par
 from agents_ide.adapters.native_events import archive_native
 from agents_ide.errors import AppError
 
-MAX_MESSAGE_BYTES = 1024 * 1024
-MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 
 
@@ -83,20 +81,27 @@ class CodexStream:
             raise OSError("Codex stdio is not piped")
         stream = cls(process, queue.Queue(maxsize=128))
 
+        def enqueue(message: dict[str, Any] | None) -> None:
+            # Backpressure instead of failing a healthy agent on a burst of events.
+            while not stream.closed:
+                try:
+                    stream.queue.put(message, timeout=0.1)
+                    return
+                except queue.Full:
+                    continue
+
         def read_stdout() -> None:
             assert process.stdout is not None
             try:
                 while not stream.closed:
-                    line = process.stdout.readline(MAX_MESSAGE_BYTES + 1)
+                    line = process.stdout.readline()
                     if not line:
-                        stream.queue.put_nowait(None)
+                        enqueue(None)
                         return
-                    if len(line.encode("utf-8")) > MAX_MESSAGE_BYTES or not line.endswith("\n"):
-                        raise ValueError("Codex message exceeds limit")
                     message = json.loads(line)
                     if not isinstance(message, dict):
                         raise ValueError("Invalid Codex envelope")
-                    stream.queue.put_nowait(message)
+                    enqueue(message)
             except (OSError, ValueError, queue.Full):
                 stream._failed.set()
 
@@ -136,8 +141,6 @@ class CodexStream:
 
     def send(self, message: dict[str, Any]) -> None:
         encoded = json.dumps(message, ensure_ascii=False) + "\n"
-        if len(encoded.encode("utf-8")) > MAX_MESSAGE_BYTES:
-            raise CodexConfigurationError("Codex request exceeds limit")
         with self._write_lock:
             if not self.is_alive() or self.process.stdin is None:
                 raise OSError("Codex transport closed")
@@ -225,7 +228,7 @@ class CodexAdapter(AgentAdapter):
         stream: CodexStream,
         session: RunSession,
         request_timeout: float = 30.0,
-        turn_timeout: float = 300.0,
+        turn_timeout: float | None = None,
     ) -> None:
         self._stream = stream
         self.session = session
@@ -268,7 +271,11 @@ class CodexAdapter(AgentAdapter):
                 if "method" not in message and message.get("id") == request_id:
                     return message
                 if notifications is not None:
-                    if _decline(self._stream, message):
+                    if message.get("method") not in {
+                        "item/tool/requestUserInput",
+                        "item/commandExecution/requestApproval",
+                        "item/fileChange/requestApproval",
+                    } and _decline(self._stream, message):
                         message["_answered"] = True
                     notifications.append(message)
                     if len(notifications) > 128:
@@ -348,12 +355,11 @@ class CodexAdapter(AgentAdapter):
 
     def _options(self, request: AgentAdapterRequest) -> dict[str, Any]:
         settings = self.session.settings
-        if (
-            settings.get("permission_mode") != "read_only"
-            or settings.get("approval_policy", "never") != "never"
-        ):
-            raise CodexConfigurationError("Unverified Codex permissions or parameters")
+        from agents_ide.domain.harness_settings import approval_policy
+        from agents_ide.engine.codex_runtime import validate_settings
+
         try:
+            validate_settings(settings)
             parameters_for(
                 "codex", request.model_id, request.params, settings.get("model_metadata", {})
             )
@@ -362,8 +368,12 @@ class CodexAdapter(AgentAdapter):
         options: dict[str, Any] = {
             "model": request.model_id,
             "cwd": self.session.workspace_path,
-            "sandbox": "read-only",
-            "approvalPolicy": "never",
+            "sandbox": {
+                "read_only": "read-only",
+                "workspace_write": "workspace-write",
+                "full_access": "danger-full-access",
+            }[settings["permission_mode"]],
+            "approvalPolicy": approval_policy(settings),
         }
         if settings.get("isolated_config"):
             options.pop("sandbox")
@@ -377,7 +387,9 @@ class CodexAdapter(AgentAdapter):
 
     def _run(self, request: AgentAdapterRequest) -> AgentResult:
         started = time.monotonic()
-        deadline = min(request.deadline_at or float("inf"), time.time() + self.turn_timeout)
+        deadline = request.deadline_at or (
+            time.time() + self.turn_timeout if self.turn_timeout is not None else float("inf")
+        )
         sent = False
         terminal = False
         self._turn_id = None
@@ -388,9 +400,9 @@ class CodexAdapter(AgentAdapter):
             if (request.stop_event and request.stop_event.is_set()) or time.time() >= deadline:
                 raise InterruptedError
 
-        def emit(kind: str, **payload: Any) -> None:
+        def emit(event_type: str, **payload: Any) -> None:
             if request.emit_event:
-                request.emit_event(kind, {"session_id": self.external_session_id, **payload})
+                request.emit_event(event_type, {"session_id": self.external_session_id, **payload})
 
         def failure(
             code: str, outcome: ExternalOutcome = ExternalOutcome.UNKNOWN, *, safe: bool = False
@@ -480,15 +492,26 @@ class CodexAdapter(AgentAdapter):
                 "agent.session_resumed" if resumed else "agent.session_created",
                 server_version=self.session.server_version,
                 resume_count=self._binding.resume_count,
-                permission_mode="read_only",
+                permission_mode=self.session.settings["permission_mode"],
             )
             check()
             turn_params: dict[str, Any] = {
                 "threadId": returned_id,
                 "model": request.model_id,
                 "cwd": self.session.workspace_path,
-                "approvalPolicy": "never",
-                "sandboxPolicy": {"type": "readOnly"},
+                "approvalPolicy": options["approvalPolicy"],
+                "sandboxPolicy": {
+                    "type": {
+                        "read_only": "readOnly",
+                        "workspace_write": "workspaceWrite",
+                        "full_access": "dangerFullAccess",
+                    }[self.session.settings["permission_mode"]],
+                    **(
+                        {"writableRoots": [self.session.workspace_path], "networkAccess": False}
+                        if self.session.settings["permission_mode"] == "workspace_write"
+                        else {}
+                    ),
+                },
                 "input": [
                     {"type": "text", "text": request.prompt},
                     {
@@ -537,17 +560,92 @@ class CodexAdapter(AgentAdapter):
             phases: dict[str, str] = {}
             tools: dict[str, dict[str, Any]] = {}
             tokens: int | None = None
-            byte_count = 0
             denied = False
+            questions: dict[str, tuple[Any, list[dict[str, Any]]]] = {}
+            approvals: dict[str, dict[str, Any]] = {}
+            next_input_poll = 0.0
             while True:
                 check()
+                if request.receive_message and time.monotonic() >= next_input_poll:
+                    next_input_poll = time.monotonic() + 0.4
+                    incoming = request.receive_message()
+                    if incoming:
+                        delivered, reason = False, None
+                        try:
+                            question_id = incoming.get("question_id")
+                            permission_id = incoming.get("permission_id")
+                            if permission_id:
+                                if permission_id not in approvals or incoming.get(
+                                    "permission_reply"
+                                ) not in {"once", "reject"}:
+                                    raise ValueError("permission_expired")
+                                native = approvals.pop(permission_id)
+                                decision = (
+                                    "accept"
+                                    if incoming["permission_reply"] == "once"
+                                    else "decline"
+                                )
+                                self._stream.send(
+                                    {"id": native["id"], "result": {"decision": decision}}
+                                )
+                                emit(
+                                    "agent.permission_resolved",
+                                    permission_id=permission_id,
+                                    decision=decision,
+                                )
+                                emit(
+                                    "agent.input_closed", question_id=f"permission:{permission_id}"
+                                )
+                                delivered = True
+                            elif question_id:
+                                from agents_ide.adapters.interaction import question_answers
+
+                                if question_id not in questions:
+                                    raise ValueError("question_expired")
+                                native_id, question_list = questions[question_id]
+                                answers = question_answers(incoming, question_list)
+                                self._stream.send(
+                                    {
+                                        "id": native_id,
+                                        "result": {
+                                            "answers": {
+                                                item["id"]: {"answers": answer}
+                                                for item, answer in zip(
+                                                    question_list, answers, strict=True
+                                                )
+                                            }
+                                        },
+                                    }
+                                )
+                                questions.pop(question_id)
+                                emit("agent.input_closed", question_id=question_id)
+                                delivered = True
+                            else:
+                                reply = self._request_response(
+                                    "turn/steer",
+                                    {
+                                        "threadId": returned_id,
+                                        "expectedTurnId": self._turn_id,
+                                        "input": [{"type": "text", "text": incoming["text"]}],
+                                    },
+                                    timeout=min(5, self.request_timeout),
+                                    check=check,
+                                    notifications=pending,
+                                )
+                                delivered = "error" not in reply
+                                reason = None if delivered else "agent_rejected_message"
+                        except (OSError, ValueError):
+                            reason = "delivery_unconfirmed"
+                        emit(
+                            "agent.user_message_status",
+                            command_id=incoming["command_id"],
+                            delivered=delivered,
+                            reason=reason,
+                        )
                 try:
                     message = pending.pop(0) if pending else self._stream.receive(0.1)
                 except queue.Empty:
                     continue
-                byte_count += len(json.dumps(message).encode())
-                if byte_count > MAX_RESPONSE_BYTES:
-                    raise ValueError("Codex response exceeds limit")
                 method = message.get("method")
                 if not isinstance(method, str):
                     continue
@@ -559,6 +657,50 @@ class CodexAdapter(AgentAdapter):
                 if matching or (params.get("threadId") == returned_id and native_turn is None):
                     archive_native(request.emit_event, "codex", method, message, returned_id)
                 if "id" in message:
+                    if (
+                        matching
+                        and method
+                        in {
+                            "item/commandExecution/requestApproval",
+                            "item/fileChange/requestApproval",
+                        }
+                        and request.receive_message
+                        and options["approvalPolicy"] == "on-request"
+                    ):
+                        permission_id = str(message["id"])
+                        approvals[permission_id] = message
+                        emit(
+                            "agent.permission_requested", permission_id=permission_id, method=method
+                        )
+                        emit(
+                            "agent.input_requested",
+                            kind="permission",
+                            question_id=f"permission:{permission_id}",
+                            permission_id=permission_id,
+                            permission=method,
+                            patterns=[
+                                params.get("command") or params.get("reason") or "Изменение файлов"
+                            ],
+                            metadata=params,
+                            questions=[],
+                        )
+                        continue
+                    if (
+                        matching
+                        and method == "item/tool/requestUserInput"
+                        and request.receive_message
+                    ):
+                        from agents_ide.adapters.interaction import questions_for_ui
+
+                        question_id = str(message["id"])
+                        question_list = questions_for_ui(params.get("questions"))
+                        questions[question_id] = (message["id"], question_list)
+                        emit(
+                            "agent.input_requested",
+                            question_id=question_id,
+                            questions=question_list,
+                        )
+                        continue
                     if not message.get("_answered"):
                         _decline(self._stream, message)
                     if matching:

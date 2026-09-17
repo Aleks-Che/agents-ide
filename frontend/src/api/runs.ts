@@ -133,6 +133,17 @@ export const runsApi = {
       csrf,
     )
   },
+  restart(
+    runId: string,
+    body: ApiSchemas['RunRestart'],
+    csrf: string,
+  ): Promise<RunRecord> {
+    return request<RunRecord>(
+      `/runs/${runId}/restart`,
+      { method: 'POST', body: JSON.stringify(body) },
+      csrf,
+    )
+  },
   snapshot(runId: string): Promise<RunSnapshot> {
     return request<RunSnapshot>(`/runs/${runId}/snapshot`)
   },

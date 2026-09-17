@@ -122,9 +122,9 @@ for (const kind of ['agent', 'llm'] as const) {
     await expect(dialog.getByRole('alert')).toContainText('version load failed')
     await page.unroute(versionRoute)
     await dialog
-      .getByRole('button', { name: 'Повторить загрузку версии' })
+      .getByRole('button', { name: 'Повторить загрузку шаблона' })
       .click()
-    await expect(dialog.getByText('Граф и настройки версии')).toBeVisible()
+    await expect(dialog.getByText('Граф и настройки шаблона')).toBeVisible()
     const resourceRoute = '**/api/connections?**'
     await page.route(resourceRoute, (route) =>
       route.fulfill({
@@ -237,6 +237,7 @@ for (const kind of ['agent', 'llm'] as const) {
     await dialog
       .getByRole('button', { name: 'Повторить тот же запуск' })
       .click()
+    await page.getByRole('button', { name: 'Подробности', exact: true }).click()
     await expect(dialog.getByRole('heading', { name: /Run ·/ })).toBeVisible()
     expect(requests).toHaveLength(2)
     expect(requests[0]).toEqual(requests[1])

@@ -167,6 +167,46 @@ def test_capabilities_for_kind_are_read_only():
     assert caps.list_models is True
 
 
+@pytest.mark.parametrize("question", [False, True])
+def test_live_input_uses_scoped_native_protocol(codex_stream, question):
+    stream, _, trace = codex_stream
+    adapter = _adapter(stream)
+    pending = []
+    events = []
+
+    def emit(kind, payload):
+        events.append((kind, payload))
+        if kind == "agent.input_requested":
+            pending.append(
+                {
+                    "command_id": "reply",
+                    "text": "README.md",
+                    "question_id": payload["question_id"],
+                    "answers": [["README.md"]],
+                }
+            )
+        elif kind == "agent.turn_started" and not question:
+            pending.append({"command_id": "steer", "text": "Check README.md"})
+
+    request = replace(
+        _make_request(prompt="ask user" if question else "hello"),
+        emit_event=emit,
+        receive_message=lambda: pending.pop(0) if pending else None,
+    )
+    assert adapter.run(request).succeeded
+    assert any(
+        kind == "agent.user_message_status" and payload["delivered"] for kind, payload in events
+    )
+    records = [item["message"] for item in _read_records(trace)]
+    if question:
+        assert next(m for m in records if m.get("id") == "question-1")["result"] == {
+            "answers": {"choice": {"answers": ["README.md"]}}
+        }
+    else:
+        steer = next(m for m in records if m.get("method") == "turn/steer")
+        assert steer["params"]["input"] == [{"type": "text", "text": "Check README.md"}]
+
+
 def test_thread_id_validation_rejects_garbage():
     with pytest.raises(ValueError):
         validate_thread_id("../not_thread")
@@ -176,8 +216,9 @@ def test_thread_id_validation_rejects_garbage():
 
 
 def test_validate_settings_blocks_unverified_policies_and_overrides():
+    validate_settings({"permission_mode": "workspace_write", "auto_approve": True})
     with pytest.raises(AppError):
-        validate_settings({"permission_mode": "workspace_write"})
+        validate_settings({"permission_mode": "unknown"})
     with pytest.raises(AppError):
         validate_settings({"permission_mode": "read_only", "serve_args": ["--listen", "tcp://"]})
     with pytest.raises(AppError):
@@ -384,3 +425,68 @@ def test_probe_lists_models_through_real_transport(tmp_path):
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
+
+
+@pytest.mark.parametrize(
+    "mode,sandbox,policy_type",
+    [
+        ("read_only", "read-only", "readOnly"),
+        ("workspace_write", "workspace-write", "workspaceWrite"),
+        ("full_access", "danger-full-access", "dangerFullAccess"),
+    ],
+)
+@pytest.mark.parametrize("automatic", [True, False])
+def test_selected_access_and_approval_reach_thread_and_turn(
+    codex_stream, mode, sandbox, policy_type, automatic
+):
+    stream, _, trace = codex_stream
+    adapter = _adapter(stream)
+    adapter.session = replace(
+        adapter.session, settings={"permission_mode": mode, "auto_approve": automatic}
+    )
+    assert adapter.run(_make_request()).succeeded
+    rows = [r["message"] for r in _read_records(trace)]
+    start = next(r["params"] for r in rows if r.get("method") == "thread/start")
+    turn = next(r["params"] for r in rows if r.get("method") == "turn/start")
+    assert start["sandbox"] == sandbox
+    assert turn["sandboxPolicy"]["type"] == policy_type
+    assert (
+        start["approvalPolicy"]
+        == turn["approvalPolicy"]
+        == ("never" if automatic else "on-request")
+    )
+    if mode == "workspace_write":
+        assert turn["sandboxPolicy"]["networkAccess"] is False
+        assert turn["sandboxPolicy"]["writableRoots"] == [str(Path.cwd())]
+
+
+def test_codex_manual_approval_is_sent_to_live_chat(codex_stream_with_options):
+    stream, _, trace = codex_stream_with_options(pending_permission=True)
+    adapter = _adapter(stream)
+    adapter.session = replace(
+        adapter.session, settings={"permission_mode": "workspace_write", "auto_approve": False}
+    )
+    pending, events = [], []
+
+    def emit(kind, payload):
+        events.append(kind)
+        if kind == "agent.input_requested":
+            pending.append(
+                {
+                    "command_id": "approve",
+                    "permission_id": payload["permission_id"],
+                    "permission_reply": "once",
+                    "text": "approve",
+                }
+            )
+
+    result = adapter.run(
+        replace(
+            _make_request(),
+            emit_event=emit,
+            receive_message=lambda: pending.pop(0) if pending else None,
+        )
+    )
+    assert result.succeeded, result
+    assert "agent.input_closed" in events
+    assert any(r["message"].get("result") == {"decision": "accept"} for r in _read_records(trace))

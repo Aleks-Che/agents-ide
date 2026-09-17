@@ -34,7 +34,9 @@ export function MemberParamsEditor({
   onDraft,
 }: MemberParamsEditorProps) {
   const [pendingName, setPendingName] = useState('')
-  const entries = Object.entries(params)
+  const entries = Object.entries(params).filter(
+    ([name]) => name !== 'timeout_seconds',
+  )
   const used = new Set(entries.map(([name]) => name))
   const available = MODEL_PARAM_DESCRIPTORS.filter(
     (descriptor) =>

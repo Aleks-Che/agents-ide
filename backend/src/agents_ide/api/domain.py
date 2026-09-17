@@ -98,6 +98,7 @@ from agents_ide.domain.schemas import (
     ResolvedSettings,
     Run,
     RunCommand,
+    RunRestart,
     RunStart,
     SettingsOverrides,
     SingleAgentSpec,
@@ -627,6 +628,11 @@ def start_run_endpoint(session: SessionDep, payload: RunStart) -> Run:
 @router.get("/runs/{run_id}", response_model=Run)
 def get_run_endpoint(session: SessionDep, run_id: str) -> Run:
     return runs.get_run(session, run_id)
+
+
+@router.post("/runs/{run_id}/restart", response_model=Run, status_code=201)
+def restart_run_endpoint(session: SessionDep, run_id: str, payload: RunRestart) -> Run:
+    return runs.restart_run(session, run_id, payload)
 
 
 @router.post("/runs/{run_id}/commands", response_model=CommandAccepted)

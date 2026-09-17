@@ -87,7 +87,7 @@ export function LaunchRunDialog({
   )
   const [useDraft, setUseDraft] = useState(false)
   const [inputsText, setInputsText] = useState('{}')
-  const [limitsText, setLimitsText] = useState('{}')
+  const limitsText = '{}'
   const [commandsText, setCommandsText] = useState('null')
   const [singleNodeId, setSingleNodeId] = useState('')
   const [singleSelection, setSingleSelection] = useState<BindingSelectionDraft>(
@@ -548,18 +548,7 @@ export function LaunchRunDialog({
                 Черновик не публикуется в ленту и остаётся в редакторе.
               </p>
               <details>
-                <summary>Лимиты и фильтр команд</summary>
-                <label htmlFor="launch-limits">Лимиты запуска (JSON)</label>
-                <textarea
-                  id="launch-limits"
-                  rows={3}
-                  value={limitsText}
-                  onChange={(event) => setLimitsText(event.target.value)}
-                />
-                <p className="hint">
-                  max_calls, max_node_visits, max_backward_transitions,
-                  max_duration_seconds. Пустой объект сохраняет лимиты привязки.
-                </p>
+                <summary>Фильтр команд</summary>
                 <label htmlFor="launch-commands">Фильтр команд (JSON)</label>
                 <textarea
                   id="launch-commands"

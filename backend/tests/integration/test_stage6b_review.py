@@ -285,7 +285,7 @@ def seed(authenticated, tmp_path, *, settings=None, params=None, legacy=False):
     "profile_settings,params",
     [
         ({}, None),
-        ({"permission_mode": "read_only", "approval_policy": "on-request"}, None),
+        ({"permission_mode": "read_only", "approval_policy": "unsupported"}, None),
         ({"permission_mode": "read_only"}, {"temperature": 0.5}),
     ],
 )
@@ -295,7 +295,9 @@ def test_codex_preflight_rejects_unverified_configuration(
     payload = seed(authenticated, tmp_path, settings=profile_settings, params=params)
     client, headers = authenticated
     response = client.post("/api/runs", headers=headers, json=payload)
-    assert response.status_code == 422 and "configuration_invalid" in response.text
+    assert response.status_code == 422
+    expected = "harness_catalog_unverified" if params else "configuration_invalid"
+    assert expected in response.text
 
 
 @pytest.mark.parametrize("legacy", [False, True])
@@ -342,15 +344,12 @@ def test_runner_durable_thread_turn_role_isolation_and_process_cleanup(
     assert len([r for r in _read_records(trace) if r["message"].get("method") == "turn/start"]) == 3
 
 
-def test_response_limit_aborts_active_turn(transport, monkeypatch):
-    import agents_ide.adapters.codex as codex
-
-    adapter, trace = transport(response_delay_seconds=20)
-    monkeypatch.setattr(codex, "MAX_RESPONSE_BYTES", 100)
+def test_large_response_does_not_abort_active_turn(transport):
+    adapter, trace = transport(large_response=1, final_only=1)
     result = adapter.run(_make_request())
-    assert result.outcome == ExternalOutcome.UNKNOWN and not result.no_effect
-    assert not adapter._stream.is_alive()
-    assert any(r["message"].get("method") == "turn/interrupt" for r in _read_records(trace))
+    assert result.succeeded, result
+    assert len(result.raw_text) == 11 * 1024 * 1024
+    assert not any(r["message"].get("method") == "turn/interrupt" for r in _read_records(trace))
 
 
 @pytest.mark.parametrize("failed", [False, True])

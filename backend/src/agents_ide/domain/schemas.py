@@ -760,6 +760,11 @@ class PlanningSource(ApiModel):
     confirmation_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
+class RunRestart(ApiModel):
+    command_id: ShortStr
+    expected_state_version: int = Field(ge=0)
+
+
 class RunStart(ApiModel):
     execution_mode: Literal["real", "simulated"] = "real"
     fake_scenario: FakeScenarioSpec | None = None
@@ -892,7 +897,7 @@ class Run(ApiOutput):
 
 class RunCommand(ApiModel):
     command_id: ShortStr
-    command_type: Literal["pause", "stop", "cancel", "resume", "resolve"]
+    command_type: Literal["pause", "stop", "cancel", "resume", "resolve", "message"]
     expected_state_version: int = Field(ge=0)
     payload: dict[str, Any] = Field(default_factory=dict)
 

@@ -141,6 +141,7 @@ test('chat launch checks actual inputs and mode, retries a lost response after r
   await dialog.getByRole('button', { name: 'Повторить тот же запуск' }).click()
   await expect(dialog.getByRole('alert')).toContainText('test session renewed')
   await dialog.getByRole('button', { name: 'Повторить тот же запуск' }).click()
+  await page.getByRole('button', { name: 'Подробности', exact: true }).click()
   await expect(dialog.getByRole('heading', { name: /Run ·/ })).toBeVisible()
   expect(requests).toHaveLength(3)
   expect(requests[0]).toEqual(requests[1])
@@ -208,6 +209,7 @@ test('import consent is explicit and a binding changed after preflight cannot la
   ).toBe(true)
   await page.screenshot({ path: '../.local/stage9-chat-launch-review.png' })
   await dialog.getByRole('button', { name: 'Запустить', exact: true }).click()
+  await page.getByRole('button', { name: 'Подробности', exact: true }).click()
   await expect(dialog.getByRole('heading', { name: /Run ·/ })).toBeVisible()
   const runs = await api(
     page,

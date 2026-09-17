@@ -217,12 +217,9 @@ class ProcessGroup:
 
     def _members(self) -> list[psutil.Process]:
         if self.job is not None:
-            import win32job
+            from agents_ide.worker.windows_jobs import job_process_ids
 
-            info = win32job.QueryInformationJobObject(
-                self.job, win32job.JobObjectBasicProcessIdList
-            )
-            pids = info if isinstance(info, (list, tuple)) else info.get("ProcessIdList", [])
+            pids = job_process_ids(int(self.job))
         else:
             pids = [p.pid for p in self.children]
         members = []
@@ -230,8 +227,22 @@ class ProcessGroup:
             with contextlib.suppress(psutil.NoSuchProcess):
                 process = psutil.Process(pid)
                 members.append(process)
-                members.extend(process.children(recursive=True))
+                # Windows Job membership already includes every descendant.
+                # Walking each member again races with short-lived tools and
+                # repeatedly enumerates the same process trees.
+                if self.job is None:
+                    members.extend(process.children(recursive=True))
         return members
+
+    def exit_code(self) -> int | None:
+        """Read the first child's exit code while its owned handle is retained."""
+        with self._handle_lock:
+            if self.handles:
+                import win32process
+
+                code = win32process.GetExitCodeProcess(self.handles[0])
+                return None if code == 259 else int(code)  # STILL_ACTIVE
+            return self.children[0].poll() if self.children else None
 
     def close(self) -> None:
         with self._handle_lock:
@@ -432,8 +443,9 @@ def is_alive_pid(pid: int, create_time: float) -> bool:
 def capture_tree(entry: ProcessRegistryEntry) -> bool:
     try:
         members = entry.group.members() if entry.group else []
-        if process_state(entry.pid, entry.create_time) == "alive":
-            members.extend(psutil.Process(entry.pid).children(recursive=True))
+        if entry.group is None and process_state(entry.pid, entry.create_time) == "alive":
+            with contextlib.suppress(psutil.NoSuchProcess):
+                members.extend(psutil.Process(entry.pid).children(recursive=True))
         for process in members:
             with contextlib.suppress(psutil.NoSuchProcess):
                 entry.descendants[process.pid] = process.create_time()
@@ -445,10 +457,11 @@ def capture_tree(entry: ProcessRegistryEntry) -> bool:
 def wait_descendants_stopped(entry: ProcessRegistryEntry, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while True:
-        if not capture_tree(entry):
-            return False
+        captured = capture_tree(entry)
         identities = {entry.pid: entry.create_time, **entry.descendants}
-        if all(process_state(pid, created) == "dead" for pid, created in identities.items()):
+        if captured and all(
+            process_state(pid, created) == "dead" for pid, created in identities.items()
+        ):
             return True
         if time.monotonic() >= deadline:
             return False

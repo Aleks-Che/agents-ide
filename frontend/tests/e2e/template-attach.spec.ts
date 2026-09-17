@@ -143,7 +143,9 @@ test('chat adds and launches a template without leaving the launch dialog', asyn
   expect(body.chat_id).toBe(chat.id)
   expect(body.binding_id).toBe(bindings[0].id)
   await expect(launch).toHaveCount(0)
-  await page.getByRole('button', { name: 'Закрыть экран Run' }).click()
+  await expect(
+    page.getByRole('region', { name: 'Выполнение шаблона' }),
+  ).toBeVisible()
   await expect(page.getByLabel('Новое сообщение')).toHaveValue(
     'Task draft stays here',
   )

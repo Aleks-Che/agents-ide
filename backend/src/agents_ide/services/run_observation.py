@@ -11,12 +11,18 @@ from sqlalchemy.orm import Session
 
 from agents_ide.engine.events import EventEnvelope
 from agents_ide.errors import AppError
-from agents_ide.persistence.models import Run, RunEvent, StepAttempt, StepExecution
+from agents_ide.persistence.models import (
+    ArtifactManifest,
+    Run,
+    RunEvent,
+    StepAttempt,
+    StepExecution,
+)
 
 HistoryCategory = Literal["all", "steps", "messages", "tools", "models", "commands", "checks"]
 CATEGORIES = {
     "steps": ("run.", "node.", "transition.", "attempt."),
-    "messages": ("agent.message_delta", "attempt.text_delta"),
+    "messages": ("agent.message_delta", "attempt.text_delta", "agent.user_message", "agent.input_"),
     "tools": ("agent.tool_call", "agent.permission_"),
     "models": ("model_group.", "attempt.started", "attempt.finished", "attempt.retry_"),
     "commands": ("control.", "command.", "git."),
@@ -41,6 +47,7 @@ class ObservedNode(BaseModel):
     attempt_id: str | None = None
     model_id: str | None = None
     resource_id: str | None = None
+    input_request: dict[str, Any] | None = None
 
 
 class ObservedEdge(BaseModel):
@@ -154,6 +161,28 @@ def build_observation(session: Session, run: Run) -> RunObservation:
                 item.resource_id = selection.get("harness_profile_id") or selection.get(
                     "provider_connection_id"
                 )
+                if item.id == run.current_node_id and run.state == "running":
+                    requests: dict[str, dict[str, Any]] = {}
+                    for event in session.scalars(
+                        select(RunEvent)
+                        .where(
+                            RunEvent.run_id == run.id,
+                            RunEvent.step_attempt_id == attempt.id,
+                            RunEvent.type.in_(["agent.input_requested", "agent.input_closed"]),
+                        )
+                        .order_by(RunEvent.sequence)
+                    ):
+                        payload = json.loads(event.payload_json)
+                        if payload.get("artifact_id"):
+                            artifact = session.get(ArtifactManifest, payload["artifact_id"])
+                            if artifact and artifact.run_id == run.id:
+                                payload = json.loads(artifact.body_json or "{}")
+                        key = str(payload.get("question_id", ""))
+                        if event.type == "agent.input_requested":
+                            requests[key] = payload
+                        else:
+                            requests.pop(key, None)
+                    item.input_request = next(reversed(requests.values()), None)
         result.nodes.append(item)
     for index, edge in enumerate(graph.get("edges", [])):
         result.edges.append(

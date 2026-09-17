@@ -41,13 +41,7 @@ describe('validateParamValue', () => {
     )
   })
 
-  it('enforces exclusive minimum for timeout_seconds', () => {
-    expect(validateParamValue('timeout_seconds', 0)).toBe(
-      'Нужно число больше 0 и не больше 86400',
-    )
-    expect(validateParamValue('timeout_seconds', 86401)).toBe(
-      'Нужно число больше 0 и не больше 86400',
-    )
+  it('ignores legacy timeout_seconds without blocking saved profiles', () => {
     expect(validateParamValue('timeout_seconds', 0.5)).toBeNull()
     expect(validateParamValue('timeout_seconds', 86400)).toBeNull()
   })

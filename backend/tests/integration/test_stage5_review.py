@@ -196,8 +196,10 @@ def test_unknown_cannot_be_bypassed(authenticated, tmp_path, settings, kind):
     response = command(authenticated, run, kind)
     assert response.status_code == (409 if kind == "resume" else 200)
     with factory() as session:
-        assert session.get(Run, run["id"]).state not in {"queued", "cancelled"}
-        assert session.scalar(select(WorkspaceReservation)).released_at is None
+        state = session.get(Run, run["id"]).state
+        assert state == "cancelled" if kind == "cancel" else state not in {"queued", "cancelled"}
+        released = session.scalar(select(WorkspaceReservation)).released_at
+        assert released is not None if kind == "cancel" else released is None
         assert session.scalar(select(StepAttempt)).status == "unknown"
 
 
@@ -230,6 +232,7 @@ def test_expired_job_reclaimed_for_reconciliation_without_releasing_workspace(
 
 
 def test_limits_resolve_is_effective_and_audited(authenticated, tmp_path, settings):
+    settings.enforce_execution_limits = True
     run, factory = make_run(
         authenticated,
         tmp_path,
@@ -483,6 +486,7 @@ def test_unconfirmed_stop_keeps_reservation_and_late_result_needs_resolution(
 
 
 def test_pause_cannot_erase_limit_blocker(authenticated, tmp_path, settings):
+    settings.enforce_execution_limits = True
     run, factory = make_run(
         authenticated,
         tmp_path,

@@ -145,9 +145,7 @@ function BindingEditorForm({
   const [dirtyPolicy, setDirtyPolicy] = useState<'strict' | 'allow_nonoverlap'>(
     binding?.dirty_policy ?? 'strict',
   )
-  const [limitOverridesText, setLimitOverridesText] = useState(
-    JSON.stringify(binding?.limit_overrides ?? {}, null, 0),
-  )
+  const limitOverridesText = '{}'
   const [selections, setSelections] = useState<
     Record<string, BindingSelectionDraft>
   >(() => initialSelections(binding))
@@ -339,19 +337,6 @@ function BindingEditorForm({
             </select>
           </fieldset>
         </div>
-        <fieldset>
-          <label htmlFor="binding-limit-overrides">Лимиты (JSON)</label>
-          <textarea
-            id="binding-limit-overrides"
-            rows={3}
-            value={limitOverridesText}
-            onChange={(event) => setLimitOverridesText(event.target.value)}
-          />
-          <span className="hint">
-            Положительные целые числа, например {'{'}&quot;max_calls&quot;: 200
-            {'}'}.
-          </span>
-        </fieldset>
         <section className="binding-roles" aria-label="Роли и выбор моделей">
           <header>
             <span>Роли и выбор моделей</span>

@@ -2,8 +2,8 @@
 
 The adapter is deliberately synchronous: the engine dispatches it from a
 worker thread. It never follows redirects, never reads environment proxies
-and never lets a credential travel to a different origin. The response is
-bounded before it is parsed and every failure is translated into the shared
+and never lets a credential travel to a different origin. Normal requests have
+no application time/size cap; every failure is translated into the shared
 :class:`ExternalOutcome` taxonomy so the runner applies one policy.
 """
 
@@ -31,10 +31,7 @@ from agents_ide.engine.artifacts import encode
 from agents_ide.errors import AppError
 from agents_ide.security.provider_url import chat_completions_url, models_url
 
-MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 MAX_ERROR_BYTES = 64 * 1024
-MAX_REQUEST_BYTES = 2 * 1024 * 1024
-DEFAULT_TIMEOUT_SECONDS = 120.0
 CONNECT_TIMEOUT_SECONDS = 10.0
 MODELS_TIMEOUT_SECONDS = 30.0
 PROBE_MAX_TOKENS = 1024
@@ -214,14 +211,7 @@ def _request_body(request: LLMAdapterRequest) -> dict[str, Any]:
             rendered = encode(evidence)
         except (ValueError, TypeError):
             rendered = "{}"
-        if len(rendered.encode("utf-8")) > MAX_REQUEST_BYTES:
-            rendered = json.dumps(
-                {"truncated": True, "bytes": len(rendered.encode("utf-8"))},
-                ensure_ascii=False,
-            )
         prompt += f"\n\nКонтекст и доказательства (JSON):\n{rendered}"
-    if len(prompt.encode("utf-8")) > MAX_REQUEST_BYTES:
-        raise ValueError("request_too_large")
     body["messages"] = [{"role": "user", "content": prompt}]
     return body
 
@@ -313,10 +303,10 @@ class HttpLLMAdapter(LLMAdapter):
     def __init__(
         self,
         *,
-        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-        max_response_bytes: int = MAX_RESPONSE_BYTES,
+        timeout_seconds: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> None:
-        self.timeout_seconds = max(1.0, timeout_seconds)
+        self.timeout_seconds = max(1.0, timeout_seconds) if timeout_seconds is not None else None
         self.max_response_bytes = max_response_bytes
         self._diagnostic = False
 
@@ -350,15 +340,12 @@ class HttpLLMAdapter(LLMAdapter):
                 )
             )
 
-        params = request.params if isinstance(request.params, dict) else {}
         timeout = self.timeout_seconds
-        if isinstance(params.get("timeout_seconds"), (int, float)) and not isinstance(
-            params.get("timeout_seconds"), bool
-        ):
-            timeout = max(1.0, float(params["timeout_seconds"]))
         if request.deadline_at is not None:
-            timeout = min(timeout, max(0.0, request.deadline_at - time.time()))
-        if (request.stop_event and request.stop_event.is_set()) or timeout <= 0:
+            timeout = min(timeout or float("inf"), max(0.0, request.deadline_at - time.time()))
+        if (request.stop_event and request.stop_event.is_set()) or (
+            timeout is not None and timeout <= 0
+        ):
             return failure(
                 *_error(
                     "interrupted",
@@ -540,12 +527,14 @@ class HttpLLMAdapter(LLMAdapter):
         request: LLMAdapterRequest,
         url: str,
         body: dict[str, Any] | None,
-        timeout: float,
+        timeout: float | None,
         *,
         method: str = "POST",
     ) -> tuple[httpx.Response, bytes]:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=min(timeout, CONNECT_TIMEOUT_SECONDS)),
+            timeout=httpx.Timeout(
+                timeout, connect=min(timeout or CONNECT_TIMEOUT_SECONDS, CONNECT_TIMEOUT_SECONDS)
+            ),
             trust_env=False,
             follow_redirects=False,
             limits=httpx.Limits(max_connections=1, max_keepalive_connections=0),
@@ -556,14 +545,14 @@ class HttpLLMAdapter(LLMAdapter):
                     method, url, json=body, headers=_headers(_connection_dict(request.connection))
                 ) as response:
                     cap = (
-                        min(MAX_ERROR_BYTES, self.max_response_bytes)
+                        min(MAX_ERROR_BYTES, self.max_response_bytes or MAX_ERROR_BYTES)
                         if response.status_code >= 300
                         else self.max_response_bytes
                     )
                     raw = bytearray()
                     pending = b""
                     async for chunk in response.aiter_bytes():
-                        if len(raw) + len(chunk) > cap:
+                        if cap is not None and len(raw) + len(chunk) > cap:
                             raise _ResponseLimit
                         raw.extend(chunk)
                         if (
@@ -600,7 +589,7 @@ class HttpLLMAdapter(LLMAdapter):
                     return response, bytes(raw)
 
             task = asyncio.create_task(receive())
-            deadline = time.monotonic() + timeout
+            deadline = time.monotonic() + timeout if timeout is not None else float("inf")
             try:
                 while True:
                     if request.stop_event and request.stop_event.is_set():

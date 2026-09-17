@@ -810,6 +810,8 @@
           },
           "type": {
             "enum": [
+              "agent.input_closed",
+              "agent.input_requested",
               "agent.message_delta",
               "agent.native_event",
               "agent.output_delta",
@@ -823,6 +825,8 @@
               "agent.session_resumed",
               "agent.tool_call",
               "agent.turn_started",
+              "agent.user_message",
+              "agent.user_message_status",
               "artifact.recorded",
               "assignment.applied",
               "attempt.finished",
@@ -2702,6 +2706,18 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "input_request": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Request"
           },
           "label": {
             "title": "Label",
@@ -5815,7 +5831,8 @@
               "stop",
               "cancel",
               "resume",
-              "resolve"
+              "resolve",
+              "message"
             ],
             "title": "Command Type",
             "type": "string"
@@ -5902,6 +5919,28 @@
           }
         },
         "title": "RunObservation",
+        "type": "object"
+      },
+      "RunRestart": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Command Id",
+            "type": "string"
+          },
+          "expected_state_version": {
+            "minimum": 0.0,
+            "title": "Expected State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command_id",
+          "expected_state_version"
+        ],
+        "title": "RunRestart",
         "type": "object"
       },
       "RunSnapshot": {
@@ -10823,6 +10862,58 @@
           }
         },
         "summary": "Cleanup Reservation Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/restart": {
+      "post": {
+        "operationId": "restart_run_endpoint_api_runs__run_id__restart_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRestart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restart Run Endpoint",
         "tags": [
           "domain"
         ]

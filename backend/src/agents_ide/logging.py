@@ -1,13 +1,15 @@
+import faulthandler
 import json
 import logging
 import re
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 SENSITIVE = re.compile(r"secret|password|token|authorization|cookie|pair.?code|credential", re.I)
 _known_secrets: set[str] = set()
+_fault_file: TextIO | None = None
 CONTEXT_FIELDS = (
     "request_id",
     "status",
@@ -21,6 +23,8 @@ CONTEXT_FIELDS = (
     "failures",
     "expected_schema",
     "actual_schema",
+    "exit_code",
+    "exit_code_hex",
 )
 
 
@@ -49,6 +53,11 @@ def exception_details(error: BaseException) -> list[dict[str, Any]]:
         }
         if isinstance(current, OSError):
             item["errno"] = current.errno
+        # SQLite error codes distinguish a busy writer from a broken database
+        # without exposing SQL statements, parameters or exception messages.
+        if hasattr(current, "sqlite_errorcode"):
+            item["sqlite_errorcode"] = current.sqlite_errorcode
+            item["sqlite_errorname"] = getattr(current, "sqlite_errorname", None)
         chain.append(item)
         current = current.__cause__ or (
             None if current.__suppress_context__ else current.__context__
@@ -99,6 +108,16 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(directory: Path, role: str, level: str) -> None:
+    global _fault_file
+
+    if _fault_file is not None:
+        faulthandler.disable()
+        _fault_file.close()
+        _fault_file = None
+    if role in {"worker", "api", "launcher"}:
+        # Native crashes bypass logging/except; retain a Python stack on disk.
+        _fault_file = (directory / f"{role}-fault.log").open("a", encoding="utf-8")
+        faulthandler.enable(file=_fault_file)
     handler = RotatingFileHandler(
         directory / f"{role}.jsonl", maxBytes=5_000_000, backupCount=3, encoding="utf-8"
     )

@@ -194,6 +194,10 @@ def _check_resume(session: Session, run: Run) -> None:
     blockers = target.get("blockers", [])
     for code in blockers:
         if code == "limit_exceeded":
+            from agents_ide.operations.storage import settings_for
+
+            if not settings_for(session).enforce_execution_limits:
+                continue
             limits = effective_limits(snapshot, runtime)
             reason = (
                 json.loads(run.waiting_reason_json or "{}") or runtime.get("waiting_reason") or {}
@@ -256,6 +260,12 @@ def _check_resume(session: Session, run: Run) -> None:
             runtime.pop("retry_resolution", None)
             if run.current_attempt_id:
                 runtime.setdefault("retry_authorized_attempts", []).append(run.current_attempt_id)
+        elif (
+            code == "configuration_invalid"
+            and json.loads(run.waiting_reason_json or "{}").get("details", {}).get("reason")
+            == "runtime_expression_invalid"
+        ):
+            _validate_current_prompt(session, run, snapshot, runtime, target)
         elif code in {"unknown_external_result", "owner_expired", "reconciliation_required"}:
             if not runtime.get("work"):
                 raise AppError(
@@ -271,11 +281,57 @@ def _check_resume(session: Session, run: Run) -> None:
     run.resume_target_json, run.runtime_json = to_json(target), to_json(runtime)
 
 
+def _validate_current_prompt(
+    session: Session,
+    run: Run,
+    snapshot: dict[str, Any],
+    runtime: dict[str, Any],
+    target: dict[str, Any],
+) -> None:
+    from agents_ide.domain.graph_ast import ASTError, EvaluationContext, Value, substitute
+    from agents_ide.engine.visits import load_latest_results
+
+    nodes = {node["id"]: node for node in snapshot["graph"]["nodes"]}
+    node_id = target.get("node_id")
+    if nodes.get(node_id, {}).get("type") not in {"AgentTask", "LLMRequest"}:
+        raise AppError(
+            "resolution_required", "Исправьте выражение в шаблоне и создайте новый запуск", 409
+        )
+    config = snapshot["dependencies"]["nodes"][node_id]
+    work = runtime["work"]
+    key = {"repair": "prompt_repair", "next_item": "prompt_next_item"}.get(work["mode"], "prompt")
+    context = EvaluationContext(
+        inputs={key: Value.of(value) for key, value in snapshot["input"]["values"].items()},
+        latest=load_latest_results(
+            session, run.id, runtime["cycle_id"], nodes, scope=work["scope"]
+        ),
+        work={key: Value.of(value) for key, value in work.items()},
+        known_node_ids=frozenset(nodes),
+        project={
+            "id": Value.of(run.project_id),
+            "path": Value.of(snapshot["workspace"]["workspace_path"]),
+        },
+        run={"id": Value.of(run.id), "cycle_id": Value.of(runtime["cycle_id"])},
+        cycle_id=runtime["cycle_id"],
+        scope=work["scope"],
+    )
+    try:
+        substitute(config.get(key) or config.get("prompt", ""), context, strict=True)
+    except ASTError as exc:
+        raise AppError(
+            "resolution_required", f"Исправьте выражение в шаблоне: {exc}", 409
+        ) from None
+
+
 def prepare_command(
     session: Session, run: Run, command: RunCommand
 ) -> tuple[str, dict[str, Any] | None]:
     previous = run.state
     kind = command.command_type
+    if kind == "message":
+        from agents_ide.services.run_messages import prepare_message
+
+        return "accepted", prepare_message(session, run, command)
     if kind == "resolve":
         target = json.loads(run.resume_target_json or "{}")
         if run.state != "waiting_input" and not (
@@ -297,7 +353,9 @@ def prepare_command(
     if run.state in {"paused", "stopped", "waiting_input"}:
         from agents_ide.worker.processes import stored_processes_stopped
 
-        if not stored_processes_stopped(session, run) or unsettled_attempts(session, run):
+        if not stored_processes_stopped(session, run) or (
+            kind != "cancel" and unsettled_attempts(session, run)
+        ):
             # Keep all blockers and the reservation until worker reconciliation.
             run.stop_goal = (
                 "cancelled" if kind == "cancel" else "stopped" if kind == "stop" else run.stop_goal

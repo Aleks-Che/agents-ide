@@ -128,6 +128,60 @@ def test_adapter_uses_session_id_for_repeated_calls(fake_opencode_process):
     assert adapter.external_session_id.startswith("ses_")
 
 
+@pytest.mark.parametrize("question", [False, True])
+def test_opencode_live_input_and_questions(fake_opencode_process, question):
+    from agents_ide.adapters.base import AgentAdapterRequest
+
+    base_url, password = fake_opencode_process
+    adapter = OpenCodeAdapter(
+        session=RunSession(
+            base_url=base_url,
+            username="opencode",
+            password=password,
+            workspace_path="C:/work/fake",
+            settings={},
+            server_version="1.0.0",
+        ),
+        timeout_seconds=10,
+    )
+    pending, events = [], []
+
+    def emit(kind, payload):
+        events.append((kind, payload))
+        if kind == "agent.input_requested":
+            pending.append(
+                {
+                    "command_id": "reply",
+                    "text": "README.md",
+                    "question_id": payload["question_id"],
+                    "answers": [["README.md"]],
+                }
+            )
+        elif (
+            kind == "attempt.text_delta"
+            and not question
+            and not pending
+            and not any(k == "agent.user_message_status" for k, _ in events)
+        ):
+            pending.append({"command_id": "steer", "text": "Check README.md"})
+
+    request = AgentAdapterRequest(
+        role="implementer",
+        model_id="anthropic/claude-haiku-4-20250514",
+        prompt="ask user slow" if question else "slow",
+        context_package={},
+        workspace_path="C:/work/fake",
+        capabilities={},
+        params={},
+        emit_event=emit,
+        receive_message=lambda: pending.pop(0) if pending else None,
+    )
+    assert adapter.run(request).succeeded
+    assert any(k == "agent.user_message_status" and p["delivered"] for k, p in events)
+    if question:
+        assert any(k == "agent.input_closed" for k, _ in events)
+
+
 def test_adapter_invokes_opencode_stop(fake_opencode_process):
     base_url, password = fake_opencode_process
     session = RunSession(

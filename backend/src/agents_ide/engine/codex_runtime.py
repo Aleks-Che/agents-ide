@@ -63,12 +63,20 @@ def validate_settings(settings: dict[str, Any], *, execution: bool = True) -> No
         raise AppError(
             "configuration_invalid", "Codex arguments and environment are server-managed", 409
         )
-    if settings.get("approval_policy", "never") != "never":
-        raise AppError("configuration_invalid", "Codex requires approval_policy=never", 409)
-    if execution and settings.get("permission_mode") != "read_only":
+    from agents_ide.domain.harness_settings import approval_policy
+
+    if approval_policy(settings) not in {"never", "on-request"} or (
+        "auto_approve" in settings and type(settings["auto_approve"]) is not bool
+    ):
+        raise AppError("configuration_invalid", "Некорректный режим подтверждения Codex", 409)
+    if execution and settings.get("permission_mode") not in {
+        "read_only",
+        "workspace_write",
+        "full_access",
+    }:
         raise AppError(
             "configuration_invalid",
-            "Codex requires permission_mode=read_only until write isolation is verified",
+            "Выберите режим доступа Codex",
             409,
         )
 

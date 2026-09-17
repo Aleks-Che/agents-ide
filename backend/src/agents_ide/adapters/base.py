@@ -99,6 +99,7 @@ class AgentAdapterRequest:
     emit_event: Callable[[str, dict[str, Any]], None] | None = None
     stop_event: Event | None = None
     check_owned: Callable[[], None] | None = None
+    receive_message: Callable[[], dict[str, Any] | None] | None = None
 
 
 @dataclass(frozen=True)

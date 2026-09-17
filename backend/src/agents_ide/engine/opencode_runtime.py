@@ -42,21 +42,25 @@ def free_loopback_port() -> int:
 
 
 def validate_settings(settings: dict[str, Any], *, execution: bool = True) -> None:
+    if "auto_approve" in settings and type(settings["auto_approve"]) is not bool:
+        raise AppError("configuration_invalid", "Некорректный режим подтверждения OpenCode", 409)
     if settings.get("auth", True) is not True or settings.get("serve_args") or settings.get("env"):
         raise AppError(
             "configuration_invalid",
             "OpenCode auth, arguments and environment are server-managed",
             409,
         )
-    if execution and settings.get("permission_mode") != "no_tools":
+    if execution and settings.get("permission_mode") not in {"no_tools", "native"}:
         raise AppError(
             "configuration_invalid",
-            "OpenCode requires permission_mode=no_tools until write isolation is verified",
+            "Выберите режим OpenCode: native или no_tools",
             409,
         )
 
 
-def server_environment(password: str, username: str = "opencode") -> dict[str, str]:
+def server_environment(
+    password: str, username: str = "opencode", *, permission_mode: str = "no_tools"
+) -> dict[str, str]:
     env = command_environment()
     # Native harness credentials may be read from its own store; never inherit
     # provider tokens, proxy settings, NODE_OPTIONS, BUN_OPTIONS or config injection.
@@ -89,6 +93,12 @@ def server_environment(password: str, username: str = "opencode") -> dict[str, s
             }
         ),
     )
+    if permission_mode == "native":
+        # Keep the user's native tools and allow/ask/deny policy, including project
+        # configuration. Do not replace it with an allow-all permission override.
+        for key in ("OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_CLAUDE_CODE"):
+            env.pop(key, None)
+        env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"autoupdate": False, "share": "disabled"})
     return env
 
 
@@ -105,6 +115,7 @@ class OpenCodeRuntime:
     cached_models: tuple[str, ...] = ()
     entry: ProcessRegistryEntry | None = field(default=None, repr=False)
     supervisor: ProcessSupervisor | None = field(default=None, repr=False)
+    permission_mode: str = "no_tools"
     _closed: bool = False
 
     @classmethod
@@ -119,7 +130,9 @@ class OpenCodeRuntime:
         check_owned: Callable[[], None] | None = None,
         stop_event: threading.Event | None = None,
         port: int | None = None,
+        permission_mode: str = "no_tools",
     ) -> OpenCodeRuntime:
+        validate_settings({"permission_mode": permission_mode})
         path = Path(executable)
         if (
             not path.is_absolute()
@@ -145,8 +158,9 @@ class OpenCodeRuntime:
                 "127.0.0.1",
                 "--port",
                 str(chosen_port),
-                "--pure",
             ]
+            if permission_mode == "no_tools":
+                argv.append("--pure")
             group = ProcessGroup()
             runtime = None
             entry = None
@@ -156,7 +170,7 @@ class OpenCodeRuntime:
                     entry = supervisor.start(
                         argv,
                         cwd=workspace_path,
-                        env=server_environment(password),
+                        env=server_environment(password, permission_mode=permission_mode),
                         role="opencode_server",
                         kind="harness",
                         attempt_id=attempt_id,
@@ -166,7 +180,11 @@ class OpenCodeRuntime:
                     assert entry.group is not None
                     group, pid, created = entry.group, entry.pid, entry.create_time
                 else:
-                    child = group.start(argv, workspace_path, server_environment(password))
+                    child = group.start(
+                        argv,
+                        workspace_path,
+                        server_environment(password, permission_mode=permission_mode),
+                    )
                     pid = child.pid
                     created = psutil.Process(pid).create_time()
                 runtime = cls(
@@ -179,6 +197,7 @@ class OpenCodeRuntime:
                     created,
                     entry=entry,
                     supervisor=supervisor,
+                    permission_mode=permission_mode,
                 )
                 while time.monotonic() < deadline:
                     if check_owned:
@@ -262,7 +281,7 @@ class OpenCodeRuntime:
             self.password,
             str(self.workspace_path),
             {
-                "permission_mode": "no_tools",
+                "permission_mode": self.permission_mode,
                 "model_metadata": getattr(self.cached_models, "metadata", {}),
             },
             self.server_version,
@@ -298,7 +317,7 @@ class OpenCodeRuntime:
             "server_version": self.server_version,
             "workspace_path": str(self.workspace_path),
             "catalog_count": len(self.cached_models),
-            "permission_mode": "no_tools",
+            "permission_mode": self.permission_mode,
         }
 
 

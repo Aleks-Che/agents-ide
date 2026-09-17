@@ -46,6 +46,33 @@ from agents_ide.persistence.models import (
 llm_server = provider_fixture
 
 
+def test_llmrequest_large_response_and_context_without_default_limits(monkeypatch):
+    original = httpx.AsyncClient
+    text = "x" * (11 * 1024 * 1024)
+    received = []
+
+    async def handler(request):
+        received.append(json.loads(request.content))
+        assert request.extensions["timeout"]["read"] is None
+        return httpx.Response(200, json=_chat_body(text))
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: original(transport=httpx.MockTransport(handler), **kw)
+    )
+    context = "c" * (3 * 1024 * 1024)
+    request = replace(
+        _request("http://127.0.0.1/v1"),
+        context_package={"evidence": context},
+        params={"timeout_seconds": 1},
+    )
+    result = HttpLLMAdapter().run(request)
+    assert result.succeeded
+    assert result.raw_text == text
+    assert context in received[0]["messages"][0]["content"]
+    assert "max_tokens" not in received[0]
+    assert "max_output_tokens" not in received[0]
+
+
 def chain(*nodes):
     all_nodes = [{"id": "s", "type": "Start"}, *nodes, {"id": "e", "type": "End"}]
     return {
@@ -477,6 +504,7 @@ def test_later_file_change_invalidates_successful_command_report(
 def test_dynamic_evidence_command_filter_and_denied_requests(
     authenticated, tmp_path, settings, monkeypatch, requested, limit, expected
 ):
+    settings.enforce_execution_limits = True
     from agents_ide.adapters.base import LLMResult
 
     def answer(self, request):
