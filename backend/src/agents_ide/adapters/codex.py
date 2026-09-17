@@ -13,6 +13,7 @@ import re
 import subprocess
 import threading
 import time
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -393,11 +394,27 @@ class CodexAdapter(AgentAdapter):
         sent = False
         terminal = False
         self._turn_id = None
+        interrupt_started: float | None = None
+        interrupt_sent = False
+        # A running worker may import this adapter after a code update, while its
+        # request class was loaded earlier. Missing opt-in fields retain old semantics.
+        resume_required = getattr(request, "resume_required", False)
+        phase = "prepare_request"
 
         def check() -> None:
+            nonlocal interrupt_started, interrupt_sent
             if request.check_owned:
                 request.check_owned()
             if (request.stop_event and request.stop_event.is_set()) or time.time() >= deadline:
+                if sent:
+                    # Keep reading the turn after interrupt, including its final tool events.
+                    # A request acknowledgement alone does not confirm that the turn stopped.
+                    interrupt_started = interrupt_started or time.monotonic()
+                    if self._turn_id and not interrupt_sent:
+                        self.interrupt(self.external_session_id or "")
+                        interrupt_sent = True
+                    if time.monotonic() - interrupt_started < 5:
+                        return
                 raise InterruptedError
 
         def emit(event_type: str, **payload: Any) -> None:
@@ -405,14 +422,54 @@ class CodexAdapter(AgentAdapter):
                 request.emit_event(event_type, {"session_id": self.external_session_id, **payload})
 
         def failure(
-            code: str, outcome: ExternalOutcome = ExternalOutcome.UNKNOWN, *, safe: bool = False
+            code: str,
+            outcome: ExternalOutcome = ExternalOutcome.UNKNOWN,
+            *,
+            safe: bool = False,
+            interruption_confirmed: bool = False,
+            cause: Exception | None = None,
         ) -> AgentResult:
+            details: dict[str, Any] = {}
+            if interruption_confirmed:
+                details["interruption_confirmed"] = True
+            if cause is not None:
+                # Never persist exception text: it can contain provider content or secrets.
+                details.update(phase=phase, exception_type=type(cause).__name__)
+                frames = [
+                    f for f in traceback.extract_tb(cause.__traceback__) if f.filename == __file__
+                ]
+                if frames:
+                    details["location"] = f"{frames[-1].name}:{frames[-1].lineno}"
+                field = (
+                    cause.name
+                    if isinstance(cause, AttributeError)
+                    else (cause.args[0] if isinstance(cause, KeyError) and cause.args else None)
+                )
+                if isinstance(field, str) and field in {
+                    "resume_required",
+                    "id",
+                    "result",
+                    "thread",
+                    "turn",
+                    "params",
+                    "method",
+                    "status",
+                    "type",
+                    "item",
+                    "permission_mode",
+                }:
+                    details["field"] = field
             return AgentResult(
                 outcome,
                 "",
                 None,
                 None,
-                error=AdapterError(code, code, "safe" if safe else "unknown"),
+                error=AdapterError(
+                    code,
+                    code,
+                    "safe" if safe else "unknown",
+                    details,
+                ),
                 no_effect=safe,
                 elapsed_seconds=time.monotonic() - started,
             )
@@ -420,10 +477,16 @@ class CodexAdapter(AgentAdapter):
         try:
             check()
             options = self._options(request)
+            phase = "initialize"
             self.initialize(check=check)
-            tid = request.resume_session_id or self.external_session_id
+            tid = request.resume_session_id or (
+                None if resume_required else self.external_session_id
+            )
+            if resume_required and not tid:
+                return failure("session_resume_unavailable", ExternalOutcome.UNAVAILABLE, safe=True)
             resumed = bool(tid)
             if tid:
+                phase = "resume_session"
                 validate_thread_id(tid)
                 response = self._request_response(
                     "thread/resume",
@@ -448,6 +511,10 @@ class CodexAdapter(AgentAdapter):
                         )
                     ):
                         emit("agent.session_invalidated", reason="thread_not_found")
+                        if resume_required:
+                            return failure(
+                                "session_resume_unavailable", ExternalOutcome.UNAVAILABLE, safe=True
+                            )
                         tid = None
                     else:
                         return failure(
@@ -455,11 +522,13 @@ class CodexAdapter(AgentAdapter):
                         )
             if not tid:
                 resumed = False
+                phase = "create_session"
                 response = self._request_response(
                     "thread/start", options, timeout=self.request_timeout, check=check
                 )
                 if response.get("error"):
                     return failure("thread_start_failed", ExternalOutcome.UNAVAILABLE, safe=True)
+            phase = "validate_session"
             thread = response["result"]["thread"]
             if self.session.settings.get("isolated_config"):
                 from agents_ide.security.codex_policy import PROFILE
@@ -481,6 +550,7 @@ class CodexAdapter(AgentAdapter):
             self._binding = SessionBinding(
                 returned_id, self._binding.resume_count + 1 if resumed else 0
             )
+            phase = "record_session"
             archive_native(
                 request.emit_event,
                 "codex",
@@ -495,6 +565,7 @@ class CodexAdapter(AgentAdapter):
                 permission_mode=self.session.settings["permission_mode"],
             )
             check()
+            phase = "prepare_turn"
             turn_params: dict[str, Any] = {
                 "threadId": returned_id,
                 "model": request.model_id,
@@ -538,6 +609,7 @@ class CodexAdapter(AgentAdapter):
                 )
             )
             pending: list[dict[str, Any]] = []
+            phase = "dispatch_turn"
             sent = True  # Any loss during dispatch is ambiguous until proven rejected.
             response = self._request_response(
                 "turn/start",
@@ -564,9 +636,14 @@ class CodexAdapter(AgentAdapter):
             questions: dict[str, tuple[Any, list[dict[str, Any]]]] = {}
             approvals: dict[str, dict[str, Any]] = {}
             next_input_poll = 0.0
+            phase = "receive_turn"
             while True:
                 check()
-                if request.receive_message and time.monotonic() >= next_input_poll:
+                if (
+                    request.receive_message
+                    and interrupt_started is None
+                    and time.monotonic() >= next_input_poll
+                ):
                     next_input_poll = time.monotonic() + 0.4
                     incoming = request.receive_message()
                     if incoming:
@@ -758,7 +835,7 @@ class CodexAdapter(AgentAdapter):
                         return failure("permission_denied", ExternalOutcome.PERMISSION_DENIED)
                     if turn.get("status") == "interrupted":
                         emit("agent.session_aborted", message_id=self._turn_id)
-                        return failure("interrupted")
+                        return failure("interrupted", interruption_confirmed=True)
                     if turn.get("error") or turn.get("status") != "completed":
                         if not texts and not tools:
                             try:
@@ -806,11 +883,12 @@ class CodexAdapter(AgentAdapter):
                 ExternalOutcome.UNKNOWN if sent else ExternalOutcome.RETRYABLE_FAILURE,
                 safe=not sent,
             )
-        except (ValueError, KeyError, TypeError, AttributeError):
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
             return failure(
                 "server_transport_error",
                 ExternalOutcome.UNKNOWN if sent else ExternalOutcome.CONFIRMED_FAILURE,
                 safe=not sent,
+                cause=exc,
             )
         finally:
             # Never leave an ambiguous turn running in a connection reused by

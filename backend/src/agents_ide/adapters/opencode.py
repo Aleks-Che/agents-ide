@@ -215,8 +215,16 @@ class OpenCodeAdapter(AgentAdapter):
             time.time() + self.timeout_seconds if self.timeout_seconds is not None else float("inf")
         )
 
-        def fail(code: str, outcome: ExternalOutcome, *, safe: bool = False) -> AgentResult:
-            details = {}
+        def fail(
+            code: str,
+            outcome: ExternalOutcome,
+            *,
+            safe: bool = False,
+            interruption_confirmed: bool = False,
+        ) -> AgentResult:
+            details: dict[str, Any] = (
+                {"interruption_confirmed": True} if interruption_confirmed else {}
+            )
             if code == "event_stream_lost" and errors:
                 error = errors[0]
                 details = {
@@ -271,7 +279,14 @@ class OpenCodeAdapter(AgentAdapter):
             ) as client:
                 # Resume only the exact engine-selected session. Check before sending a message;
                 # a 404 returned after dispatch is not proof of zero model/tool execution.
-                resume = request.resume_session_id or self.external_session_id
+                resume_required = getattr(request, "resume_required", False)
+                resume = request.resume_session_id or (
+                    None if resume_required else self.external_session_id
+                )
+                if resume_required and not resume:
+                    return fail(
+                        "session_resume_unavailable", ExternalOutcome.UNAVAILABLE, safe=True
+                    )
                 if resume:
                     response, raw = bounded_request(
                         client, "GET", f"/session/{validate_id(resume)}"
@@ -282,6 +297,10 @@ class OpenCodeAdapter(AgentAdapter):
                             {"session_id": resume, "reason": "not_found"},
                         )
                         self._binding = SessionBinding("")
+                        if resume_required:
+                            return fail(
+                                "session_resume_unavailable", ExternalOutcome.UNAVAILABLE, safe=True
+                            )
                         resume = None
                     elif response.status_code != 200:
                         return self._http_failure(response.status_code, dispatched=False)
@@ -683,7 +702,7 @@ class OpenCodeAdapter(AgentAdapter):
                 and info["error"].get("name") == "MessageAbortedError"
             ):
                 emit("agent.session_aborted", {"session_id": resume})
-                return fail("interrupted", ExternalOutcome.RETRYABLE_FAILURE, safe=True)
+                return fail("interrupted", ExternalOutcome.UNKNOWN, interruption_confirmed=True)
             if info.get("error"):
                 native_error = info["error"]
                 usage = info.get("tokens", {})

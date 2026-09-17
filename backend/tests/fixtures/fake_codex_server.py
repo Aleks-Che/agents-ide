@@ -118,6 +118,8 @@ class Handler:
             tid = params["threadId"]
             if tid not in self.sessions:
                 raise ValueError("thread not found")
+            self.sessions[tid].setdefault("prompts", []).append(params["input"][0]["text"])
+            self.save()
             turn = str(uuid.uuid4())
             self.active[turn] = threading.Event()
             if os.environ.get("FAKE_CODEX_EARLY_EVENTS"):
@@ -188,7 +190,7 @@ class Handler:
         text = os.environ.get("FAKE_CODEX_FINAL_TEXT", "hello from codex")
         if os.environ.get("FAKE_CODEX_LARGE_RESPONSE"):
             text = "x" * (11 * 1024 * 1024)
-        if "force_decision=" in prompt:
+        if any("force_decision=" in p for p in self.sessions[tid]["prompts"]):
             text = json.dumps({"verdict": "passed", "feedback": "fixture"})
         item = {"id": "answer", "type": "agentMessage", "text": text, "phase": "final_answer"}
         if not os.environ.get("FAKE_CODEX_FINAL_ONLY"):

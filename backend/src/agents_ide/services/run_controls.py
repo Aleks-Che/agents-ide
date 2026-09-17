@@ -13,6 +13,7 @@ from agents_ide.engine.events import append_event
 from agents_ide.engine.policy import effective_limits
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
+    AgentSession,
     ArtifactManifest,
     CommandJournal,
     HarnessProfile,
@@ -60,6 +61,23 @@ def unsettled_attempts(session: Session, run: Run) -> list[StepAttempt]:
         )
         if a.id not in authorized
     ]
+
+
+def reset_stopped_agent(runtime: dict[str, Any], session_id: str | None = None) -> None:
+    """STOP retries the stage's original task in a fresh native session."""
+    current = runtime.pop("current_agent_session", {})
+    continuation = runtime.pop("agent_continuation", {})
+    for key in (current.get("session_key"), continuation.get("session_key")):
+        runtime.get("native_sessions", {}).pop(key, None)
+    # Runs stopped before session checkpoints were introduced still have AgentSession rows.
+    if session_id:
+        runtime["native_sessions"] = {
+            key: value
+            for key, value in runtime.get("native_sessions", {}).items()
+            if value.get("session_id") != session_id
+        }
+    runtime.update(candidate_index=None, next_candidate_index=0, candidate_retries=0)
+    runtime.pop("retry_at", None)
 
 
 def _resolve(session: Session, run: Run, command: RunCommand) -> dict[str, Any]:
@@ -191,6 +209,19 @@ def _check_resume(session: Session, run: Run) -> None:
     target = json.loads(run.resume_target_json or "{}")
     if not stored_processes_stopped(session, run) or unsettled_attempts(session, run):
         raise AppError("reconciliation_required", "Прежняя операция требует сверки", 409)
+    if run.state == "stopped":
+        execution = (
+            session.get(StepExecution, run.current_execution_id)
+            if run.current_execution_id
+            else None
+        )
+        if execution and execution.status != "succeeded":
+            session_id = session.scalar(
+                select(AgentSession.external_session_id).where(
+                    AgentSession.attempt_id == run.current_attempt_id
+                )
+            )
+            reset_stopped_agent(runtime, session_id)
     blockers = target.get("blockers", [])
     for code in blockers:
         if code == "limit_exceeded":
@@ -266,6 +297,9 @@ def _check_resume(session: Session, run: Run) -> None:
             == "runtime_expression_invalid"
         ):
             _validate_current_prompt(session, run, snapshot, runtime, target)
+        elif code == "session_resume_unavailable":
+            # Retry only the saved session; STOP explicitly starts this stage afresh.
+            continue
         elif code in {"unknown_external_result", "owner_expired", "reconciliation_required"}:
             if not runtime.get("work"):
                 raise AppError(
@@ -365,6 +399,15 @@ def prepare_command(
                 ensure_queue(session, run)
             return "accepted", None
         run.state = {"pause": "paused", "stop": "stopped", "cancel": "cancelled"}[kind]
+        if kind == "stop":
+            runtime = json.loads(run.runtime_json)
+            reset_stopped_agent(runtime)
+            run.runtime_json = to_json(runtime)
+            target = json.loads(run.resume_target_json or "{}")
+            target["blockers"] = [
+                code for code in target.get("blockers", []) if code != "session_resume_unavailable"
+            ]
+            run.resume_target_json = to_json(target)
         if run.state == "cancelled":
             run.finished_at = utc_now()
             for reservation in session.scalars(

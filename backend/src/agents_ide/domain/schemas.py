@@ -836,6 +836,7 @@ class WaitingReason(ApiModel):
         "auth_required",
         "secret_unavailable",
         "model_unavailable",
+        "session_resume_unavailable",
         "model_group_exhausted",
         "external_change_detected",
         "unknown_external_result",

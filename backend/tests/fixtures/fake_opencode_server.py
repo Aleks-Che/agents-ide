@@ -182,6 +182,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(401, {"name": "ProviderAuthError"})
             return
         prompt = body["parts"][0]["text"]
+        self.sessions[sid].setdefault("prompts", []).append(prompt)
+        if self.persistence_path:
+            Path(self.persistence_path).write_text(json.dumps(self.sessions), encoding="utf-8")
         if prompt == "large tool stream":
             # Read output is duplicated in metadata by the real OpenCode server.
             output = "file content " * 4000
@@ -256,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(0.02)
         text = "hello from opencode" + "x" * self.response_size
         for verdict in ("passed", "failed", "inconclusive"):
-            if f"force_decision={verdict}" in prompt:
+            if any(f"force_decision={verdict}" in p for p in self.sessions[sid]["prompts"]):
                 text = json.dumps({"verdict": verdict, "feedback": "fixture"})
         info = {
             "id": "msg_" + uuid4().hex,

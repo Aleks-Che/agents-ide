@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -95,6 +96,57 @@ def test_resume_transient_error_does_not_silently_create_thread(transport):
     adapter, trace = transport(resume_error=1)
     result = adapter.run(replace(_make_request(), resume_session_id="existing-thread"))
     assert not result.succeeded
+    assert not any(
+        r["message"].get("method") in {"thread/start", "turn/start"} for r in _read_records(trace)
+    )
+
+
+def test_request_loaded_before_pause_update_remains_compatible(transport):
+    adapter, trace = transport()
+    legacy_request = SimpleNamespace(
+        **{key: value for key, value in vars(_make_request()).items() if key != "resume_required"}
+    )
+    assert adapter.run(legacy_request).succeeded
+    assert any(r["message"].get("method") == "turn/start" for r in _read_records(trace))
+
+
+@pytest.mark.parametrize("malformed", ["thread_id_missing", "exception_with_private_text"])
+def test_protocol_failure_records_location_without_provider_content(
+    transport, monkeypatch, malformed
+):
+    adapter, trace = transport()
+    request_response = adapter._request_response
+
+    def respond(method, *args, **kwargs):
+        if method == "thread/start":
+            if malformed == "exception_with_private_text":
+                raise ValueError("private-provider-content-and-credentials")
+            return {"result": {"thread": {"turns": []}}}
+        return request_response(method, *args, **kwargs)
+
+    monkeypatch.setattr(adapter, "_request_response", respond)
+    result = adapter.run(_make_request())
+    assert result.error.code == "server_transport_error"
+    assert result.no_effect
+    assert "private-provider" not in repr(result)
+    assert result.error.details["location"].startswith("_run:")
+    if malformed == "thread_id_missing":
+        assert result.error.details["phase"] == "validate_session"
+        assert result.error.details["exception_type"] == "KeyError"
+        assert result.error.details["field"] == "id"
+    else:
+        assert result.error.details["phase"] == "create_session"
+        assert result.error.details["exception_type"] == "ValueError"
+    assert not any(r["message"].get("method") == "turn/start" for r in _read_records(trace))
+
+
+def test_paused_thread_missing_does_not_dispatch_new_task(transport):
+    adapter, trace = transport()
+    result = adapter.run(
+        replace(_make_request(), resume_session_id="missing-thread", resume_required=True)
+    )
+    assert result.error.code == "session_resume_unavailable"
+    assert result.no_effect
     assert not any(
         r["message"].get("method") in {"thread/start", "turn/start"} for r in _read_records(trace)
     )
@@ -375,7 +427,7 @@ def test_probe_api_uses_temporary_workspace_and_caches_only_success(
 
 
 @pytest.mark.parametrize("control_kind", ["stop", "pause"])
-def test_runner_control_preserves_unknown_and_resumes_completed_session(
+def test_runner_pause_continues_session_and_stop_starts_fresh(
     authenticated, settings, tmp_path, runtime_launch, control_kind
 ):
     payload = seed(authenticated, tmp_path)
@@ -385,7 +437,7 @@ def test_runner_control_preserves_unknown_and_resumes_completed_session(
     run_id = response.json()["id"]
     factory = client.app.state.session_factory
     calls, trace, scenarios = runtime_launch
-    scenarios["FAKE_CODEX_RESPONSE_DELAY_SECONDS"] = "20" if control_kind == "stop" else "1"
+    scenarios["FAKE_CODEX_RESPONSE_DELAY_SECONDS"] = "20"
 
     def new_runner():
         job = claim_next_job(factory, worker_id="controls6b", lease_seconds=300)
@@ -424,7 +476,7 @@ def test_runner_control_preserves_unknown_and_resumes_completed_session(
             f"/api/runs/{run_id}/commands",
             headers=headers,
             json={
-                "command_id": kind,
+                "command_id": f"{kind}-{current['state_version']}",
                 "command_type": kind,
                 "expected_state_version": current["state_version"],
             },
@@ -434,22 +486,47 @@ def test_runner_control_preserves_unknown_and_resumes_completed_session(
     control(control_kind)
     worker.join(timeout=15)
     assert not worker.is_alive() and not failures, failures
-    if control_kind == "stop":
-        assert results[0].final_state == "waiting_input"
-        current = client.get(f"/api/runs/{run_id}", headers=headers).json()
-        assert current["waiting_reason"]["code"] == "unknown_external_result"
-        assert not runner.registry.by_run(run_id)
-        assert len(calls) == 1  # No automatic repeat after an ambiguous turn.
-        return
-    assert results[0].final_state == "paused"
+    assert results[0].final_state == ("stopped" if control_kind == "stop" else "paused")
     assert not runner.registry.by_run(run_id)
+    pauses = 4 if control_kind == "pause" else 1
+    for index in range(1, pauses):
+        control("resume")
+        runner = new_runner()
+        worker = threading.Thread(target=execute)
+        worker.start()
+        until = time.monotonic() + 10
+        while time.monotonic() < until:
+            turns = [r for r in _read_records(trace) if r["message"].get("method") == "turn/start"]
+            if len(turns) > index:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail("Continuation was not dispatched")
+        control("pause")
+        worker.join(timeout=15)
+        assert not worker.is_alive() and not failures, failures
+        assert results[-1].final_state == "paused"
+        assert not runner.registry.by_run(run_id)
     scenarios.clear()
     control("resume")
     resumed = new_runner().execute(run_id)
     assert resumed.final_state == "completed", resumed
-    assert len(calls) == 2
+    assert len(calls) == pauses + 1
     with factory() as db:
         sessions = list(db.scalars(select(AgentSession).order_by(AgentSession.started_at)))
-        assert len(sessions) == 3
-        assert sessions[0].external_session_id == sessions[2].external_session_id
+        assert len(sessions) == pauses + 3
+        if control_kind == "pause":
+            assert len({s.external_session_id for s in sessions[: pauses + 1]}) == 1
+        assert (sessions[0].external_session_id == sessions[1].external_session_id) == (
+            control_kind == "pause"
+        )
         assert all(p.state == "finished" for p in db.scalars(select(ProcessSupervision)))
+    turns = [
+        r["message"]["params"]
+        for r in _read_records(trace)
+        if r["message"].get("method") == "turn/start"
+    ]
+    prompts = [t["input"][0]["text"] for t in turns]
+    assert ("Continue the interrupted task" in prompts[1]) == (control_kind == "pause")
+    if control_kind == "stop":
+        assert prompts[0] == prompts[1]

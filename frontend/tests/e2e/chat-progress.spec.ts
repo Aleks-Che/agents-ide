@@ -208,9 +208,24 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   )
   await expect(progress.getByLabel('Сообщение текущему агенту')).toHaveCount(0)
   await navigation.getByRole('button', { name: /Review/ }).click()
-  await progress.getByRole('button', { name: 'Остановить выполнение' }).click()
-  await expect(progress).toContainText('Остановка запрошена')
-  checkpoint(run.id, 'stopped')
+  await progress
+    .getByRole('button', { name: 'Приостановить выполнение' })
+    .click()
+  await expect(progress).toContainText('Пауза запрошена')
+  await expect(
+    progress.getByRole('button', { name: 'Приостановить выполнение' }),
+  ).toBeDisabled()
+  checkpoint(run.id, 'paused')
+  await expect(progress).toContainText('На паузе')
+  await expect(
+    progress.getByRole('button', { name: 'Продолжить выполнение' }),
+  ).toBeEnabled()
+  await progress
+    .getByRole('button', { name: 'Остановить выполнение', exact: true })
+    .click()
+  await expect(progress).toContainText(
+    'Остановлен; START начнёт текущий этап заново',
+  )
   await expect(
     progress.getByRole('button', { name: 'Продолжить выполнение' }),
   ).toBeEnabled()

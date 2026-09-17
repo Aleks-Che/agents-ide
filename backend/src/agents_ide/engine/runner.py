@@ -1201,6 +1201,10 @@ class Runner:
             else None
         )
         checkpoint = json.loads(run.resume_target_json or "{}")
+        if chosen.command_type == "stop":
+            from agents_ide.services.run_controls import reset_stopped_agent
+
+            reset_stopped_agent(self.runtime)
         if execution and execution.status in {"running", "retry_wait", "waiting_input"}:
             execution.status = "interrupted"
             checkpoint.update(
@@ -1235,6 +1239,7 @@ class Runner:
         *,
         deadline_at: float | None,
         stop_event: threading.Event,
+        allow_pause: bool = False,
     ) -> AgentResult | LLMResult:
         import time
 
@@ -1287,7 +1292,9 @@ class Runner:
                         attempt = session.get(StepAttempt, attempt_id)
                         assert attempt is not None
                         attempt.heartbeat_at = utc_now()
-                        requested = run.state == "stop_requested"
+                        requested = run.state == "stop_requested" or (
+                            allow_pause and run.state == "pause_requested"
+                        )
                     if self.registry:
                         ProcessSupervisor(
                             self.session_factory,
@@ -2209,6 +2216,16 @@ class Runner:
         ) or config.get("prompt", "")
         with self.session_factory() as session:
             prompt = substitute(template, self._context(session), strict=True)
+        continuation = self.runtime.get("agent_continuation", {})
+        if continuation.get("execution_id") != visit.execution_id:
+            continuation = {}
+        if continuation:
+            prompt = (
+                "Continue the interrupted task in this session from where you stopped. "
+                "Use the existing conversation, tool results and current workspace to determine "
+                "what remains. Do not repeat completed actions. Verify any interrupted tool's "
+                "effects before retrying it. Follow the original task and its output requirements."
+            )
         previous: dict[str, Any] | None = None
         diagnostics: list[dict[str, Any]] = list(self.runtime.get("candidate_history", []))
         if self.runtime.get("retry_at") and (
@@ -2216,10 +2233,16 @@ class Runner:
         ):
             return waiting
         for candidate in self._candidate_list(node):
-            if candidate["member_index"] < self.runtime.get("next_candidate_index", 0):
+            if continuation and candidate["member_index"] != continuation["member_index"]:
+                continue
+            if not continuation and candidate["member_index"] < self.runtime.get(
+                "next_candidate_index", 0
+            ):
                 continue
             metadata = self._candidate_metadata(node, candidate)
             reason = self._availability(candidate)
+            if reason and continuation:
+                return self._waiting("session_resume_unavailable", {"reason": reason}, visit)
             if reason:
                 diagnostics.append({**metadata, "reason": reason})
                 with self._write() as (session, run):
@@ -2271,6 +2294,8 @@ class Runner:
                     )
                 self.runtime["logical_evidence_hash"] = evidence_hash
                 reason = self._availability(candidate)
+                if reason and continuation:
+                    return self._waiting("session_resume_unavailable", {"reason": reason}, visit)
                 if reason:
                     diagnostics.append({**metadata, "reason": reason})
                     with self._write() as (session, run):
@@ -2286,6 +2311,10 @@ class Runner:
                         self._connection_for(node, candidate) if not self.simulated else None
                     )
                 except AppError:
+                    if continuation:
+                        return self._waiting(
+                            "session_resume_unavailable", {"reason": "secret_unavailable"}, visit
+                        )
                     diagnostics.append({**metadata, "reason": "secret_unavailable"})
                     with self._write() as (session, run):
                         self.runtime["candidate_history"].append(diagnostics[-1])
@@ -2535,8 +2564,20 @@ class Runner:
                     )
                     key = self._agent_session_key(candidate, str(config.get("role", "")))
                     native = self.runtime.get("native_sessions", {}).get(key, {})
-                    if native.get("resume_count", 0) < 3:
-                        request = replace(request, resume_session_id=native.get("session_id"))
+                    request = replace(
+                        request,
+                        resume_session_id=continuation.get("session_id")
+                        if continuation
+                        else native.get("session_id"),
+                        resume_required=bool(continuation),
+                    )
+                    with self._write() as (session, run):
+                        self.runtime["current_agent_session"] = {
+                            "execution_id": visit.execution_id,
+                            "session_key": key,
+                            "member_index": candidate["member_index"],
+                        }
+                        self._persist(run)
                     bound_adapter: AgentAdapter | LLMAdapter = adapter
                 else:
                     request = LLMAdapterRequest(
@@ -2561,9 +2602,25 @@ class Runner:
                             _adapter = self._agent_adapter_for(_candidate, _request)
                             key = self._agent_session_key(_candidate, _request.role)
                             native = self.runtime.get("native_sessions", {}).get(key, {})
-                            if native.get("server_version") != getattr(
-                                _adapter, "server_version", None
-                            ):
+                            expected_version = (
+                                continuation.get("server_version")
+                                if _request.resume_required
+                                else native.get("server_version")
+                            )
+                            if expected_version != getattr(_adapter, "server_version", None):
+                                if _request.resume_required:
+                                    return AgentResult(
+                                        ExternalOutcome.UNAVAILABLE,
+                                        "",
+                                        None,
+                                        None,
+                                        error=AdapterError(
+                                            "session_resume_unavailable",
+                                            "Harness version changed or saved session unavailable",
+                                            "safe",
+                                        ),
+                                        no_effect=True,
+                                    )
                                 _request = replace(_request, resume_session_id=None)
                         except AppError as exc:
                             return AgentResult(
@@ -2590,6 +2647,7 @@ class Runner:
                     attempt_id,
                     deadline_at=request.deadline_at,
                     stop_event=cast(threading.Event, request.stop_event),
+                    allow_pause=node["type"] == "AgentTask",
                 )
                 if self.simulated:
                     from agents_ide.engine.workspace_checkpoint import fingerprint
@@ -2603,6 +2661,12 @@ class Runner:
                     return control
                 if result.outcome == ExternalOutcome.SUCCEEDED and validation_error is None:
                     return result
+                if continuation and result.no_effect:
+                    return self._waiting(
+                        "session_resume_unavailable",
+                        {"reason": result.error.code if result.error else "unavailable"},
+                        visit,
+                    )
                 if validation_error or result.outcome == ExternalOutcome.INVALID_FORMAT:
                     return self._waiting(
                         "invalid_response_format",
@@ -2646,6 +2710,7 @@ class Runner:
                                     "code": result.error.code,
                                     "retry_safety": "safe",
                                     "outcome": result.outcome.value,
+                                    "details": result.error.details,
                                 },
                                 visit,
                                 attempt_id,
@@ -2964,8 +3029,33 @@ class Runner:
                 if result.outcome == ExternalOutcome.SUCCEEDED and validation_error is None
                 else "failed"
             )
-            if result.error and result.error.code == "interrupted" and result.no_effect:
+            confirmed_interrupt = bool(
+                result.error
+                and result.error.code == "interrupted"
+                and (
+                    result.no_effect
+                    or (
+                        run.state in {"pause_requested", "stop_requested"}
+                        and result.error.details.get("interruption_confirmed")
+                    )
+                )
+            )
+            if confirmed_interrupt:
                 attempt.status = "interrupted"
+                current = self.runtime.get("current_agent_session", {})
+                native = self.runtime.get("native_sessions", {}).get(current.get("session_key"), {})
+                if (
+                    run.state == "pause_requested"
+                    and current.get("execution_id") == visit.execution_id
+                    and native.get("session_id")
+                    and result.error is not None
+                    and result.error.details.get("interruption_confirmed")
+                ):
+                    self.runtime["agent_continuation"] = {
+                        **current,
+                        "session_id": native["session_id"],
+                        "server_version": native.get("server_version"),
+                    }
             selection = json.loads(attempt.selection_json)
             if (
                 result.no_effect
@@ -3127,6 +3217,9 @@ class Runner:
             execution = session.get(StepExecution, visit.execution_id)
             assert execution is not None
             execution.status, execution.finished_at = "succeeded", utc_now()
+            for key in ("agent_continuation", "current_agent_session"):
+                if self.runtime.get(key, {}).get("execution_id") == visit.execution_id:
+                    self.runtime.pop(key, None)
             from agents_ide.services.run_messages import close_messages
 
             close_messages(session, run)

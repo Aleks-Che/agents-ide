@@ -9,6 +9,7 @@ import time
 from dataclasses import replace
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -121,6 +122,22 @@ def test_explicit_resume_uses_same_id_and_missing_session_creates_new(server):
     ).succeeded
     assert other.external_session_id != sid
     assert "agent.session_invalidated" in events
+
+
+def test_paused_session_missing_does_not_dispatch_new_task(server):
+    handler, adapter, request = server
+    result = adapter.run(replace(request, resume_session_id="ses_missing", resume_required=True))
+    assert result.error.code == "session_resume_unavailable"
+    assert result.no_effect
+    assert not any(r["kind"] == "post" for r in handler.requests)
+
+
+def test_request_loaded_before_pause_update_remains_compatible(server):
+    _, adapter, request = server
+    legacy_request = SimpleNamespace(
+        **{key: value for key, value in vars(request).items() if key != "resume_required"}
+    )
+    assert adapter.run(legacy_request).succeeded
 
 
 @pytest.mark.parametrize("status", [404, 429, 500])
@@ -647,7 +664,7 @@ def test_occupied_port_is_not_attached_or_killed(tmp_path):
         listener.close()
 
 
-def test_session_rolls_over_after_three_continuations(
+def test_session_survives_more_than_three_continuations(
     authenticated, settings, tmp_path, launch_fixture
 ):
     run, _ = seed(authenticated, tmp_path, roles=("reviewer",) * 5)
@@ -655,13 +672,15 @@ def test_session_rolls_over_after_three_continuations(
     assert runner.execute(run["id"]).final_state == "completed"
     with authenticated[0].app.state.session_factory() as db:
         rows = list(db.scalars(select(AgentSession).order_by(AgentSession.started_at)))
-        assert [r.resume_count for r in rows] == [0, 1, 2, 3, 0]
-        assert len({r.external_session_id for r in rows[:4]}) == 1
-        assert rows[-1].external_session_id != rows[0].external_session_id
+        assert [r.resume_count for r in rows] == [0, 1, 2, 3, 4]
+        assert len({r.external_session_id for r in rows}) == 1
 
 
-def test_stop_resume_restarts_owned_server_and_resumes_native_session(
-    authenticated, settings, tmp_path, launch_fixture
+@pytest.mark.parametrize(
+    "control_kind", ["pause", "stop", "pause_then_stop", "pause_missing", "pause_unavailable"]
+)
+def test_pause_continues_session_while_stop_restarts_task(
+    authenticated, settings, tmp_path, launch_fixture, control_kind, monkeypatch
 ):
     client, headers = authenticated
     run, _ = seed(authenticated, tmp_path, roles=("reviewer",), prompt="slow force_decision=passed")
@@ -693,31 +712,86 @@ def test_stop_resume_restarts_owned_server_and_resumes_native_session(
             f"/api/runs/{run['id']}/commands",
             headers=headers,
             json={
-                "command_id": kind,
+                "command_id": f"{kind}-{current['state_version']}",
                 "command_type": kind,
                 "expected_state_version": current["state_version"],
             },
         )
         assert response.status_code == 200, response.text
 
-    control("stop")
+    with client.app.state.session_factory() as db:
+        saved_sessions = json.loads(db.get(Run, run["id"]).runtime_json).get("native_sessions", {})
+    control("stop" if control_kind == "stop" else "pause")
     thread.join(timeout=20)
     assert not thread.is_alive() and not failures, failures
-    assert results[0].final_state == "stopped", results
+    assert results[0].final_state == ("stopped" if control_kind == "stop" else "paused"), results
     assert not runner.registry.by_run(run["id"])
+    if control_kind == "stop":
+        # Old STOP checkpoints retained native sessions without a current-session marker.
+        with client.app.state.session_factory() as db:
+            row = db.get(Run, run["id"])
+            runtime = json.loads(row.runtime_json)
+            runtime["native_sessions"] = saved_sessions
+            runtime.pop("current_agent_session", None)
+            row.runtime_json = json.dumps(runtime)
+            db.commit()
+    if control_kind == "pause_then_stop":
+        control("stop")
+    if control_kind == "pause_unavailable":
+        with monkeypatch.context() as patched:
+            patched.setattr(Runner, "_availability", lambda self, candidate: "outside_schedule")
+            control("resume")
+            unavailable = runner_for(client, settings).execute(run["id"])
+        assert unavailable.final_state == "waiting_input"
+        assert unavailable.waiting_reason.code == "session_resume_unavailable"
+        assert (
+            sum(
+                json.loads(line)["path"].endswith("/message")
+                for line in trace.read_text().splitlines()
+            )
+            == 1
+        )
+    if control_kind == "pause_missing":
+        (tmp_path / "sessions.json").write_text("{}")
+        control("resume")
+        missing = runner_for(client, settings).execute(run["id"])
+        assert missing.final_state == "waiting_input"
+        assert missing.waiting_reason.code == "session_resume_unavailable"
+        assert (
+            sum(
+                json.loads(line)["path"].endswith("/message")
+                for line in trace.read_text().splitlines()
+            )
+            == 1
+        )
+        control("stop")
     control("resume")
     next_runner = runner_for(client, settings)
     final = next_runner.execute(run["id"])
     assert final.final_state == "completed", final
-    assert len(launch_fixture[0]) == 2
+    assert len(launch_fixture[0]) == (3 if control_kind == "pause_missing" else 2)
     assert (
         launch_fixture[0][0][1]["OPENCODE_SERVER_PASSWORD"]
         != launch_fixture[0][1][1]["OPENCODE_SERVER_PASSWORD"]
     )
     with client.app.state.session_factory() as db:
         rows = list(db.scalars(select(AgentSession).order_by(AgentSession.started_at)))
-        assert len(rows) == 2 and rows[0].external_session_id == rows[1].external_session_id
+        assert len(rows) == (3 if control_kind == "pause_missing" else 2)
+        assert (rows[0].external_session_id == rows[-1].external_session_id) == (
+            control_kind in {"pause", "pause_unavailable"}
+        )
         assert all(p.state == "finished" for p in db.scalars(select(ProcessSupervision)))
+    messages = [
+        json.loads(line)["body"]
+        for line in trace.read_text().splitlines()
+        if json.loads(line)["path"].endswith("/message")
+    ]
+    prompts = [m["parts"][0]["text"] for m in messages]
+    assert ("Continue the interrupted task" in prompts[1]) == (
+        control_kind in {"pause", "pause_unavailable"}
+    )
+    if control_kind not in {"pause", "pause_unavailable"}:
+        assert prompts[0] == prompts[1]
 
 
 def test_catalog_probe_does_not_overwrite_concurrent_profile_edit(authenticated, monkeypatch):

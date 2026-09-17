@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Play, RotateCcw, Square } from 'lucide-react'
+import { Pause, Play, RotateCcw, Square } from 'lucide-react'
 import {
   useInfiniteQuery,
   useMutation,
@@ -195,7 +195,9 @@ export function ChatRunProgress({
             }
             title={
               actions.includes('resume')
-                ? 'START — продолжить'
+                ? run?.state === 'stopped'
+                  ? 'START — начать текущий этап заново'
+                  : 'START — продолжить с сохранённым контекстом'
                 : 'START — новый запуск'
             }
             disabled={
@@ -216,9 +218,27 @@ export function ChatRunProgress({
           </button>
           <button
             type="button"
+            className="quiet run-icon"
+            aria-label="Приостановить выполнение"
+            title="PAUSE — сохранить сессию агента; остальные операции завершатся перед паузой"
+            disabled={
+              !csrf ||
+              command.isPending ||
+              restart.isPending ||
+              restartUncertain ||
+              uncertain ||
+              run?.state === 'pause_requested' ||
+              !actions.includes('pause')
+            }
+            onClick={() => send('pause')}
+          >
+            <Pause aria-hidden="true" size={14} />
+          </button>
+          <button
+            type="button"
             className="quiet danger run-icon"
             aria-label="Остановить выполнение"
-            title="STOP — остановить"
+            title="STOP — остановить; START начнёт текущий этап заново"
             disabled={
               !csrf ||
               command.isPending ||
@@ -303,7 +323,9 @@ export function ChatRunProgress({
             <pre>{JSON.stringify(waiting.details, null, 2)}</pre>
           </details>
           {actions.includes('resolve') &&
-          waiting.code !== 'configuration_invalid' ? (
+          !['configuration_invalid', 'session_resume_unavailable'].includes(
+            waiting.code,
+          ) ? (
             <button onClick={() => setResolution(!resolution)}>
               Предоставить решение
             </button>
@@ -521,7 +543,11 @@ function StageContent({
     ) {
       output.push({
         key: event.sequence,
-        text: `${({ 'attempt.started': 'Попытка начата', 'attempt.finished': 'Попытка завершена', 'command.finished': 'Команда завершена', 'condition.evaluated': 'Условие проверено', 'git.commit_created': 'Коммит создан', 'git.no_changes': 'Нет изменений для коммита' } as Record<string, string>)[event.type]} ${eventPreview(event)}`,
+        text:
+          event.type === 'attempt.finished' &&
+          event.payload.status === 'interrupted'
+            ? 'Попытка прервана; остановка подтверждена'
+            : `${({ 'attempt.started': 'Попытка начата', 'attempt.finished': 'Попытка завершена', 'command.finished': 'Команда завершена', 'condition.evaluated': 'Условие проверено', 'git.commit_created': 'Коммит создан', 'git.no_changes': 'Нет изменений для коммита' } as Record<string, string>)[event.type]} ${eventPreview(event)}`,
         role: 'system',
       })
     }

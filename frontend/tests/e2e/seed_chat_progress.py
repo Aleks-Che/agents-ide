@@ -104,10 +104,11 @@ with Session(engine) as session:
                 "allowed_actions": ["resolve", "stop", "cancel"],
             }
         )
-    elif mode == "stopped":
-        run.state = "stopped"
+    elif mode in {"stopped", "paused"}:
+        run.state = mode
         run.state_version += 1
         session.get(StepAttempt, run.current_attempt_id).status = "interrupted"
+        session.get(StepExecution, run.current_execution_id).status = "interrupted"
         run.resume_target_json = to_json(
             {"action": "retry_attempt", "node_id": run.current_node_id, "blockers": []}
         )

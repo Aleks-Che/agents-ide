@@ -92,6 +92,7 @@ class AgentAdapterRequest:
     capabilities: dict[str, Any]
     params: dict[str, Any]
     resume_session_id: str | None = None
+    resume_required: bool = False
     feedback: str | None = None
     attempt_index: int = 0
     visit_index: int = 1

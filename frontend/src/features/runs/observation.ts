@@ -143,10 +143,10 @@ export function eventPreview(event: EventEnvelope) {
 export const stateDescriptions: Record<string, string> = {
   queued: 'В очереди исполнителя',
   running: 'Выполняется',
-  pause_requested: 'Пауза запрошена: текущий шаг ещё выполняется',
+  pause_requested: 'Пауза запрошена: ожидаем подтверждения остановки',
   stop_requested: 'Остановка запрошена: ожидаем завершения процессов',
-  paused: 'На паузе между шагами',
-  stopped: 'Остановлен; можно продолжить',
+  paused: 'На паузе; START продолжит выполнение',
+  stopped: 'Остановлен; START начнёт текущий этап заново',
   retry_wait: 'Ожидание повторной попытки',
   recovering: 'Исполнитель сверяет состояние после перезапуска',
   waiting_input: 'Нужно решение пользователя',
@@ -156,6 +156,8 @@ export const stateDescriptions: Record<string, string> = {
 }
 
 export const waitingDescriptions: Record<string, string> = {
+  session_resume_unavailable:
+    'Не удалось продолжить сохранённую сессию агента. Восстановите доступ к прежней модели и нажмите START. Чтобы начать этап заново в новой сессии, нажмите STOP, затем START.',
   limit_exceeded:
     'Достигнут лимит. Укажите новый предел, сохраните решение и продолжите.',
   permission_required:

@@ -30,6 +30,7 @@
 | running | Нет автоматического решения: данные, разрешение, лимит, неизвестный исход | waiting_input |
 | running | Невосстановимая техническая ошибка, живых операций не осталось | failed |
 | running | pause | pause_requested |
+| pause_requested | AgentTask подтвердил прерывание turn/message | paused; тот же execution и native session, resume продолжает задачу |
 | running / pause_requested | stop либо cancel | stop_requested, `stop_goal=stopped` либо `cancelled` |
 | pause_requested | Текущий шаг успешно завершён, ещё есть работа | paused; следующий cursor уже сохранён |
 | pause_requested | Текущий шаг завершает весь Run | completed |
@@ -49,7 +50,7 @@
 
 `workspace_conflict` в обычной очереди — причина ожидания queued, не ошибка, требующая вмешательства. waiting_input с этим кодом нужен при повреждённой или неразрешимой резервации.
 
-`resume_target` содержит node/execution ID, сохранённый retry_at, действие `dispatch_next`, `retry_attempt`, `reconcile` или `answer_permission`, а также неустранённые blockers. Pause/stop не удаляют blockers; resume не обходит их. Принятое ожидание повтора сохраняет время, поэтому пауза не позволяет обойти backoff.
+`resume_target` содержит node/execution ID, сохранённый retry_at, действие `dispatch_next`, `retry_attempt`, `reconcile` или `answer_permission`, а также неустранённые blockers. Пауза сохраняет backoff и blockers. Подтверждённое прерывание AgentTask сохраняет `agent_continuation` (execution, модель, ключ и ID native session); число продолжений не ограничено. Потеря сессии или недоступность закреплённой модели даёт `session_resume_unavailable` без dispatch новой задачи. STOP сбрасывает продолжение сессии и выбор кандидата для новой попытки исходного задания; снимает только blocker `session_resume_unavailable`. Неизвестный исход операции по-прежнему требует сверки.
 
 ```mermaid
 stateDiagram-v2
