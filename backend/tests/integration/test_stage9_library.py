@@ -185,7 +185,7 @@ def test_presets_endpoint_lists_builtin_presets(authenticated):
         assert preset["roles"]
 
 
-def test_copy_preset_creates_user_template_with_versions(authenticated, tmp_path):
+def test_copy_preset_creates_user_template_with_editable_definition(authenticated, tmp_path):
     client, headers = authenticated
     presets = client.get("/api/presets", headers=headers).json()
     assert presets, "presets are installed"
@@ -201,7 +201,7 @@ def test_copy_preset_creates_user_template_with_versions(authenticated, tmp_path
     assert template["name"] == "My copy"
     versions = client.get(f"/api/templates/{template['id']}/versions", headers=headers).json()
     assert len(versions) == 1
-    assert versions[0]["immutable"] is True
+    assert versions[0]["immutable"] is False
     # Source preset still listed and its system template unchanged
     after = client.get("/api/presets", headers=headers).json()
     assert {p["id"] for p in after} == {p["id"] for p in presets}

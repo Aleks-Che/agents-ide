@@ -1166,7 +1166,7 @@ def import_graph_endpoint(payload: GraphImportRequest) -> GraphImportResponse:
 
 @router.get("/versions/{version_id}/validate")
 def validate_version_endpoint(session: SessionDep, version_id: str) -> dict[str, Any]:
-    """Re-validate an immutable :class:`PipelineVersion` graph."""
+    """Re-validate the saved template definition."""
 
     return validate_version(session, version_id).to_dict()
 

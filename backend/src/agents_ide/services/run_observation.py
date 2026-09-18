@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from agents_ide.engine.events import EventEnvelope
+from agents_ide.engine.run_configuration import effective_snapshot
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
     ArtifactManifest,
@@ -48,6 +49,7 @@ class ObservedNode(BaseModel):
     model_id: str | None = None
     resource_id: str | None = None
     input_request: dict[str, Any] | None = None
+    restart_blocked_reason: str | None = None
 
 
 class ObservedEdge(BaseModel):
@@ -76,11 +78,14 @@ class HistoryPage(BaseModel):
 
 
 def build_observation(session: Session, run: Run) -> RunObservation:
-    graph = json.loads(run.snapshot_json).get("graph", {})
+    graph = effective_snapshot(run).get("graph", {})
     runtime = json.loads(run.runtime_json or "{}")
     latest = (
         select(StepExecution.node_id, func.max(StepExecution.visit_index).label("visit"))
-        .where(StepExecution.run_id == run.id)
+        .where(
+            StepExecution.run_id == run.id,
+            StepExecution.id.not_in(runtime.get("invalidated_executions", [])),
+        )
         .group_by(StepExecution.node_id)
         .subquery()
     )
@@ -140,6 +145,9 @@ def build_observation(session: Session, run: Run) -> RunObservation:
             position=node.get("position"),
         )
         execution = executions.get(item.id)
+        from agents_ide.services.stage_restart import restart_blocked_reason
+
+        item.restart_blocked_reason = restart_blocked_reason(run, runtime, item.type, execution)
         if execution:
             item.execution_id = execution.id
             for key in (

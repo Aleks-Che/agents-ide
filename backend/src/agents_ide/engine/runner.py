@@ -48,11 +48,12 @@ from agents_ide.domain.graph_ast import (
     substitute,
 )
 from agents_ide.domain.graph_validation import check_version_features, validate_graph
-from agents_ide.domain.schemas import WaitingReason
+from agents_ide.domain.schemas import RunCommand, WaitingReason
 from agents_ide.domain.workspace import collect_workspace, workspace_scope
 from agents_ide.engine import artifacts, context_sources, events, visits
 from agents_ide.engine import commands as command_engine
 from agents_ide.engine.queue import owned_job
+from agents_ide.engine.run_configuration import effective_snapshot
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
     AgentSession,
@@ -304,6 +305,18 @@ class Runner:
         self.runtime["waiting_reason"] = reason.model_dump(mode="json")
         self.runtime["waiting_code"] = code
         with self._write() as (session, run):
+            # A response/error can arrive at the same time as a restart request.
+            # Do not strand that accepted request by consuming the queue below.
+            if session.scalar(
+                select(CommandJournal.id)
+                .where(
+                    CommandJournal.run_id == run.id,
+                    CommandJournal.status == "accepted",
+                    CommandJournal.command_type == "restart_stage",
+                )
+                .limit(1)
+            ) and (control := self._apply_controls(session, run)):
+                return control
             if visit and visit.execution_id:
                 execution = session.get(StepExecution, visit.execution_id)
                 if execution and execution.status == "running":
@@ -326,10 +339,14 @@ class Runner:
             return self._state(session, run, "waiting_input", reason)
 
     def execute(self, run_id: str) -> RunnerResult:
-        try:
-            return self._execute(run_id)
-        finally:
-            self._close_harness_live()
+        while True:
+            try:
+                result = self._execute(run_id)
+            finally:
+                self._close_harness_live()
+            if result.final_state != "queued":
+                return result
+            self._check_owned()
 
     def _execute(self, run_id: str) -> RunnerResult:
         self.run_id = run_id
@@ -339,7 +356,7 @@ class Runner:
                 raise AppError("run_not_found", "Run не найден", 404)
             if row.state not in {"queued", "recovering"}:
                 return RunnerResult(RunState(row.state))
-            self.snapshot = json.loads(row.snapshot_json)
+            self.snapshot = effective_snapshot(row)
             self.runtime = json.loads(row.runtime_json)
             from agents_ide.engine.worktrees import effective_workspace
 
@@ -405,7 +422,9 @@ class Runner:
         evidence = recovery_evidence(self.session_factory, self.run_id, target)
         if evidence["stopped"]:
             with self._write() as (session, run):
-                if run.stop_goal == "cancelled" and (control := self._apply_controls(session, run)):
+                if run.stop_goal in {"cancelled", "stopped"} and (
+                    control := self._apply_controls(session, run)
+                ):
                     return control
             from agents_ide.engine.stage8 import reconcile_git
 
@@ -537,6 +556,8 @@ class Runner:
             return None
         if attempt.id in self.runtime.get("retry_authorized_attempts", []):
             return None
+        if self.runtime.get("json_reprocessing", {}).get("attempt_id") == attempt.id:
+            return None
         details = json.loads(attempt.error_details_json or "{}")
         if (
             attempt.external_outcome in {"retryable_failure", "unavailable"}
@@ -662,6 +683,10 @@ class Runner:
                 if not reuse and (limit := self._limit("visits")):
                     return self._waiting("limit_exceeded", {"limit": limit})
                 with self._write() as (session, run):
+                    if run.state == "stop_requested":
+                        # A command arrived after the loop's control check.
+                        # Stop the old executor before entering another stage.
+                        continue
                     if reuse:
                         execution = session.get(StepExecution, run.current_execution_id)
                         assert execution is not None
@@ -686,6 +711,9 @@ class Runner:
                             scope=self.runtime["work"]["scope"],
                         )
                         visits.create_execution(session, visit)
+                        self.runtime.setdefault("stage_work_checkpoints", {})[
+                            visit.execution_id
+                        ] = json.loads(to_json(self.runtime["work"]))
                         self.runtime["visits"] += 1
                         self.runtime.update(
                             candidate_index=None,
@@ -711,6 +739,8 @@ class Runner:
                     self._persist(run)
                 result: AgentResult | LLMResult | None = None
                 if node["type"] in {"AgentTask", "LLMRequest"}:
+                    if reuse and (reprocessed := self._reprocess_saved_json(node, visit)):
+                        return reprocessed
                     result = self._saved_result(visit) if reuse else None
                     if result is None:
                         external = self._external(
@@ -815,6 +845,88 @@ class Runner:
             return self._waiting(
                 "configuration_invalid", {"reason": "runtime_configuration_invalid"}
             )
+
+    def _node_config(self, node_id: str) -> dict[str, Any]:
+        config: dict[str, Any] = self.snapshot["dependencies"]["nodes"][node_id]
+        processing = self.runtime.get("json_processing_overrides", {}).get(node_id)
+        return {**config, "json_processing": processing} if processing is not None else config
+
+    def _reprocess_saved_json(
+        self, node: dict[str, Any], visit: visits.VisitState
+    ) -> RunnerResult | None:
+        pending = self.runtime.get("json_reprocessing")
+        if not pending:
+            return None
+        with self.session_factory() as session:
+            attempt = session.get(StepAttempt, pending["attempt_id"])
+            artifact = session.get(ArtifactManifest, pending["source_artifact_id"])
+            if (
+                attempt is None
+                or attempt.execution_id != visit.execution_id
+                or attempt.status != "failed"
+                or attempt.external_outcome != "succeeded"
+                or artifact is None
+                or artifact.step_attempt_id != attempt.id
+                or artifact.run_id != self.run_id
+            ):
+                raise AppError("result_missing", "Ответ для повторной обработки недоступен", 409)
+            attempt_id = attempt.id
+            source = json.loads(artifact.body_json or "{}")
+            request = session.get(ArtifactManifest, attempt.request_artifact_id)
+            if not request or not request.body_json or not isinstance(source.get("raw_text"), str):
+                raise AppError("result_missing", "Контекст сохранённого ответа недоступен", 409)
+            self._current_evidence = (
+                json.loads(request.body_json).get("context", {}).get("evidence", {})
+            )
+        result = LLMResult(
+            ExternalOutcome.SUCCEEDED, source["raw_text"], None, source.get("decision")
+        )
+        error = self._normalize_result(self._node_config(node["id"]), result)
+        with self._write() as (session, run):
+            attempt = session.get(StepAttempt, attempt_id)
+            assert attempt is not None and run.current_attempt_id == attempt_id
+            artifact = self._artifact(
+                session,
+                visit,
+                "llm_response",
+                {
+                    "raw_text": result.raw_text,
+                    "validated": None if error else result.validated_result,
+                    "decision": None if error else result.decision,
+                    "error_code": error,
+                    "reprocessed_from": pending["source_artifact_id"],
+                    "json_processing": self._node_config(node["id"])["json_processing"],
+                },
+                attempt_id,
+            )
+            artifact.source_ref = pending["command_id"]
+            attempt.result_artifact_id = artifact.id
+            attempt.status, attempt.error_code = ("failed", error) if error else ("succeeded", None)
+            self.runtime.pop("json_reprocessing", None)
+            self._event(
+                session,
+                "attempt.result_reprocessed",
+                {
+                    "source_artifact_id": pending["source_artifact_id"],
+                    "result_ref": artifact.id,
+                    "error_code": error,
+                },
+                visit,
+                attempt_id,
+                command_id=pending["command_id"],
+            )
+            self._persist(run)
+        if error:
+            return self._waiting(
+                "invalid_response_format",
+                {
+                    "node_id": node["id"],
+                    "attempt_id": attempt_id,
+                    "reason": error,
+                },
+                visit,
+            )
+        return None
 
     def _saved_result(self, visit: visits.VisitState) -> LLMResult | None:
         with self.session_factory() as session:
@@ -1158,7 +1270,7 @@ class Runner:
                 .where(
                     CommandJournal.run_id == run.id,
                     CommandJournal.status == "accepted",
-                    CommandJournal.command_type.in_(["pause", "stop", "cancel"]),
+                    CommandJournal.command_type.in_(["pause", "stop", "cancel", "restart_stage"]),
                 )
                 .order_by(CommandJournal.sequence)
             )
@@ -1168,8 +1280,62 @@ class Runner:
             return None
         chosen = max(
             relevant,
-            key=lambda c: ({"pause": 1, "stop": 2, "cancel": 3}[c.command_type], c.sequence),
+            key=lambda c: (
+                {"pause": 1, "restart_stage": 2, "stop": 3, "cancel": 4}[c.command_type],
+                c.sequence,
+            ),
         )
+        if chosen.command_type == "restart_stage":
+            from agents_ide.services.run_controls import command_event
+            from agents_ide.services.stage_restart import apply_restart
+            from agents_ide.worker.processes import stored_processes_stopped
+
+            self._persist(run)
+            if not stored_processes_stopped(session, run):
+                reason = WaitingReason(
+                    code="unknown_external_result",
+                    details={"reason": "restart_waiting_for_process_stop"},
+                    allowed_actions=["resolve", "stop", "cancel"],
+                )
+                target = json.loads(run.resume_target_json or "{}")
+                target["blockers"] = list(
+                    dict.fromkeys(
+                        [
+                            *target.get("blockers", []),
+                            "unknown_external_result",
+                        ]
+                    )
+                )
+                run.resume_target_json = to_json(target)
+                return self._state(session, run, "waiting_input", reason)
+            previous = run.state
+            apply_restart(session, run, json.loads(chosen.payload_json or "{}"), chosen.command_id)
+            self.runtime = json.loads(run.runtime_json)
+            run.state_version += 1
+            run.updated_at = utc_now()
+            for command in commands:
+                command.status = "applied" if command.id == chosen.id else "superseded"
+                command.applied_at = utc_now()
+                command.response_json = to_json({"state": "queued", "node_id": run.current_node_id})
+                if command.id != chosen.id:
+                    self._event(
+                        session,
+                        "control.applied",
+                        {"command_type": command.command_type, "status": command.status},
+                        command_id=command.command_id,
+                    )
+            command_event(
+                session,
+                run,
+                RunCommand(
+                    command_id=chosen.command_id,
+                    command_type="restart_stage",
+                    expected_state_version=chosen.expected_state_version,
+                ),
+                previous,
+                "applied",
+            )
+            return RunnerResult(RunState.QUEUED)
         if unsettled_attempts(session, run):
             from agents_ide.worker.processes import stored_processes_stopped
 
@@ -2143,6 +2309,7 @@ class Runner:
                         else [self.runtime["cycle_id"]]
                     ),
                     StepExecution.status == "succeeded",
+                    StepExecution.id.not_in(self.runtime.get("invalidated_executions", [])),
                 )
                 .order_by(StepExecution.finished_at.desc())
             )
@@ -2193,7 +2360,7 @@ class Runner:
     def _external(
         self, node: dict[str, Any], visit: visits.VisitState, adapter: AgentAdapter | LLMAdapter
     ) -> AgentResult | LLMResult | RunnerResult:
-        config = self.snapshot["dependencies"]["nodes"][node["id"]]
+        config = self._node_config(node["id"])
         mode = self.runtime["work"]["mode"]
         template = config.get(
             "prompt_repair"

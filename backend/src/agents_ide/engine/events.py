@@ -54,6 +54,7 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "attempt.started",
         "attempt.progress",
         "attempt.finished",
+        "attempt.result_reprocessed",
         "model_group.candidate_selected",
         "model_group.candidate_skipped",
         "model_group.candidate_switched",

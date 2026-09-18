@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Check, ClipboardPaste, Copy } from 'lucide-react'
 import {
   ApiError,
   request,
@@ -17,9 +18,51 @@ import {
 import { LibraryView } from '../features/bindings/LibraryView'
 import { RunsView } from '../features/runs/RunsView'
 
+const pairingCommand = 'agents-ide auth pair-code'
+
 export function App() {
   const client = useQueryClient()
   const [code, setCode] = useState('')
+  const codeInput = useRef<HTMLInputElement>(null)
+  const [commandCopied, setCommandCopied] = useState(false)
+  const [clipboardError, setClipboardError] = useState<string | null>(null)
+
+  async function copyCommand() {
+    setClipboardError(null)
+    setCommandCopied(false)
+    try {
+      await navigator.clipboard.writeText(pairingCommand)
+      setCommandCopied(true)
+    } catch {
+      setClipboardError(
+        'Не удалось скопировать команду. Выделите её и нажмите Ctrl+C.',
+      )
+    }
+  }
+
+  async function pasteCode() {
+    setClipboardError(null)
+    try {
+      const text = (await navigator.clipboard.readText()).trim()
+      if (!text) {
+        setClipboardError(
+          'В буфере обмена нет текста. Скопируйте код из терминала.',
+        )
+      } else if (text.length > 128) {
+        setClipboardError(
+          'Код слишком длинный. Скопируйте только код из терминала.',
+        )
+      } else {
+        setCode(text)
+      }
+    } catch {
+      setClipboardError(
+        'Не удалось прочитать буфер обмена. Вставьте код с помощью Ctrl+V.',
+      )
+    }
+    codeInput.current?.focus()
+  }
+
   const session = useQuery({
     queryKey: ['session'],
     queryFn: () => request<Session>('/auth/session'),
@@ -42,6 +85,8 @@ export function App() {
       }),
     onSuccess: (data) => {
       setCode('')
+      setCommandCopied(false)
+      setClipboardError(null)
       client.setQueryData(['session'], data)
       void client.invalidateQueries({ queryKey: ['session'] })
     },
@@ -107,7 +152,26 @@ export function App() {
                 Получите одноразовый код в терминале на этом компьютере. Он
                 действует 5 минут.
               </p>
-              <code className="command">agents-ide auth pair-code</code>
+              <div className="command pairing-command">
+                <code>{pairingCommand}</code>
+                <button
+                  type="button"
+                  className="quiet pairing-clipboard-button"
+                  onClick={() => void copyCommand()}
+                  aria-label={
+                    commandCopied ? 'Команда скопирована' : 'Копировать команду'
+                  }
+                  title={
+                    commandCopied ? 'Команда скопирована' : 'Копировать команду'
+                  }
+                >
+                  {commandCopied ? (
+                    <Check size={18} aria-hidden="true" />
+                  ) : (
+                    <Copy size={18} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
               <form
                 onSubmit={(event) => {
                   event.preventDefault()
@@ -116,22 +180,43 @@ export function App() {
               >
                 <label htmlFor="pair-code">Код подключения</label>
                 <div className="input-row">
-                  <input
-                    id="pair-code"
-                    type="password"
-                    value={code}
-                    onChange={(event) => setCode(event.target.value)}
-                    autoComplete="off"
-                    spellCheck={false}
-                    required
-                    maxLength={128}
-                    placeholder="Вставьте код из терминала"
-                  />
+                  <div className="pairing-code-field">
+                    <input
+                      ref={codeInput}
+                      id="pair-code"
+                      type="password"
+                      value={code}
+                      onChange={(event) => {
+                        setCode(event.target.value)
+                        setClipboardError(null)
+                      }}
+                      autoComplete="off"
+                      spellCheck={false}
+                      required
+                      maxLength={128}
+                      placeholder="Вставьте код из терминала"
+                    />
+                    <button
+                      type="button"
+                      className="quiet pairing-clipboard-button"
+                      onClick={() => void pasteCode()}
+                      disabled={pair.isPending}
+                      aria-label="Вставить код из буфера обмена"
+                      title="Вставить код из буфера обмена"
+                    >
+                      <ClipboardPaste size={18} aria-hidden="true" />
+                    </button>
+                  </div>
                   <button disabled={pair.isPending || !code}>
                     {pair.isPending ? 'Подключение…' : 'Подключиться →'}
                   </button>
                 </div>
               </form>
+              {clipboardError ? (
+                <p className="error" role="alert">
+                  {clipboardError}
+                </p>
+              ) : null}
               {pair.error ? (
                 <p className="error" role="alert">
                   {pair.error.message}

@@ -191,10 +191,17 @@ def load_latest_results(
     """
 
     from agents_ide.domain.graph_ast import LatestResult, TruthValue
+    from agents_ide.persistence.models import Run
 
     nodes = set(node_ids)
+    run = session.get(Run, run_id)
+    invalidated = (
+        set(json.loads(run.runtime_json).get("invalidated_executions", [])) if run else set()
+    )
     results: dict[str, Any] = {}
     for execution in find_executions(session, run_id):
+        if execution.id in invalidated:
+            continue
         if execution.node_id not in nodes:
             continue
         if execution.status != "succeeded" or (scope is not None and execution.scope != scope):

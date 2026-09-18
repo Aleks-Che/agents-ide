@@ -11,6 +11,7 @@ from agents_ide.domain.schemas import RunCommand
 from agents_ide.engine import artifacts
 from agents_ide.engine.events import append_event
 from agents_ide.engine.policy import effective_limits
+from agents_ide.engine.run_configuration import effective_snapshot
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
     AgentSession,
@@ -82,9 +83,20 @@ def reset_stopped_agent(runtime: dict[str, Any], session_id: str | None = None) 
 
 def _resolve(session: Session, run: Run, command: RunCommand) -> dict[str, Any]:
     payload = command.payload
-    if set(payload) - {"limit_overrides", "data", "reason", "retry", "reconciliation"}:
+    if set(payload) - {
+        "limit_overrides",
+        "data",
+        "reason",
+        "retry",
+        "reconciliation",
+        "json_processing",
+    }:
         raise AppError("resolution_invalid", "Неизвестные поля решения", 422)
-    runtime, snapshot = json.loads(run.runtime_json), json.loads(run.snapshot_json)
+    if "json_processing" in payload:
+        from agents_ide.services.json_resolution import prepare_json_reprocessing
+
+        return prepare_json_reprocessing(session, run, command)
+    runtime, snapshot = json.loads(run.runtime_json), effective_snapshot(run)
     reason = json.loads(run.waiting_reason_json or "{}")
     code = reason.get("code") or runtime.get("waiting_code")
     response: dict[str, Any] = {"applied": True}
@@ -180,6 +192,7 @@ def _resolve(session: Session, run: Run, command: RunCommand) -> dict[str, Any]:
         }:
             raise AppError("resolution_invalid", "Повтор недоступен для этой причины", 422)
         runtime["retry_resolution"] = code
+        runtime.pop("json_reprocessing", None)
     if "data" in payload or "reconciliation" in payload:
         body = payload.get("data", payload.get("reconciliation"))
         if len(artifacts.encode(body).encode("utf-8")) > 1024 * 1024:
@@ -205,7 +218,7 @@ def _resolve(session: Session, run: Run, command: RunCommand) -> dict[str, Any]:
 def _check_resume(session: Session, run: Run) -> None:
     from agents_ide.worker.processes import stored_processes_stopped
 
-    runtime, snapshot = json.loads(run.runtime_json), json.loads(run.snapshot_json)
+    runtime, snapshot = json.loads(run.runtime_json), effective_snapshot(run)
     target = json.loads(run.resume_target_json or "{}")
     waiting = json.loads(run.waiting_reason_json or "{}") or runtime.get("waiting_reason") or {}
     if not stored_processes_stopped(session, run) or unsettled_attempts(session, run):
@@ -285,6 +298,11 @@ def _check_resume(session: Session, run: Run) -> None:
             runtime.update(next_candidate_index=0, candidate_index=None, candidate_retries=0)
             runtime["selection_round"] = runtime.get("selection_round", 0) + 1
         elif code in {"invalid_response_format", "permission_required"}:
+            if code == "invalid_response_format" and (
+                runtime.get("json_reprocessing", {}).get("attempt_id") == run.current_attempt_id
+                and run.current_attempt_id is not None
+            ):
+                continue
             if runtime.get("retry_resolution") != code:
                 raise AppError(
                     "resolution_required", "Сначала сохраните явное решение о повторе", 409
@@ -373,6 +391,10 @@ def prepare_command(
 ) -> tuple[str, dict[str, Any] | None]:
     previous = run.state
     kind = command.command_type
+    if kind == "restart_stage":
+        from agents_ide.services.stage_restart import prepare_restart
+
+        return prepare_restart(session, run, command)
     if kind == "message":
         from agents_ide.services.run_messages import prepare_message
 

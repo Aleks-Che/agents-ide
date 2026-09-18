@@ -201,6 +201,40 @@ h2 {
     monospace;
   overflow-x: auto;
 }
+.pairing-command {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px 6px 15px;
+}
+.pairing-command code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.pairing-clipboard-button {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+}
+.pairing-code-field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+.pairing-code-field input {
+  padding-right: 48px;
+}
+.pairing-code-field .pairing-clipboard-button {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
+}
 label {
   display: block;
   font-size: 11px;

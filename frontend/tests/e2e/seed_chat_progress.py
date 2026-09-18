@@ -1,5 +1,6 @@
 """Checkpoints for UI-only tests: no model or worker is launched."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -169,6 +170,9 @@ with Session(engine) as session:
         )
         session.flush()
         run.state = "running"
+        runtime = json.loads(run.runtime_json or "{}")
+        runtime.update(cycle_id=1, next_node_id=node_id, work={"scope": "main"})
+        run.runtime_json = to_json(runtime)
         run.state_version += 1
         run.current_node_id, run.current_execution_id, run.current_attempt_id = (
             node_id,

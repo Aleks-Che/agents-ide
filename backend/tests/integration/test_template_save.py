@@ -1,4 +1,4 @@
-"""Unified saving updates bindings atomically, retaining immutable run definitions."""
+"""Saving updates the sole definition and bindings atomically."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +12,7 @@ GRAPH = {
 }
 
 
-def test_save_updates_bindings_reuses_content_and_preserves_old_definition(authenticated, tmp_path):
+def test_save_updates_one_definition_and_bindings(authenticated, tmp_path):
     client, headers = authenticated
     template = client.post("/api/templates", json={"name": "Flow"}, headers=headers).json()
     url = f"/api/templates/{template['id']}"
@@ -51,14 +51,15 @@ def test_save_updates_bindings_reuses_content_and_preserves_old_definition(authe
         bindings.append(response.json())
     template = save(template["version"], "B")
     second = client.get(f"{url}/saved").json()
-    assert second["id"] != first["id"]
+    assert second["id"] == first["id"]
+    assert second["inputs"] == {"task": "B"}
     for binding in bindings:
         current = client.get(f"/api/bindings/{binding['id']}").json()
         assert current["version_id"] == second["id"]
         assert current["name"] == binding["name"]
         assert current["limit_overrides"] == binding["limit_overrides"]
         assert current["version"] == binding["version"] + 1
-    assert client.get(f"/api/versions/{first['id']}").json() == first
+    assert client.get(f"/api/versions/{first['id']}").json() == second
     template = save(template["version"], "A")
     assert client.get(f"{url}/saved").json()["id"] == first["id"]
     with client.app.state.session_factory() as session:
@@ -67,7 +68,7 @@ def test_save_updates_bindings_reuses_content_and_preserves_old_definition(authe
     for binding in bindings:
         assert client.get(f"/api/bindings/{binding['id']}").json()["version_id"] == first["id"]
     template = save(template["version"], "A")
-    assert len(client.get(f"{url}/versions").json()) == 2
+    assert len(client.get(f"{url}/versions").json()) == 1
     assert len(client.get("/api/bindings").json()) == 2
     copied = client.post(
         f"{url}/copy",
@@ -176,7 +177,8 @@ def test_startup_repairs_legacy_binding_model_selection(
         "updated_at": updated["updated_at"],
     }
     assert client.get(f"/api/bindings/{archived['id']}").json()["version_id"] == first["id"]
-    assert client.get(f"/api/versions/{first['id']}").json() == first
+    assert saved["id"] == first["id"]
+    assert client.get(f"/api/versions/{first['id']}").json() == saved
     after = client.post(f"{binding_url}/preflight", json={}, headers=headers).json()
     assert "model_selection_missing" not in [issue["code"] for issue in after["errors"]]
     with client.app.state.session_factory() as session:

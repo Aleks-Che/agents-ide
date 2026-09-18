@@ -2,7 +2,7 @@
 
 The catalog ships as versioned JSON inside the package. Application updates
 never overwrite user-owned copies. A stable system template ID identifies the
-source; a changed executable payload adds an immutable, validated version.
+source; a changed executable payload updates its validated definition.
 
 Real install paths happen during application start (``api/app.py`` lifespan)
 and the API catalog exposes the resulting template for ordinary bindings.

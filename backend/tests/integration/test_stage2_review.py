@@ -10,7 +10,6 @@ from sqlalchemy import select
 
 from agents_ide.persistence.models import (
     CommandJournal,
-    PipelineVersion,
     QueueJob,
     Run,
     RunEvent,
@@ -183,9 +182,7 @@ def test_parallel_start_is_atomic_and_idempotent(authenticated, tmp_path):
         assert not session.scalars(select(WorkspaceReservation)).all()
 
 
-def test_draft_edit_conflict_and_immutable_publication(authenticated, tmp_path):
-    from sqlalchemy.exc import IntegrityError
-
+def test_draft_edit_conflict_and_single_saved_definition(authenticated, tmp_path):
     client, headers = authenticated
     _, template, version, *rest = setup_run(client, headers, tmp_path / "workspace")
     draft = {"expected_version": 1, "graph": {"nodes": []}}
@@ -219,13 +216,10 @@ def test_draft_edit_conflict_and_immutable_publication(authenticated, tmp_path):
         f"/api/templates/{template['id']}/publish", headers=headers, json={"expected_version": 3}
     )
     assert published.status_code == 201
-    assert published.json()["version_number"] == 2
-    assert client.get(f"/api/versions/{version['id']}").json() == version
-    with client.app.state.session_factory() as session:
-        stored = session.get(PipelineVersion, version["id"])
-        stored.graph_json = "{}"
-        with pytest.raises(IntegrityError):
-            session.commit()
+    assert published.json()["version_number"] == 1
+    assert published.json()["id"] == version["id"]
+    assert client.get(f"/api/versions/{version['id']}").json()["graph"] == draft["graph"]
+    assert len(client.get(f"/api/templates/{template['id']}/versions").json()) == 1
 
 
 def test_chat_messages_are_snapshotted_and_mutations_versioned(authenticated, tmp_path):

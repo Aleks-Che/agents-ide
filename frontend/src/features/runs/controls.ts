@@ -33,11 +33,20 @@ export function resolutionPayload(
   run: RunRecord,
   text: string,
   action: string,
+  processing?: Record<string, unknown>,
 ): Record<string, unknown> {
   const reason =
     run.waiting_reason ??
     (run.runtime?.waiting_reason as RunRecord['waiting_reason'])
   const code = reason?.code ?? run.runtime?.waiting_code
+  if (code === 'invalid_response_format' && action === 'reprocess') {
+    if (
+      !processing ||
+      !Object.values(processing).some((value) => value === true)
+    )
+      throw new Error('Выберите обработку JSON-ответа.')
+    return { json_processing: processing }
+  }
   if (code === 'limit_exceeded') {
     const value = Number(text)
     const limit = reason?.details?.limit

@@ -318,7 +318,7 @@ class PipelineVersion(ApiOutput):
     inputs: dict[str, Any]
     settings: SettingsOverrides
     created_at: datetime
-    immutable: Literal[True] = True
+    immutable: Literal[False] = False
 
 
 class PipelineBindingCreate(SettingsOverrides):
@@ -900,7 +900,9 @@ class Run(ApiOutput):
 
 class RunCommand(ApiModel):
     command_id: ShortStr
-    command_type: Literal["pause", "stop", "cancel", "resume", "resolve", "message"]
+    command_type: Literal[
+        "pause", "stop", "cancel", "resume", "resolve", "message", "restart_stage"
+    ]
     expected_state_version: int = Field(ge=0)
     payload: dict[str, Any] = Field(default_factory=dict)
 

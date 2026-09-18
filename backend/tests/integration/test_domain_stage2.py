@@ -165,7 +165,7 @@ def test_chats_messages_and_archive(authenticated, tmp_path):
     assert all(item["archived"] for item in response) or not response
 
 
-def test_pipeline_versions_are_immutable(authenticated, tmp_path):
+def test_template_saves_replace_definition_and_run_snapshot_is_retained(authenticated, tmp_path):
     client, headers = authenticated
     workspace = tmp_path / "ws-tpl"
     workspace.mkdir()
@@ -194,7 +194,8 @@ def test_pipeline_versions_are_immutable(authenticated, tmp_path):
         headers=headers,
     ).json()
     assert first["version_number"] == 1
-    assert second["version_number"] == 2
+    assert second["version_number"] == 1
+    assert second["id"] == first["id"]
     assert first["execution_hash"] != second["execution_hash"]
 
     # Create a binding; then start a Run.
@@ -382,7 +383,8 @@ def test_provider_url_validation_rejects_remote_http(authenticated):
     assert response.status_code == 400  # url validation must reject remote http
 
 
-def test_resolved_settings_include_overrides(authenticated, tmp_path):
+def test_resolved_settings_include_overrides(authenticated, tmp_path, settings):
+    settings.enforce_execution_limits = True
     client, headers = authenticated
     workspace = tmp_path / "ws-resolve"
     workspace.mkdir()

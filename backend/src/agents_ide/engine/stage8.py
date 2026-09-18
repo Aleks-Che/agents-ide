@@ -164,6 +164,7 @@ def _source(
         StepExecution.node_id == node_id,
         StepExecution.scope == runner.runtime["work"]["scope"],
         StepExecution.status == "succeeded",
+        StepExecution.id.not_in(runner.runtime.get("invalidated_executions", [])),
     )
     if current_cycle:
         query = query.where(StepExecution.cycle_id == runner.runtime["cycle_id"])
@@ -264,6 +265,7 @@ def git_commit_node(
                     StepExecution.scope == runner.runtime["work"]["scope"],
                     StepExecution.cycle_id == runner.runtime["cycle_id"],
                     StepExecution.status == "succeeded",
+                    StepExecution.id.not_in(runner.runtime.get("invalidated_executions", [])),
                     StepExecution.raw_result_ref.is_not(None),
                 )
                 .order_by(StepExecution.visit_index.desc())

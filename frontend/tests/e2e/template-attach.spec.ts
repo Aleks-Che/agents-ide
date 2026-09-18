@@ -266,6 +266,11 @@ test('one save updates existing bindings and never offers or creates another att
   const bindings = await api(page, 'GET', `/bindings?project_id=${project.id}`)
   expect(bindings).toHaveLength(1)
   expect(bindings[0].id).toBe(binding.id)
-  expect(bindings[0].version_id).not.toBe(binding.version_id)
+  expect(bindings[0].version_id).toBe(binding.version_id)
+  const saved = await api(page, 'GET', `/templates/${template.id}/saved`)
+  expect(saved.inputs).toEqual({ task: 'After' })
+  expect(
+    await api(page, 'GET', `/templates/${template.id}/versions`),
+  ).toHaveLength(1)
   expect(bindings[0].limit_overrides).toEqual({ max_calls: 25 })
 })

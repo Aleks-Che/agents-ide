@@ -833,6 +833,7 @@
               "attempt.late_result",
               "attempt.prepared",
               "attempt.progress",
+              "attempt.result_reprocessed",
               "attempt.retry_scheduled",
               "attempt.started",
               "attempt.text_delta",
@@ -2761,6 +2762,17 @@
             ],
             "title": "Resource Id"
           },
+          "restart_blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restart Blocked Reason"
+          },
           "result_ref": {
             "anyOf": [
               {
@@ -3506,8 +3518,8 @@
             "type": "string"
           },
           "immutable": {
-            "const": true,
-            "default": true,
+            "const": false,
+            "default": false,
             "title": "Immutable",
             "type": "boolean"
           },
@@ -5875,7 +5887,8 @@
               "cancel",
               "resume",
               "resolve",
-              "message"
+              "message",
+              "restart_stage"
             ],
             "title": "Command Type",
             "type": "string"
@@ -12098,7 +12111,7 @@
     },
     "/api/versions/{version_id}/validate": {
       "get": {
-        "description": "Re-validate an immutable :class:`PipelineVersion` graph.",
+        "description": "Re-validate the saved template definition.",
         "operationId": "validate_version_endpoint_api_versions__version_id__validate_get",
         "parameters": [
           {

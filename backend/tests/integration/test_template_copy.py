@@ -55,7 +55,7 @@ def test_copy_preserves_draft_latest_version_and_source(authenticated):
     )
     assert response.status_code == 200
     assert client.get(url).json() == source
-    assert len(client.get(f"{url}/versions").json()) == 2
+    assert len(client.get(f"{url}/versions").json()) == 1
 
 
 def test_copy_empty_template_rejects_conflicts_and_archived_source(authenticated):

@@ -11,6 +11,8 @@ import {
 import { useCsrfToken } from '../../app/session'
 import { formatDateTime, shortHash } from '../../app/format'
 import { Modal } from '../../app/Modal'
+import { LlmResponseSettings } from '../pipelines/LlmResponseSettings'
+import { object } from '../pipelines/graph'
 import { allowedCommands, resolutionPayload } from './controls'
 import { GroupSummarySection } from './GroupSummarySection'
 import { RunTimeline } from './RunTimeline'
@@ -522,6 +524,9 @@ export function ResolutionForm({
 }) {
   const [text, setText] = useState('')
   const [action, setAction] = useState('')
+  const [jsonConfig, setJsonConfig] = useState<Record<string, unknown>>({
+    json_processing: { extract_json: true },
+  })
   const [error, setError] = useState('')
   const waiting =
     run.waiting_reason ??
@@ -533,7 +538,14 @@ export function ResolutionForm({
       onSubmit={(event) => {
         event.preventDefault()
         try {
-          onSubmit(resolutionPayload(run, text, action))
+          onSubmit(
+            resolutionPayload(
+              run,
+              text,
+              action,
+              object(jsonConfig.json_processing),
+            ),
+          )
           setError('')
         } catch (error) {
           setError(describeRunError(error))
@@ -564,7 +576,28 @@ export function ResolutionForm({
           </select>
         </>
       ) : null}
-      {['permission_required', 'invalid_response_format'].includes(reason) ? (
+      {reason === 'invalid_response_format' ? (
+        <>
+          <label htmlFor="json-resolution-action">Обработка ответа</label>
+          <select
+            id="json-resolution-action"
+            value={action}
+            onChange={(event) => setAction(event.target.value)}
+            required
+          >
+            <option value="">Выберите действие</option>
+            <option value="reprocess">
+              Извлечь JSON из сохранённого ответа
+            </option>
+            <option value="retry">
+              Запросить новый ответ после устранения причины
+            </option>
+          </select>
+          {action === 'reprocess' ? (
+            <LlmResponseSettings config={jsonConfig} onChange={setJsonConfig} />
+          ) : null}
+        </>
+      ) : reason === 'permission_required' ? (
         <label>
           <input
             type="checkbox"

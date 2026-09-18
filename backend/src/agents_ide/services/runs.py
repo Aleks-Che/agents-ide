@@ -622,6 +622,10 @@ def _next_command_sequence(session: Session, run_id: str) -> int:
 
 
 def _command_allowed(command_type: str, state: str) -> bool:
+    if command_type == "restart_stage":
+        from agents_ide.services.stage_restart import RESTART_STATES
+
+        return state in RESTART_STATES
     if command_type == "message":
         return state == "running"
     if state == "cancelled":

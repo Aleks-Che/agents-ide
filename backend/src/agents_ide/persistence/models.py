@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -125,6 +126,7 @@ class PipelineTemplate(Base):
 class PipelineVersion(Base):
     __tablename__ = "pipeline_versions"
     __table_args__ = (
+        Index("uq_template_definition", "template_id", unique=True),
         UniqueConstraint("template_id", "version_number", name="uq_versions_template_number"),
         UniqueConstraint("template_id", "execution_hash", name="uq_versions_template_hash"),
     )

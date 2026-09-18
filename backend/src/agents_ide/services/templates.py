@@ -1,8 +1,7 @@
-"""Pipeline template, version and binding services.
+"""Templates have one editable saved definition; runs own their execution history.
 
-Templates can be archived but their versions stay immutable. Editing a draft
-version is not allowed; an edit produces a new PipelineVersion with a new
-execution hash and policy hash.
+The PipelineVersion name and legacy routes remain API compatibility aliases.
+Optimistic edit counters prevent lost updates and do not create content versions.
 """
 
 from __future__ import annotations
@@ -10,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import select, true
 from sqlalchemy.orm import Session
 
 from agents_ide.domain.common import (
@@ -110,7 +109,7 @@ def copy_preset_to_user_template(
 ) -> PipelineTemplate:
     """Clone a built-in preset into a user-owned template.
 
-    The clone contains a single immutable PipelineVersion copied from the
+    The clone contains a single editable definition copied from the
     system source and a draft ready for editing. Subsequent edits live on the
     user copy; the preset stays immutable.
     """
@@ -162,7 +161,7 @@ def copy_preset_to_user_template(
 def copy_template(
     session: Session, template_id: str, payload: PipelineTemplateCopy
 ) -> PipelineTemplate:
-    """Copy the saved draft and latest immutable version in one transaction."""
+    """Copy the draft and saved definition in one transaction."""
     begin_write(session)
     source = get_or_404(session, PipelineTemplateModel, template_id)
     if source.version != payload.expected_version:
@@ -271,7 +270,7 @@ def create_version(
         raise AppError("system_template_immutable", "Copy the system template before editing", 409)
     if template.archived_at is not None:
         raise AppError("template_archived", "Архивный шаблон недоступен", 409)
-    # Strict validation: a published version must run successfully.
+    # Strict validation: a saved definition must be executable.
     from agents_ide.domain.graph_validation import (
         check_version_features,
         definition_hash,
@@ -288,7 +287,6 @@ def create_version(
             422,
             {"errors": [issue.to_dict() for issue in report.errors]},
         )
-    next_number = _next_version_number(session, template_id)
     features = sorted(set(payload.required_features) | set(report.features))
     policy_payload = {**DEFAULTS, **payload.settings.model_dump(exclude_none=True)}
     capture_dependencies(session, payload.graph, policy_payload)
@@ -302,42 +300,36 @@ def create_version(
         }
     )
     policy_hash = content_hash(policy_payload)
-    if _reuse:
-        existing = session.scalar(
-            select(PipelineVersionModel).where(
-                PipelineVersionModel.template_id == template_id,
-                PipelineVersionModel.execution_hash == execution_hash,
-            )
-        )
-        if existing is not None:
-            if existing.origin != payload.origin:
-                raise AppError(
-                    "template_origin_conflict",
-                    "Сохраните импортированный граф в отдельный шаблон",
-                    409,
-                )
-            return version_from_model(existing)
+    existing = session.scalar(
+        select(PipelineVersionModel).where(PipelineVersionModel.template_id == template_id)
+    )
     now = utc_now()
-    model = PipelineVersionModel(
+    model = existing or PipelineVersionModel(
         id=new_id(),
         template_id=template_id,
-        version_number=next_number,
-        schema_version=template.schema_version,
-        required_features_json=to_json(features),
-        graph_json=to_json(payload.graph),
-        execution_hash=execution_hash,
-        policy_hash=policy_hash,
-        inputs_json=to_json(payload.inputs),
-        settings_json=to_json(payload.settings.model_dump(exclude_none=True)),
-        origin="imported"
-        if json.loads(template.draft_json).get("origin") == "imported"
-        else payload.origin,
+        version_number=1,
         created_at=now,
+    )
+    changed = existing is not None and existing.execution_hash != execution_hash
+    model.schema_version = template.schema_version
+    model.required_features_json = to_json(features)
+    model.graph_json = to_json(payload.graph)
+    model.execution_hash, model.policy_hash = execution_hash, policy_hash
+    model.inputs_json = to_json(payload.inputs)
+    model.settings_json = to_json(payload.settings.model_dump(exclude_none=True))
+    model.origin = (
+        "imported"
+        if (
+            model.origin == "imported"
+            or json.loads(template.draft_json).get("origin") == "imported"
+        )
+        else payload.origin
     )
 
     def _add() -> PipelineVersion:
         session.add(model)
         session.flush()
+        _advance_bindings(session, template_id, model.id, changed=changed)
         return version_from_model(model)
 
     return ensure_unique(session, _add)
@@ -360,14 +352,6 @@ def get_version(session: Session, version_id: str) -> PipelineVersion:
 
 def _compute_hash(graph: dict[str, Any], features: list[str], inputs: dict[str, Any]) -> str:
     return content_hash({"graph": graph, "features": sorted(features), "inputs": inputs})
-
-
-def _next_version_number(session: Session, template_id: str) -> int:
-    stmt = select(func.max(PipelineVersionModel.version_number)).where(
-        PipelineVersionModel.template_id == template_id
-    )
-    current = session.execute(stmt).scalar()
-    return int(current or 0) + 1
 
 
 def create_binding(
@@ -758,7 +742,9 @@ def save_template(
     return saved
 
 
-def _advance_bindings(session: Session, template_id: str, version_id: str) -> int:
+def _advance_bindings(
+    session: Session, template_id: str, version_id: str, *, changed: bool = False
+) -> int:
     bindings = session.scalars(
         select(PipelineBindingModel).where(
             PipelineBindingModel.version_id.in_(
@@ -767,7 +753,7 @@ def _advance_bindings(session: Session, template_id: str, version_id: str) -> in
                 )
             ),
             PipelineBindingModel.archived_at.is_(None),
-            PipelineBindingModel.version_id != version_id,
+            true() if changed else PipelineBindingModel.version_id != version_id,
         )
     ).all()
     for binding in bindings:
@@ -808,35 +794,8 @@ def sync_saved_template_bindings(session: Session) -> int:
 
 
 def saved_definition(session: Session, template_id: str) -> PipelineVersion | None:
-    """Resolve the saved document, including a return to a previously used definition."""
-    from agents_ide.domain.graph_validation import definition_hash, validate_graph
-
-    template = get_or_404(session, PipelineTemplateModel, template_id)
-    draft = json.loads(template.draft_json)
-    report = validate_graph(draft.get("graph", {}), inputs=draft.get("inputs", {}))
-    if report.ok:
-        digest = definition_hash(
-            {
-                "graph": draft["graph"],
-                "required_features": sorted(
-                    set(draft.get("required_features", [])) | set(report.features)
-                ),
-                "inputs": draft.get("inputs", {}),
-                "settings": PipelineDraft.model_validate(draft).settings.model_dump(
-                    exclude_none=True
-                ),
-                "schema_version": template.schema_version,
-            }
-        )
-        current = session.scalar(
-            select(PipelineVersionModel).where(
-                PipelineVersionModel.template_id == template_id,
-                PipelineVersionModel.execution_hash == digest,
-            )
-        )
-        if current is not None:
-            return version_from_model(current)
-    # Compatibility with templates published before unified saving.
+    """Return the sole saved definition, independently of any unfinished edits."""
+    get_or_404(session, PipelineTemplateModel, template_id)
     latest = session.scalar(
         select(PipelineVersionModel)
         .where(PipelineVersionModel.template_id == template_id)

@@ -164,6 +164,21 @@ def _seed_project(client, headers, tmp_path: Path, *, base_url: str, secret: str
             {"strip_thinking_tags": True, "extract_json": True},
             None,
         ),
+        (
+            '<think>Example: {"answer":"YES"}</think>\n{"answer":"NO"}',
+            {"extract_json": True},
+            None,
+        ),
+        (
+            'Response: <think>Reasoning</think>\n```json\n{"answer":"NO"}\n```',
+            {"extract_json": True},
+            None,
+        ),
+        (
+            '<think>Reasoning</think>\n{"answer":42}',
+            {"extract_json": True},
+            "schema_mismatch",
+        ),
         ('```json\n{"answer":42}\n```', {"extract_json": True}, "schema_mismatch"),
     ],
 )

@@ -107,7 +107,9 @@ def save_node_selection(runtime: dict[str, Any], run: Run, snapshot: dict[str, A
 
 def build_selection_summary(session: Session, run: Run) -> SelectionSummary | None:
     """Read pinned configuration and attempts, never live catalogs or retained SSE events."""
-    snapshot = json.loads(run.snapshot_json)
+    from agents_ide.engine.run_configuration import effective_snapshot
+
+    snapshot = effective_snapshot(run)
     runtime = json.loads(run.runtime_json or "{}")
     dependencies = snapshot.get("dependencies")
     if not isinstance(dependencies, dict):

@@ -292,6 +292,51 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     path: '../.local/chat-progress-restart.png',
     fullPage: true,
   })
+  await navigation
+    .getByRole('button', { name: /Review/ })
+    .click({ button: 'right' })
+  const stageRestart = page.getByRole('menuitem', {
+    name: 'Перезапустить этап',
+    exact: true,
+  })
+  await expect(stageRestart).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await expect(stageRestart).toHaveCount(0)
+  const reviewStage = navigation.getByRole('button', { name: /Review/ })
+  await expect(reviewStage).toBeFocused()
+  await reviewStage.press('Shift+F10')
+  const stageRestartResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/runs/${run.id}/commands`) &&
+      response.request().method() === 'POST',
+  )
+  await stageRestart.click()
+  const restartedStage = await stageRestartResponse
+  expect(restartedStage.status()).toBe(200)
+  expect(restartedStage.request().postDataJSON()).toMatchObject({
+    command_type: 'restart_stage',
+    payload: { node_id: 'second' },
+  })
+  await expect(progress).toContainText('В очереди исполнителя')
+  await expect(warning).toHaveCount(0)
+  await expect(progress.getByRole('log')).toContainText('Reviewing the result')
+  const sameRun = await api(page, 'GET', `/runs/${run.id}/snapshot`)
+  expect(sameRun.run.id).toBe(run.id)
+  expect(
+    sameRun.observation.nodes.find(
+      (node: { id: string }) => node.id === 'first',
+    ).status,
+  ).toBe('succeeded')
+  expect(
+    sameRun.observation.nodes.find(
+      (node: { id: string }) => node.id === 'second',
+    ).status,
+  ).toBe('pending')
+  await navigation
+    .getByRole('button', { name: /end/i })
+    .click({ button: 'right' })
+  await expect(stageRestart).toBeDisabled()
+  await page.keyboard.press('Escape')
   const restartResponse = page.waitForResponse(
     (response) =>
       response.url().endsWith(`/runs/${run.id}/restart`) &&
@@ -314,5 +359,9 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
       (node: { status: string }) => node.status === 'pending',
     ),
   ).toBeTruthy()
-  expect((await api(page, 'GET', `/runs/${run.id}`)).state).toBe('cancelled')
+  // No worker runs in this fixture: cancellation of the queued source is journaled.
+  expect((await api(page, 'GET', `/runs/${run.id}`)).state).toBe('queued')
+  expect(
+    (await api(page, 'GET', `/runs/${run.id}/commands`)).at(-1).status,
+  ).toBe('accepted')
 })

@@ -502,8 +502,7 @@ function BindingEditorForm({
             {archive.isPending ? 'Архивируем…' : 'Архивировать'}
           </button>
           <span className="muted">
-            Версия {binding.version} · обновлена{' '}
-            {formatDateTime(binding.updated_at)}
+            Обновлена {formatDateTime(binding.updated_at)}
           </span>
           <button
             type="button"

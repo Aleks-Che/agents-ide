@@ -40,7 +40,7 @@ export function ConfirmedPlanSelect({
             )
           }
         >
-          <option value="">План из входов версии / ручной ввод</option>
+          <option value="">План из входов шаблона / ручной ввод</option>
           {value && !selected && (
             <option value={key}>
               Переданный план · ревизия {value.revision_number} (проверит

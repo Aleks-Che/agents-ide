@@ -16,6 +16,11 @@ import {
   type RunRecord,
 } from '../../api/runs'
 import { useCsrfToken } from '../../app/session'
+import { ContextMenu } from '../../app/ContextMenu'
+import {
+  contextMenuHandlers,
+  type ContextMenuTarget,
+} from '../../app/context_menu'
 import { useRunEventSource } from '../../app/useRunStream'
 import { allowedCommands } from './controls'
 import {
@@ -69,6 +74,10 @@ export function ChatRunProgress({
   const client = useQueryClient()
   const [live, setLive] = useState<EventEnvelope[]>([])
   const [resolution, setResolution] = useState(false)
+  const [stageMenu, setStageMenu] = useState<{
+    target: ContextMenuTarget
+    nodeId: string
+  } | null>(null)
   const [selectedStage, setSelectedStage] = useState<{
     cursor: string
     id: string
@@ -170,6 +179,7 @@ export function ChatRunProgress({
   const events = mergeEvents(bootstrap.data?.events ?? [], live)
   const actions = run ? allowedCommands(run) : []
   const waiting = run?.waiting_reason
+  const menuNode = nodes.find((node) => node.id === stageMenu?.nodeId)
   return (
     <section className="chat-run-progress" aria-label="Выполнение шаблона">
       <header className="chat-run-header">
@@ -370,6 +380,10 @@ export function ChatRunProgress({
               type="button"
               className={`quiet${opened?.id === node.id ? ' selected' : ''}`}
               aria-current={opened?.id === node.id ? 'step' : undefined}
+              {...contextMenuHandlers((target) =>
+                setStageMenu({ target, nodeId: node.id }),
+              )}
+              title="Правая кнопка мыши — действия с этапом"
               onClick={() => setSelectedStage({ cursor, id: node.id })}
             >
               <span>
@@ -415,6 +429,34 @@ export function ChatRunProgress({
           ) : null}
         </div>
       </div>
+      {stageMenu && menuNode ? (
+        <ContextMenu
+          target={stageMenu.target}
+          label={`Действия с этапом ${menuNode.label}`}
+          onClose={() => setStageMenu(null)}
+          items={[
+            {
+              label: 'Перезапустить этап',
+              title:
+                menuNode.restart_blocked_reason ??
+                'Начать этот этап заново и продолжить шаблон. Изменения файлов сохранятся.',
+              disabled:
+                !csrf ||
+                !menuNode.execution_id ||
+                !!menuNode.restart_blocked_reason ||
+                command.isPending ||
+                restart.isPending ||
+                uncertain ||
+                restartUncertain,
+              onSelect: () =>
+                send('restart_stage', {
+                  node_id: menuNode.id,
+                  execution_id: menuNode.execution_id,
+                }),
+            },
+          ]}
+        />
+      ) : null}
     </section>
   )
 }

@@ -255,6 +255,17 @@ describe('Run controls and binding drafts', () => {
     ).toThrow()
     expect(() => resolutionPayload({} as RunRecord, '{}', '')).toThrow()
   })
+  it('reprocesses saved JSON without authorizing another model request', () => {
+    const run = {
+      waiting_reason: { code: 'invalid_response_format' },
+    } as RunRecord
+    expect(
+      resolutionPayload(run, '', 'reprocess', { extract_json: true }),
+    ).toEqual({
+      json_processing: { extract_json: true },
+    })
+    expect(() => resolutionPayload(run, '', 'reprocess', {})).toThrow()
+  })
   it.each([
     'broken',
     '[]',
