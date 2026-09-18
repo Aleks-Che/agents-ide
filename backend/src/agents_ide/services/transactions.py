@@ -4,6 +4,8 @@ Take the write reservation before reading optimistic versions or allocating
 sequence numbers. Do filesystem/network probes before entering this boundary.
 """
 
+import threading
+
 from sqlalchemy import event
 from sqlalchemy.orm import Session, SessionTransaction
 
@@ -14,7 +16,9 @@ def clear_write_marker(session: Session, transaction: SessionTransaction) -> Non
         session.info.pop("domain_write", None)
 
 
-def begin_write(session: Session) -> None:
+def begin_write(session: Session, *, cancel: threading.Event | None = None) -> None:
     if not session.info.get("domain_write"):
-        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        session.connection().exec_driver_sql(
+            "BEGIN IMMEDIATE", execution_options={"cancel_wait": cancel}
+        )
         session.info["domain_write"] = True

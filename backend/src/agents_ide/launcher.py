@@ -100,8 +100,7 @@ def start(settings: Settings) -> dict[str, Any]:
             creationflags=flags,
             start_new_session=sys.platform != "win32",
         )
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
+        while True:
             current = status(settings)
             if current.get("launch_id") == launch_id and current.get("status") == "running":
                 return current
@@ -114,7 +113,7 @@ def start(settings: Settings) -> dict[str, Any]:
             process = resolve_process(current.get("launcher", {}))
             if process:
                 wait_stopped([process], 15)
-        logging.error("launcher.startup_timeout", extra={"status": current.get("status")})
+        logging.error("launcher.startup_failed", extra={"status": current.get("status")})
         raise AppError(
             "startup_failed",
             f"Службы не запустились. Журнал: {settings.data_dir / 'logs'}. "

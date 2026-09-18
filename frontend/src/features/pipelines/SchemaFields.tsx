@@ -339,7 +339,9 @@ export function ObjectFields({
   const properties = schema.properties ?? {}
   const keys = [
     ...new Set([...Object.keys(properties), ...Object.keys(value)]),
-  ].filter((key) => !exclude.includes(key))
+  ].filter(
+    (key) => !exclude.includes(key) && properties[key]?.deprecated !== true,
+  )
   const additional = schema.additionalProperties !== false
   return (
     <fieldset className="schema-group">

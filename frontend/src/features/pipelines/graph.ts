@@ -190,6 +190,7 @@ export function switchExecutor(
     'model',
     'harness_profile_id',
     'harness_settings',
+    'json_processing',
     'connection_id',
     'expected_kind',
   ])

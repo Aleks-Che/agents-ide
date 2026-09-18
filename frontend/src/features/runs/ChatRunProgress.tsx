@@ -22,9 +22,8 @@ import {
   mergeEvents,
   stateDescriptions,
   waitingDescriptions,
-  eventPreview,
-  toolProgress,
 } from './observation'
+import { stageOutput } from './stage_output'
 import { ArtifactDetail } from './ArtifactDetail'
 import { RunWorkspace } from './RunWorkspace'
 import { ResolutionForm } from './RunsPanel'
@@ -70,9 +69,9 @@ export function ChatRunProgress({
   const client = useQueryClient()
   const [live, setLive] = useState<EventEnvelope[]>([])
   const [resolution, setResolution] = useState(false)
-  const [expanded, setExpanded] = useState<{
+  const [selectedStage, setSelectedStage] = useState<{
     cursor: string
-    id: string | null
+    id: string
   } | null>(null)
   const snapshot = useQuery({
     queryKey: ['run_snapshot', runId],
@@ -94,6 +93,7 @@ export function ChatRunProgress({
   const refresh = () => {
     void client.invalidateQueries({ queryKey: ['run_snapshot', runId] })
     void client.invalidateQueries({ queryKey: ['runs_for_chat'] })
+    void client.invalidateQueries({ queryKey: ['runs_summary'] })
   }
   const stream = useRunEventSource({
     runId,
@@ -163,19 +163,13 @@ export function ChatRunProgress({
   const observation = snapshot.data?.observation
   const current = observation?.current_node_id
   const cursor = `${current}:${observation?.current_execution_id}`
-  const opened = expanded?.cursor === cursor ? expanded.id : current
   const nodes = orderStages(observation)
+  const selectedId =
+    selectedStage?.cursor === cursor ? selectedStage.id : current
+  const opened = nodes.find((node) => node.id === selectedId) ?? nodes[0]
   const events = mergeEvents(bootstrap.data?.events ?? [], live)
   const actions = run ? allowedCommands(run) : []
   const waiting = run?.waiting_reason
-  const choose = (id: string) => {
-    setExpanded({ cursor, id })
-    requestAnimationFrame(() =>
-      document
-        .getElementById(`stage-${runId}-${id}`)
-        ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }),
-    )
-  }
   return (
     <section className="chat-run-progress" aria-label="Выполнение шаблона">
       <header className="chat-run-header">
@@ -374,9 +368,9 @@ export function ChatRunProgress({
             <button
               key={node.id}
               type="button"
-              className={`quiet${opened === node.id ? ' selected' : ''}`}
-              aria-current={opened === node.id ? 'step' : undefined}
-              onClick={() => choose(node.id)}
+              className={`quiet${opened?.id === node.id ? ' selected' : ''}`}
+              aria-current={opened?.id === node.id ? 'step' : undefined}
+              onClick={() => setSelectedStage({ cursor, id: node.id })}
             >
               <span>
                 {i + 1}. {node.label}
@@ -390,46 +384,35 @@ export function ChatRunProgress({
           ))}
         </nav>
         <div className="stage-cards">
-          {nodes.map((node, i) => (
+          {opened ? (
             <article
-              id={`stage-${runId}-${node.id}`}
-              className={`stage-card${node.id === current ? ' current' : ''}`}
-              key={node.id}
+              id={`stage-${runId}-${opened.id}`}
+              className={`stage-card${opened.id === current ? ' current' : ''}`}
+              key={opened.id}
             >
-              <button
-                className="quiet stage-heading"
-                type="button"
-                aria-expanded={opened === node.id}
-                onClick={() =>
-                  setExpanded({
-                    cursor,
-                    id: opened === node.id ? null : node.id,
-                  })
-                }
-              >
+              <header className="stage-heading">
                 <strong>
-                  {i + 1}. {node.label}
+                  {nodes.indexOf(opened) + 1}. {opened.label}
                 </strong>
                 <span>
-                  {node.id === current && run?.state === 'waiting_input'
+                  {opened.id === current && run?.state === 'waiting_input'
                     ? 'Нужно решение'
-                    : (stageStates[node.status ?? 'pending'] ??
-                      node.status)}{' '}
-                  {opened === node.id ? '▾' : '▸'}
+                    : (stageStates[opened.status ?? 'pending'] ??
+                      opened.status)}
                 </span>
-              </button>
-              {opened === node.id && run ? (
+              </header>
+              {run ? (
                 <StageContent
-                  key={`${node.id}:${node.execution_id}`}
+                  key={`${opened.id}:${opened.execution_id}`}
                   runId={runId}
                   run={run}
-                  node={node}
-                  current={node.id === current}
+                  node={opened}
+                  current={opened.id === current}
                   events={events}
                 />
               ) : null}
             </article>
-          ))}
+          ) : null}
         </div>
       </div>
     </section>
@@ -496,64 +479,7 @@ function StageContent({
     )
       ? { payload: storedQuestion }
       : undefined)
-  const output: Array<{ key: number; text: string; role: string }> = []
-  const tools = new Map<string, { key: number; text: string; role: string }>()
-  for (const event of all) {
-    if (
-      event.type === 'attempt.text_delta' ||
-      event.type === 'agent.message_delta'
-    ) {
-      const text = String(event.payload.text ?? event.payload.delta ?? '')
-      const last = output.at(-1)
-      if (last?.role === `assistant:${event.step_attempt_id}`) last.text += text
-      else
-        output.push({
-          key: event.sequence,
-          text,
-          role: `assistant:${event.step_attempt_id}`,
-        })
-    } else if (event.type === 'agent.tool_call') {
-      const tool = toolProgress(event)
-      const previous = tools.get(tool.id)
-      if (previous) previous.text = tool.text
-      else {
-        const entry = { key: event.sequence, text: tool.text, role: 'system' }
-        tools.set(tool.id, entry)
-        output.push(entry)
-      }
-    } else if (event.type === 'agent.user_message') {
-      const delivery = all.find(
-        (next) =>
-          next.type === 'agent.user_message_status' &&
-          next.command_id === event.command_id,
-      )
-      const status = delivery?.payload.delivery
-      output.push({
-        key: event.sequence,
-        text: `${String(event.payload.text ?? '')}\n${status === 'delivered' ? 'Передано агенту' : status === 'failed' ? 'Не удалось подтвердить доставку' : 'Ожидает передачи агенту'}`,
-        role: 'user',
-      })
-    } else if (
-      [
-        'attempt.started',
-        'attempt.finished',
-        'command.finished',
-        'condition.evaluated',
-        'git.commit_created',
-        'git.no_changes',
-      ].includes(event.type)
-    ) {
-      output.push({
-        key: event.sequence,
-        text:
-          event.type === 'attempt.finished' &&
-          event.payload.status === 'interrupted'
-            ? 'Попытка прервана; остановка подтверждена'
-            : `${({ 'attempt.started': 'Попытка начата', 'attempt.finished': 'Попытка завершена', 'command.finished': 'Команда завершена', 'condition.evaluated': 'Условие проверено', 'git.commit_created': 'Коммит создан', 'git.no_changes': 'Нет изменений для коммита' } as Record<string, string>)[event.type]} ${eventPreview(event)}`,
-        role: 'system',
-      })
-    }
-  }
+  const output = stageOutput(all)
   const log = useRef<HTMLDivElement>(null)
   const logContent = useRef<HTMLDivElement>(null)
   const [following, setFollowing] = useState(true)
@@ -619,7 +545,12 @@ function StageContent({
                     ? 'Этап'
                     : 'Агент'}
               </small>
-              <pre>{entry.text}</pre>
+              <pre>
+                {entry.tool && entry.tool.count > 1
+                  ? `(${entry.tool.count}) `
+                  : null}
+                {entry.text}
+              </pre>
             </div>
           ))}
           {!output.length ? (

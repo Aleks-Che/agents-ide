@@ -39,6 +39,7 @@ import { useCsrfToken } from '../../app/session'
 import { Modal } from '../../app/Modal'
 import { ModelSelectionEditor } from './ModelSelectionEditor'
 import { GitCommitMessageEditor } from './GitCommitMessageEditor'
+import { LlmResponseSettings } from './LlmResponseSettings'
 import { useEditorResources, type EditorResources } from './resources'
 import {
   connectionError,
@@ -782,6 +783,7 @@ function GraphEditorForm({
                           'generate_message',
                           'message_generation',
                           'harness_settings',
+                          'json_processing',
                           ...(selectedNode.type === 'GitCommit'
                             ? ['verification_node_id']
                             : []),
@@ -821,6 +823,16 @@ function GraphEditorForm({
                         key={selectedNode.id}
                         config={selectedNode.config ?? {}}
                         connections={resources.connections}
+                        onChange={(config) =>
+                          updateNode({ ...selectedNode, config })
+                        }
+                      />
+                    ) : null}
+                    {selectedNode.type === 'LLMRequest' &&
+                    (selectedNode.config?.response_format === 'json' ||
+                      selectedNode.config?.output_schema !== undefined) ? (
+                      <LlmResponseSettings
+                        config={selectedNode.config ?? {}}
                         onChange={(config) =>
                           updateNode({ ...selectedNode, config })
                         }

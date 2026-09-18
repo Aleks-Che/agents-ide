@@ -148,8 +148,8 @@ class Runner:
         if self.abort.is_set():
             raise AppError("queue_job_lost", "Worker запретил новые действия", 409)
         with self.session_factory() as session:
-            begin_write(session)
-            job = owned_job(session, self.run_id, self.worker_id, self.generation)
+            begin_write(session, cancel=self.abort)
+            owned_job(session, self.run_id, self.worker_id, self.generation)
             run = session.get(Run, self.run_id)
             if (
                 run is None
@@ -167,12 +167,8 @@ class Runner:
             if reservation is None:
                 raise AppError("queue_job_lost", "Нет резервации рабочего каталога", 409)
             yield session, run
-            if (
-                self.abort.is_set()
-                or job.lease_expires_at is None
-                or job.lease_expires_at <= utc_now()
-            ):
-                raise AppError("queue_job_lost", "Владение истекло до фиксации результата", 409)
+            if self.abort.is_set():
+                raise AppError("queue_job_lost", "Worker запретил фиксацию результата", 409)
             session.commit()
 
     def _event(
@@ -847,11 +843,6 @@ class Runner:
         if not self.enforce_limits:
             return None
         limits = self._limits()
-        elapsed = self.runtime["duration_seconds"] + (
-            max(0, utc_now() - self.runtime["active_since"]) if self.runtime["active_since"] else 0
-        )
-        if elapsed >= limits["max_duration_seconds"]:
-            return "max_duration_seconds"
         key = {"visits": "max_node_visits", "external_calls": "max_calls"}.get(operation)
         if key and self.runtime[operation] >= limits[key]:
             return key
@@ -1312,7 +1303,7 @@ class Runner:
                             self.generation,
                         ).refresh_health()
                     last_heartbeat = now
-                    if requested or (deadline_at is not None and utc_now() >= deadline_at):
+                    if requested:
                         stop.set()
                         stop_started = stop_started or now
                 if stop_started is not None and now - stop_started >= INTERRUPT_SECONDS:
@@ -1654,19 +1645,8 @@ class Runner:
             if limit := self._limit("external_calls" if count_external else "duration"):
                 return self._waiting("limit_exceeded", {"limit": limit}, visit)
             self._workspace_check()
-            remaining = min(
-                node.get("timeout_seconds", 86400),
-                max(
-                    0,
-                    self._limits()["max_duration_seconds"] - self.runtime["duration_seconds"],
-                ),
-            )
-            deadline = utc_now() + remaining if self.enforce_limits else None
-            import time as time_module
-
-            monotonic_deadline = (
-                time_module.monotonic() + remaining if self.enforce_limits else float("inf")
-            )
+            deadline = None
+            monotonic_deadline = float("inf")
             with self._write() as (session, run):
                 attempt = visits.create_attempt(session, visit)
                 attempt.operation_id = new_id()
@@ -2537,19 +2517,7 @@ class Runner:
                     "emit_event": emit_progress,
                     "stop_event": threading.Event(),
                     "check_owned": self._check_owned,
-                    "deadline_at": (
-                        utc_now()
-                        + min(
-                            node.get("timeout_seconds", 86400),
-                            max(
-                                0,
-                                self._limits()["max_duration_seconds"]
-                                - self.runtime["duration_seconds"],
-                            ),
-                        )
-                    )
-                    if self.enforce_limits
-                    else None,
+                    "deadline_at": None,
                 }
                 if node["type"] == "AgentTask":
 
@@ -2835,7 +2803,14 @@ class Runner:
         body = result.validated_result
         if config.get("response_format") == "json" or config.get("output_schema"):
             try:
-                body = json.loads(result.raw_text)
+                from agents_ide.engine.json_response import parse_json_response
+
+                processing = config.get("json_processing", {})
+                body = parse_json_response(
+                    result.raw_text,
+                    strip_thinking_tags=processing.get("strip_thinking_tags", False),
+                    extract_json=processing.get("extract_json", False),
+                )
                 if config.get("output_schema") and not Draft202012Validator(
                     config["output_schema"]
                 ).is_valid(body):

@@ -149,9 +149,29 @@ def _seed_project(client, headers, tmp_path: Path, *, base_url: str, secret: str
     return project, connection, template
 
 
-def test_real_llm_run_completes_via_worker(fake_worker, authenticated, provider_server, tmp_path):
+@pytest.mark.parametrize(
+    "raw_text,processing,error",
+    [
+        ('{"answer":"NO"}', {}, None),
+        ('<think>Reasoning</think>\n{"answer":"NO"}', {}, "invalid_json"),
+        (
+            '<think>Reasoning</think>\n{"answer":"NO"}',
+            {"strip_thinking_tags": True},
+            None,
+        ),
+        (
+            '<think>Reasoning</think>\n```json\n{"answer":"NO"}\n```',
+            {"strip_thinking_tags": True, "extract_json": True},
+            None,
+        ),
+        ('```json\n{"answer":42}\n```', {"extract_json": True}, "schema_mismatch"),
+    ],
+)
+def test_real_llm_run_completes_via_worker(
+    fake_worker, authenticated, provider_server, tmp_path, raw_text, processing, error
+):
     server, base_url = provider_server
-    Handler.responses = {"default": {"status": 200, "content": json.dumps({"verdict": "passed"})}}
+    Handler.responses = {"default": {"status": 200, "content": raw_text}}
     client, headers = authenticated
     project, connection, template = _seed_project(client, headers, tmp_path, base_url=base_url)
     graph = {
@@ -164,6 +184,13 @@ def test_real_llm_run_completes_via_worker(fake_worker, authenticated, provider_
                     "role": "verifier",
                     "prompt": "verify the implementation",
                     "response_format": "json",
+                    "json_processing": processing,
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                        "additionalProperties": False,
+                    },
                     "model_selection": {
                         "kind": "direct",
                         "model_id": "alpha",
@@ -198,7 +225,31 @@ def test_real_llm_run_completes_via_worker(fake_worker, authenticated, provider_
         },
     ).json()
     final = _wait_for_terminal(client, headers, run["id"])
-    assert final["state"] == "completed", final
+    assert final["state"] == ("waiting_input" if error else "completed"), final
+    if error:
+        assert final["waiting_reason"]["details"]["reason"] == error
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+
+    from agents_ide.persistence.models import ArtifactManifest, StepExecution
+
+    with Session(client.app.state.engine) as session:
+        artifact = session.scalar(
+            select(ArtifactManifest).where(
+                ArtifactManifest.run_id == run["id"],
+                ArtifactManifest.schema_type == "llm_response",
+            )
+        )
+        result = json.loads(artifact.body_json)
+        assert result["raw_text"] == raw_text
+        assert result["validated"] == (None if error else {"answer": "NO"})
+        if not error:
+            execution = session.scalar(
+                select(StepExecution).where(
+                    StepExecution.run_id == run["id"], StepExecution.node_id == "verify"
+                )
+            )
+            assert json.loads(execution.validated_result_json) == {"answer": "NO"}
     events = client.get(f"/api/runs/{run['id']}/events", headers=headers).json()
     assert any(e["type"] == "attempt.finished" for e in events["events"])
     assert Handler.authorizations  # the worker actually called the provider

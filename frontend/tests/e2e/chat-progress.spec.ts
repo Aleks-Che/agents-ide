@@ -29,6 +29,9 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     name: `Progress ${randomUUID()}`,
     workspace_path: workspace(),
   })
+  await api(page, 'POST', `/projects/${project.id}/chats`, {
+    title: 'Idle chat',
+  })
   const chat = await api(page, 'POST', `/projects/${project.id}/chats`, {
     title: 'Live chat',
   })
@@ -91,6 +94,28 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   await page.getByRole('option', { name: new RegExp(project.name) }).click()
   const progress = page.getByRole('region', { name: 'Выполнение шаблона' })
   await expect(progress).toBeVisible()
+  const chatOption = page.getByRole('option', { name: /Live chat/ })
+  const activity = chatOption.getByRole('status', {
+    name: 'В диалоге выполняется процесс',
+  })
+  await expect(activity).toBeVisible()
+  await expect(activity.locator('svg')).toHaveCSS(
+    'animation-name',
+    'chat-activity-spin',
+  )
+  await expect(progress.locator('.stage-card')).toHaveCount(1)
+  await expect(progress.locator('.stage-heading')).toHaveText(
+    '2. ImplementationВыполняется',
+  )
+  await expect(progress.locator('button.stage-heading')).toHaveCount(0)
+  const idleChat = page.getByRole('option', { name: /Idle chat/ })
+  await expect(idleChat.getByRole('status')).toHaveCount(0)
+  await idleChat.click()
+  await expect(
+    page.getByRole('heading', { name: 'Idle chat', exact: true }),
+  ).toBeVisible()
+  await expect(activity).toBeVisible()
+  await chatOption.click()
   await expect(progress.getByRole('log')).toContainText(
     'Checking the first files',
   )
@@ -147,6 +172,13 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   await expect(progress.getByRole('log')).not.toContainText(
     'read · выполняется',
   )
+  checkpoint(run.id, 'repeated-tools')
+  await expect(
+    progress.getByRole('log').getByText('(4) Инструмент', { exact: true }),
+  ).toHaveCount(1)
+  await expect(
+    progress.getByRole('log').getByText('Инструмент', { exact: true }),
+  ).toHaveCount(0)
   await expect(progress.getByText('Агент ожидает ответа')).toBeVisible()
   await page.reload()
   await page.getByRole('option', { name: new RegExp(project.name) }).click()
@@ -192,17 +224,17 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     0,
   )
   checkpoint(run.id, 'second')
-  await expect(
-    progress.locator('.stage-heading').filter({ hasText: '2. Implementation' }),
-  ).toHaveAttribute('aria-expanded', 'false')
-  await expect(
-    progress.locator('.stage-heading').filter({ hasText: '3. Review' }),
-  ).toHaveAttribute('aria-expanded', 'true')
+  await expect(progress.locator('.stage-card')).toHaveCount(1)
+  await expect(progress.locator('.stage-heading')).toContainText('3. Review')
   await expect(progress.getByRole('log')).toContainText('Reviewing the result')
   const navigation = progress.getByRole('navigation', {
     name: 'Этапы выполнения',
   })
   await navigation.getByRole('button', { name: /Implementation/ }).click()
+  await expect(progress.locator('.stage-card')).toHaveCount(1)
+  await expect(progress.locator('.stage-heading')).toContainText(
+    '2. Implementation',
+  )
   await expect(progress.getByRole('log')).toContainText(
     'Please also check README',
   )
@@ -217,6 +249,7 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   ).toBeDisabled()
   checkpoint(run.id, 'paused')
   await expect(progress).toContainText('На паузе')
+  await expect(activity).toHaveCount(0)
   await expect(
     progress.getByRole('button', { name: 'Продолжить выполнение' }),
   ).toBeEnabled()
@@ -231,6 +264,7 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   ).toBeEnabled()
   await progress.getByRole('button', { name: 'Продолжить выполнение' }).click()
   await expect(progress).toContainText('В очереди исполнителя')
+  await expect(activity).toBeVisible()
   await page.screenshot({ path: '../.local/chat-progress.png', fullPage: true })
   await page.reload()
   await page.getByRole('option', { name: new RegExp(project.name) }).click()
@@ -245,6 +279,8 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   checkpoint(run.id, 'waiting')
   const warning = progress.locator('.stage-waiting')
   await expect(warning).toBeVisible()
+  await expect(activity).toHaveCount(0)
+  await navigation.getByRole('button', { name: /Review/ }).click()
   await expect(
     progress.locator('.stage-heading').filter({ hasText: '3. Review' }),
   ).toContainText('Нужно решение')

@@ -1,4 +1,4 @@
-"""Bounded Git transport. Every process (including hooks) belongs to one Job."""
+"""Cancellable Git transport. Every process (including hooks) belongs to one Job."""
 
 from __future__ import annotations
 
@@ -60,14 +60,17 @@ class GitTransport:
         *,
         data: bytes = b"",
         env: dict[str, str] | None = None,
-        timeout: float = 30,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         from agents_ide.worker.processes import ProcessGroup
 
         executable = self.executable or shutil.which("git")
         if not executable:
             raise GitError("git_unavailable", "Git is unavailable")
-        deadline = min(self.deadline or float("inf"), time.monotonic() + timeout)
+        deadline = min(
+            self.deadline or float("inf"),
+            time.monotonic() + timeout if timeout is not None else float("inf"),
+        )
         if (self.stop and self.stop.is_set()) or time.monotonic() >= deadline:
             raise GitError("git_interrupted", "Git dispatch interrupted")
         argv = [
@@ -177,7 +180,7 @@ def run_git(
     *,
     data: bytes = b"",
     env: dict[str, str] | None = None,
-    timeout: float = 30,
+    timeout: float | None = None,
 ) -> bytes:
     result = (_TRANSPORT.get() or GitTransport()).run(
         workspace, args, data=data, env=env, timeout=timeout

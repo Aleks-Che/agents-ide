@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from agents_ide.adapters.base import AgentAdapter, AgentAdapterRequest, AgentResult
 from agents_ide.adapters.codex import CodexAdapter
 from agents_ide.adapters.opencode import OpenCodeAdapter
-from agents_ide.domain.common import to_json, utc_now
+from agents_ide.domain.common import to_json
 from agents_ide.engine.artifacts import sanitize
 from agents_ide.engine.codex_runtime import CodexRuntime
 from agents_ide.engine.opencode_runtime import OpenCodeRuntime
@@ -65,7 +65,7 @@ class PlanningSupervisor(ProcessSupervisor):
             job is None
             or job.generation != self.generation
             or job.lease_owner != self.worker_id
-            or (job.lease_expires_at or 0) <= utc_now()
+            or job.lease_expires_at is None
             or attempt is None
             or attempt.job_id != job.id
             or attempt.generation != self.generation

@@ -618,6 +618,7 @@ def test_crash_reconciles_commit_and_atomic_plan_projection(
     with factory() as session:
         job = session.scalar(select(QueueJob))
         job.lease_expires_at = 0
+        job.owner_pid, job.owner_create_time = None, None
         job.owner_pid, job.owner_create_time = 99999999, 1
         row = session.get(Run, response.json()["id"])
         runtime = json.loads(row.runtime_json)
@@ -672,6 +673,8 @@ def test_paused_run_detects_external_file_change(
 
 
 def test_unchanged_repairs_wait_for_no_progress(authenticated, repository, provider, settings):
+    settings.enforce_execution_limits = True
+
     class StalledAgent(Agent):
         def run(self, request):
             result = super().run(request)

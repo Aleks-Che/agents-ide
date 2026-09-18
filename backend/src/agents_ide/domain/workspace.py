@@ -87,7 +87,6 @@ def _git(path: Path, args: list[str], *, optional: bool = False) -> str | None:
             text=True,
             encoding="utf-8",
             errors="strict",
-            timeout=10,
             env=environment,
             creationflags=creation_flags,
         )

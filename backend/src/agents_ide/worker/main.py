@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from agents_ide.config import Settings
 from agents_ide.engine.planning_worker import dispatch_planning_job
-from agents_ide.engine.queue import claim_next_job, refresh_lease, release_job
+from agents_ide.engine.queue import abandon_job, claim_next_job, refresh_lease, release_job
 from agents_ide.engine.runner import build_runner
 from agents_ide.persistence.database import check_database, create_database, migrate
 from agents_ide.security.secrets import SecretStore
@@ -279,8 +279,11 @@ def dispatch_once(
                         worker_id=worker_id,
                         expected_generation=job.generation,
                         lease_seconds=30,
+                        cancel=stop_renewal,
                     )
                 except Exception:
+                    if stop_renewal.is_set():
+                        return
                     abort.set()
                     if runner.registry:
                         ProcessSupervisor(
@@ -313,6 +316,9 @@ def dispatch_once(
         finally:
             stop_renewal.set()
             thread.join(timeout=2)
+            abandon_job(
+                factory, job_id=job.job_id, worker_id=worker_id, generation=job.generation
+            )
             if registry is not None:
                 with registry.lock:
                     registry.aborts.pop(job.run_id, None)

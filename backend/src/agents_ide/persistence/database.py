@@ -1,13 +1,16 @@
 import logging
 import sqlite3
+import time
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
 
 import portalocker
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import URL, Engine, create_engine, event
+from sqlalchemy.pool import NullPool
 
 from agents_ide.config import Settings
 
@@ -29,14 +32,36 @@ SCHEMA_REVISION = _schema_revision()
 def create_database(settings: Settings) -> Engine:
     engine = create_engine(
         URL.create("sqlite", database=str(settings.database_path)),
-        connect_args={"check_same_thread": False, "timeout": 5},
+        # Short SQLite waits are polling intervals, never an execution deadline.
+        connect_args={"check_same_thread": False, "timeout": 0.1},
+        poolclass=NullPool,
     )
 
     @event.listens_for(engine, "connect")
     def configure(connection: sqlite3.Connection, _: object) -> None:
         connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA busy_timeout=100")
         connection.execute("PRAGMA synchronous=FULL")
+
+    @event.listens_for(engine, "do_execute")
+    def wait_for_writer(cursor: Any, statement: str, parameters: Any, context: Any) -> bool:
+        assert isinstance(cursor, sqlite3.Cursor)
+        while True:
+            cancel = context.execution_options.get("cancel_wait")
+            if cancel is not None and cancel.is_set():
+                raise InterruptedError("Database wait cancelled")
+            try:
+                cursor.execute(statement, parameters)
+                return True
+            except sqlite3.OperationalError as exc:
+                # A stale WAL read snapshot cannot become writable by waiting;
+                # retrying it would deadlock. Likewise, real I/O errors must surface.
+                if getattr(exc, "sqlite_errorcode", None) not in {
+                    sqlite3.SQLITE_BUSY,
+                    sqlite3.SQLITE_BUSY_RECOVERY,
+                }:
+                    raise
+                time.sleep(0.05)
 
     @event.listens_for(engine, "engine_connect")
     def settings_context(connection: object) -> None:
@@ -53,7 +78,9 @@ def migrate(settings: Settings, *, lock_held: bool = False) -> None:
     guard = (
         nullcontext()
         if lock_held
-        else portalocker.Lock(str(settings.data_dir / "runtime/migrate.lock"), timeout=30)
+        else portalocker.Lock(
+            str(settings.data_dir / "runtime/migrate.lock"), flags=portalocker.LOCK_EX
+        )
     )
     with guard:
         engine = create_database(settings)

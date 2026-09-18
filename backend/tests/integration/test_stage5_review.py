@@ -213,6 +213,7 @@ def test_expired_job_reclaimed_for_reconciliation_without_releasing_workspace(
         row.state = "running"
         saved = session.get(QueueJob, job.job_id)
         saved.lease_expires_at = time.time() - 1
+        saved.owner_pid, saved.owner_create_time = None, None
         session.commit()
     recovery, claimed = runner_for(run, factory, settings, "new")
     assert claimed.generation > job.generation

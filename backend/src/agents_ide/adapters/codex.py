@@ -228,7 +228,7 @@ class CodexAdapter(AgentAdapter):
         *,
         stream: CodexStream,
         session: RunSession,
-        request_timeout: float = 30.0,
+        request_timeout: float | None = None,
         turn_timeout: float | None = None,
     ) -> None:
         self._stream = stream
@@ -248,7 +248,7 @@ class CodexAdapter(AgentAdapter):
         method: str,
         params: dict[str, Any],
         *,
-        timeout: float,
+        timeout: float | None = None,
         check: Callable[[], None] | None = None,
         notifications: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
@@ -257,7 +257,7 @@ class CodexAdapter(AgentAdapter):
                 check()
             request_id = self._stream.next_id()
             self._stream.send({"id": request_id, "method": method, "params": params})
-            deadline = time.monotonic() + timeout
+            deadline = time.monotonic() + timeout if timeout is not None else float("inf")
             while True:
                 if check:
                     check()
@@ -267,6 +267,8 @@ class CodexAdapter(AgentAdapter):
                 try:
                     message = self._stream.receive(min(0.1, remaining))
                 except queue.Empty:
+                    if not self._stream.is_alive():
+                        raise OSError("Codex transport closed") from None
                     continue
                 # Server request IDs may collide with client IDs.
                 if "method" not in message and message.get("id") == request_id:
@@ -705,7 +707,7 @@ class CodexAdapter(AgentAdapter):
                                         "expectedTurnId": self._turn_id,
                                         "input": [{"type": "text", "text": incoming["text"]}],
                                     },
-                                    timeout=min(5, self.request_timeout),
+                                    timeout=self.request_timeout,
                                     check=check,
                                     notifications=pending,
                                 )

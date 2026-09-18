@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass
 
 import psutil
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from agents_ide.domain.common import new_id, utc_now
 from agents_ide.domain.workspace import reservations_overlap
+from agents_ide.engine.ownership import owner_may_be_alive
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import QueueJob, Run, WorkspaceReservation
 from agents_ide.services.transactions import begin_write
@@ -36,9 +38,8 @@ def owned_job(
         or job.claimed_by != worker_id
         or job.generation != generation
         or job.lease_expires_at is None
-        or job.lease_expires_at <= (utc_now() if now is None else now)
     ):
-        raise AppError("queue_job_lost", "Владение заданием истекло или изменилось", 409)
+        raise AppError("queue_job_lost", "Владение заданием изменилось или освобождено", 409)
     return job
 
 
@@ -49,9 +50,9 @@ def claim_next_job(
     lease_seconds: float,
     now: float | None = None,
 ) -> ClaimedJob | None:
-    now_value = utc_now() if now is None else now
     with session_factory() as session:
         begin_write(session)
+        now_value = utc_now() if now is None else now
         expired = list(
             session.scalars(
                 select(QueueJob).where(
@@ -73,6 +74,8 @@ def claim_next_job(
         )
         expired.extend(job for job in orphaned if job not in expired)
         for job in expired:
+            if job.claimed_by and owner_may_be_alive(job.owner_pid, job.owner_create_time):
+                continue
             run = session.get(Run, job.run_id)
             if run is not None and run.state not in {
                 "completed",
@@ -120,9 +123,7 @@ def claim_next_job(
         session.flush()
         active = (
             session.scalar(
-                select(func.count())
-                .select_from(QueueJob)
-                .where(QueueJob.claimed_by.isnot(None), QueueJob.lease_expires_at > now_value)
+                select(func.count()).select_from(QueueJob).where(QueueJob.claimed_by.isnot(None))
             )
             or 0
         )
@@ -203,10 +204,11 @@ def refresh_lease(
     expected_generation: int,
     lease_seconds: float,
     now: float | None = None,
+    cancel: threading.Event | None = None,
 ) -> float:
-    now_value = utc_now() if now is None else now
     with session_factory() as session:
-        begin_write(session)
+        begin_write(session, cancel=cancel)
+        now_value = utc_now() if now is None else now
         row = session.get(QueueJob, job_id)
         if row is None:
             raise AppError("queue_job_missing", "Задание не найдено", 409)
@@ -222,6 +224,23 @@ def refresh_lease(
             reservation.lease_expires_at = job.lease_expires_at
         session.commit()
         return now_value + lease_seconds
+
+
+def abandon_job(
+    session_factory: sessionmaker[Session], *, job_id: str, worker_id: str, generation: int
+) -> None:
+    """A finished dispatcher explicitly relinquishes ownership for recovery.
+
+    The reservation and operation evidence stay in place until reconciliation.
+    A live worker process alone must not retain an abandoned dispatch forever.
+    """
+    with session_factory() as session:
+        begin_write(session)
+        job = session.get(QueueJob, job_id)
+        if job and job.claimed_by == worker_id and job.generation == generation:
+            job.owner_pid, job.owner_create_time = None, None
+            job.lease_expires_at = 0
+        session.commit()
 
 
 def release_job(

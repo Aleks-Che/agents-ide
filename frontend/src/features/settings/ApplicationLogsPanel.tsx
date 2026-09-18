@@ -16,6 +16,7 @@ const descriptions: Record<string, string> = {
   'worker.database_check_failed': 'Не удалось проверить базу данных.',
   'launcher.startup_timeout':
     'Службы не успели запуститься и были остановлены.',
+  'launcher.startup_failed': 'Процесс запуска служб завершился с ошибкой.',
   'launcher.child_exited':
     'Одна из служб завершилась. Launcher пытается её перезапустить.',
   'launcher.failed': 'Launcher остановился с ошибкой.',

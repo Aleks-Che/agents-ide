@@ -368,11 +368,6 @@ def _run_single(
         reader = threading.Thread(target=drain, args=(stream, sink), daemon=True)
         reader.start()
         readers.append(reader)
-    deadline = (
-        deadline_at
-        if deadline_at == float("inf")
-        else min(started + spec.timeout_seconds, deadline_at or float("inf"))
-    )
     status, reason = "completed", None
     tree: dict[int, psutil.Process] = {}
     try:
@@ -398,9 +393,6 @@ def _run_single(
                 break
             if stop_event is not None and stop_event.is_set():
                 status, reason = "interrupted", "stop_requested"
-                break
-            if time.monotonic() >= deadline:
-                status, reason = "timeout", "timeout"
                 break
             time.sleep(0.05)
     finally:
@@ -502,9 +494,6 @@ def execute_commands(
             if previous_status != "completed" and failure_policy == "stop_on_failure":
                 break
             continue
-        if deadline_at is not None and time.monotonic() >= deadline_at:
-            interrupted = True
-            break
         if on_start is not None:
             on_start(spec)
         report = _run_single(

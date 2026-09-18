@@ -4002,6 +4002,8 @@
           },
           "max_wallclock_seconds": {
             "default": 600,
+            "deprecated": true,
+            "description": "Legacy field; planning has no time limit.",
             "maximum": 3600.0,
             "minimum": 10.0,
             "title": "Max Wallclock Seconds",

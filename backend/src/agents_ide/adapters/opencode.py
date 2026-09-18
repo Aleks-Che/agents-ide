@@ -156,7 +156,7 @@ class OpenCodeAdapter(AgentAdapter):
         self,
         *,
         session: RunSession,
-        startup_timeout: float = STARTUP_TIMEOUT_SECONDS,
+        startup_timeout: float | None = None,
         timeout_seconds: float | None = None,
         max_response_bytes: int | None = None,
         health_timeout: float = HEALTH_TIMEOUT_SECONDS,
@@ -182,7 +182,7 @@ class OpenCodeAdapter(AgentAdapter):
             if self.session.password is not None
             else None,
             params={"directory": self.session.workspace_path},
-            timeout=httpx.Timeout(timeout or self.timeout_seconds, connect=2, pool=2),
+            timeout=httpx.Timeout(timeout if timeout is not None else self.timeout_seconds),
             trust_env=False,
             follow_redirects=False,
         )
@@ -274,9 +274,7 @@ class OpenCodeAdapter(AgentAdapter):
         try:
             check()
             body = self._build_message(request)
-            with self.client(
-                timeout=min(self.startup_timeout, max(0.1, deadline - time.time()))
-            ) as client:
+            with self.client(timeout=self.startup_timeout) as client:
                 # Resume only the exact engine-selected session. Check before sending a message;
                 # a 404 returned after dispatch is not proof of zero model/tool execution.
                 resume_required = getattr(request, "resume_required", False)
@@ -382,7 +380,7 @@ class OpenCodeAdapter(AgentAdapter):
                         self.session.settings.get("permission_mode") == "native"
                         and self.session.settings.get("auto_approve") is True
                     ):
-                        with self.client(timeout=2) as event_client:
+                        with self.client() as event_client:
                             reply, _ = bounded_request(
                                 event_client,
                                 "POST",
@@ -420,7 +418,7 @@ class OpenCodeAdapter(AgentAdapter):
                         )
                         return
                     permission.set()
-                    with self.client(timeout=2) as event_client:
+                    with self.client() as event_client:
                         reply, _ = bounded_request(
                             event_client,
                             "POST",
@@ -518,7 +516,7 @@ class OpenCodeAdapter(AgentAdapter):
                             else None,
                             trust_env=False,
                             follow_redirects=False,
-                            timeout=httpx.Timeout(None, connect=2),
+                            timeout=httpx.Timeout(None),
                         ) as client,
                         client.stream("GET", "/event") as response,
                     ):
@@ -612,7 +610,7 @@ class OpenCodeAdapter(AgentAdapter):
                                             "noReply": True,
                                             "parts": [{"type": "text", "text": incoming["text"]}],
                                         }
-                                    with self.client(timeout=2) as input_client:
+                                    with self.client() as input_client:
                                         reply, _ = bounded_request(
                                             input_client, "POST", path, json=data
                                         )
@@ -655,7 +653,9 @@ class OpenCodeAdapter(AgentAdapter):
             ]
             for thread in threads:
                 thread.start()
-            if not ready.wait(min(3, max(0, deadline - time.time()))) or errors:
+            while not ready.wait(0.1) and not errors:
+                check()
+            if errors:
                 return fail(
                     "event_stream_unavailable", ExternalOutcome.RETRYABLE_FAILURE, safe=True
                 )
@@ -911,7 +911,7 @@ def probe_json(
     base_url: str,
     path: str,
     *,
-    timeout_seconds: float = 2,
+    timeout_seconds: float | None = None,
     username: str = "opencode",
     password: str | None = None,
     directory: str | None = None,
@@ -932,7 +932,7 @@ def probe_json(
 def fetch_opencode_version(
     base_url: str,
     *,
-    timeout_seconds: float = 2,
+    timeout_seconds: float | None = 2,
     username: str = "opencode",
     password: str | None = None,
 ) -> str | None:
@@ -958,7 +958,7 @@ def fetch_opencode_version(
 def list_opencode_models(
     base_url: str,
     *,
-    timeout_seconds: float = 2,
+    timeout_seconds: float | None = None,
     username: str = "opencode",
     password: str | None = None,
     directory: str | None = None,

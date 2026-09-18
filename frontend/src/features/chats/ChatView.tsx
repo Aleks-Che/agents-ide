@@ -390,6 +390,7 @@ export function ChatView({
           onLaunched={(job) => {
             setCouncilJobId(job.id)
             setCouncilOpen(false)
+            void client.invalidateQueries({ queryKey: ['planning-jobs'] })
           }}
         />
       ) : null}

@@ -558,7 +558,6 @@ def execute(
             ["commit", "--file=-", "--cleanup=verbatim"],
             data=intent.formatted_message().encode(),
             env={"GIT_INDEX_FILE": str(index)},
-            timeout=30,
         )
         sha = read_head_sha(workspace)
         parent, actual, _ = _commit_metadata(workspace, sha)

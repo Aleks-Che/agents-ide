@@ -125,7 +125,7 @@ class OpenCodeRuntime:
         executable: str,
         workspace_path: Path,
         supervisor: ProcessSupervisor | None = None,
-        start_timeout: float = 30,
+        start_timeout: float | None = None,
         attempt_id: str | None = None,
         check_owned: Callable[[], None] | None = None,
         stop_event: threading.Event | None = None,
@@ -142,7 +142,7 @@ class OpenCodeRuntime:
             raise AppError(
                 "configuration_invalid", "Use the absolute native OpenCode executable path", 409
             )
-        deadline = time.monotonic() + start_timeout
+        deadline = time.monotonic() + start_timeout if start_timeout is not None else float("inf")
         last_error: AppError | None = None
         for _ in range(3):
             if check_owned:
@@ -213,7 +213,7 @@ class OpenCodeRuntime:
                     version = fetch_opencode_version(
                         runtime.base_url,
                         password=password,
-                        timeout_seconds=min(0.5, max(0.1, deadline - time.monotonic())),
+                        timeout_seconds=None,
                     )
                     if version:
                         # Auth health alone cannot prove this is our listener. Check its

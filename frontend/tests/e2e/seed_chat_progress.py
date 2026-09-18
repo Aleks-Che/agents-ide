@@ -52,11 +52,32 @@ with Session(engine) as session:
         )
     elif mode == "tools":
         for status in ["pending", "running", "running", "completed"]:
-            append_event(session, run_id, "agent.tool_call", {
-                "session_id": "ses_test", "call_id": "read_1", "tool": "read",
-                "status": status, "summary": "status.md",
-            }, node_id=run.current_node_id, execution_id=run.current_execution_id,
-                attempt_id=run.current_attempt_id)
+            append_event(
+                session,
+                run_id,
+                "agent.tool_call",
+                {
+                    "session_id": "ses_test",
+                    "call_id": "read_1",
+                    "tool": "read",
+                    "status": status,
+                    "summary": "status.md",
+                },
+                node_id=run.current_node_id,
+                execution_id=run.current_execution_id,
+                attempt_id=run.current_attempt_id,
+            )
+    elif mode == "repeated-tools":
+        for index in range(4):
+            append_event(
+                session,
+                run_id,
+                "agent.tool_call",
+                {"call_id": f"generic_{index}"},
+                node_id=run.current_node_id,
+                execution_id=run.current_execution_id,
+                attempt_id=run.current_attempt_id,
+            )
     elif mode == "permission":
         append_event(
             session,

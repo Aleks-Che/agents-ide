@@ -377,6 +377,8 @@
                   "type": "object"
                 },
                 "timeout_seconds": {
+                  "deprecated": true,
+                  "description": "Legacy field; execution has no time limit.",
                   "maximum": 86400,
                   "minimum": 1,
                   "type": "integer"
@@ -433,6 +435,8 @@
                   "type": "object"
                 },
                 "timeout_seconds": {
+                  "deprecated": true,
+                  "description": "Legacy field; execution has no time limit.",
                   "maximum": 86400,
                   "minimum": 1,
                   "type": "integer"
@@ -596,6 +600,8 @@
                   "type": "object"
                 },
                 "timeout_seconds": {
+                  "deprecated": true,
+                  "description": "Legacy field; execution has no time limit.",
                   "maximum": 86400,
                   "minimum": 1,
                   "type": "integer"
@@ -630,6 +636,18 @@
                     "harness_profile_id": {
                       "minLength": 1,
                       "type": "string"
+                    },
+                    "json_processing": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "extract_json": {
+                          "type": "boolean"
+                        },
+                        "strip_thinking_tags": {
+                          "type": "boolean"
+                        }
+                      },
+                      "type": "object"
                     },
                     "max_retries": {
                       "maximum": 5,
@@ -723,6 +741,8 @@
                   "type": "object"
                 },
                 "timeout_seconds": {
+                  "deprecated": true,
+                  "description": "Legacy field; execution has no time limit.",
                   "maximum": 86400,
                   "minimum": 1,
                   "type": "integer"
@@ -833,6 +853,8 @@
                                 "type": "array"
                               },
                               "timeout_seconds": {
+                                "deprecated": true,
+                                "description": "Legacy field; execution has no time limit.",
                                 "maximum": 86400,
                                 "minimum": 1,
                                 "type": "integer"
@@ -905,6 +927,8 @@
                   "type": "object"
                 },
                 "timeout_seconds": {
+                  "deprecated": true,
+                  "description": "Legacy field; execution has no time limit.",
                   "maximum": 86400,
                   "minimum": 1,
                   "type": "integer"
@@ -1104,6 +1128,8 @@
                   "type": "object"
                 },
                 "timeout_seconds": {
+                  "deprecated": true,
+                  "description": "Legacy field; execution has no time limit.",
                   "maximum": 86400,
                   "minimum": 1,
                   "type": "integer"
@@ -1234,6 +1260,8 @@
                   "type": "object"
                 },
                 "timeout_seconds": {
+                  "deprecated": true,
+                  "description": "Legacy field; execution has no time limit.",
                   "maximum": 86400,
                   "minimum": 1,
                   "type": "integer"
@@ -1288,6 +1316,8 @@
                   "type": "object"
                 },
                 "timeout_seconds": {
+                  "deprecated": true,
+                  "description": "Legacy field; execution has no time limit.",
                   "maximum": 86400,
                   "minimum": 1,
                   "type": "integer"
@@ -1381,6 +1411,8 @@
                   "type": "object"
                 },
                 "timeout_seconds": {
+                  "deprecated": true,
+                  "description": "Legacy field; execution has no time limit.",
                   "maximum": 86400,
                   "minimum": 1,
                   "type": "integer"
@@ -1581,6 +1613,8 @@
           "type": "object"
         },
         "timeout_seconds": {
+          "deprecated": true,
+          "description": "Legacy field; execution has no time limit.",
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"
@@ -1780,6 +1814,8 @@
           "type": "object"
         },
         "timeout_seconds": {
+          "deprecated": true,
+          "description": "Legacy field; execution has no time limit.",
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"
@@ -1890,6 +1926,8 @@
                         "type": "array"
                       },
                       "timeout_seconds": {
+                        "deprecated": true,
+                        "description": "Legacy field; execution has no time limit.",
                         "maximum": 86400,
                         "minimum": 1,
                         "type": "integer"
@@ -1962,6 +2000,8 @@
           "type": "object"
         },
         "timeout_seconds": {
+          "deprecated": true,
+          "description": "Legacy field; execution has no time limit.",
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"
@@ -2017,6 +2057,8 @@
           "type": "object"
         },
         "timeout_seconds": {
+          "deprecated": true,
+          "description": "Legacy field; execution has no time limit.",
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"
@@ -2074,6 +2116,8 @@
           "type": "object"
         },
         "timeout_seconds": {
+          "deprecated": true,
+          "description": "Legacy field; execution has no time limit.",
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"
@@ -2203,6 +2247,8 @@
           "type": "object"
         },
         "timeout_seconds": {
+          "deprecated": true,
+          "description": "Legacy field; execution has no time limit.",
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"
@@ -2236,6 +2282,18 @@
             "harness_profile_id": {
               "minLength": 1,
               "type": "string"
+            },
+            "json_processing": {
+              "additionalProperties": false,
+              "properties": {
+                "extract_json": {
+                  "type": "boolean"
+                },
+                "strip_thinking_tags": {
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
             },
             "max_retries": {
               "maximum": 5,
@@ -2329,6 +2387,8 @@
           "type": "object"
         },
         "timeout_seconds": {
+          "deprecated": true,
+          "description": "Legacy field; execution has no time limit.",
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"
@@ -2422,6 +2482,8 @@
           "type": "object"
         },
         "timeout_seconds": {
+          "deprecated": true,
+          "description": "Legacy field; execution has no time limit.",
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"
@@ -2479,6 +2541,8 @@
           "type": "object"
         },
         "timeout_seconds": {
+          "deprecated": true,
+          "description": "Legacy field; execution has no time limit.",
           "maximum": 86400,
           "minimum": 1,
           "type": "integer"

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import Any
 
+import psutil
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -26,6 +28,7 @@ from agents_ide.domain.contracts import PlanningState
 from agents_ide.domain.planning_document import PlanDocument, parse_document
 from agents_ide.domain.planning_prompt import plan_merge_prompt, plan_participant_prompt
 from agents_ide.engine.artifacts import sanitize
+from agents_ide.engine.ownership import owner_may_be_alive
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
     HarnessProfile,
@@ -93,7 +96,15 @@ def claim_planning_job(
         )
         if job_id:
             query = query.where(PlanningJob.id == job_id)
-        job = session.scalar(query.order_by(PlanningJob.created_at).limit(1))
+        job = next(
+            (
+                candidate
+                for candidate in session.scalars(query.order_by(PlanningJob.created_at))
+                if not candidate.lease_owner
+                or not owner_may_be_alive(candidate.owner_pid, candidate.owner_create_time)
+            ),
+            None,
+        )
         if job is None:
             return None
         unfinished = list(
@@ -121,6 +132,7 @@ def claim_planning_job(
             session.commit()
             return None
         job.lease_owner, job.lease_expires_at = owner, utc_now() + LEASE_SECONDS
+        job.owner_pid, job.owner_create_time = os.getpid(), psutil.Process().create_time()
         job.generation += 1
         if not job.started_at:
             job.started_at = utc_now()
@@ -134,7 +146,7 @@ def _owned(session: Session, claim: PlanningClaim) -> PlanningJob:
     if (
         job.lease_owner != claim.owner
         or job.generation != claim.generation
-        or (job.lease_expires_at or 0) <= utc_now()
+        or job.lease_expires_at is None
     ):
         raise AppError("planning_lease_lost", "Planning ownership lost", 409)
     return job
@@ -142,8 +154,6 @@ def _owned(session: Session, claim: PlanningClaim) -> PlanningJob:
 
 def _budget_reason(job: PlanningJob) -> str | None:
     budget, usage = json.loads(job.budget_json), json.loads(job.usage_json)
-    if utc_now() - job.started_at >= budget["max_wallclock_seconds"]:
-        return "planning_deadline_exceeded"
     if usage.get("external_calls", 0) >= budget["max_external_calls"]:
         return "planning_budget_exhausted"
     return None
@@ -351,7 +361,6 @@ def _prepare(
             if member.role == "merger"
             else f"council_participant_{member.slot_index}"
         )
-        deadline_at = job.started_at + json.loads(job.budget_json)["max_wallclock_seconds"]
         if candidate.get("kind") == "agent":
             adapter_request: AgentAdapterRequest | LLMAdapterRequest = AgentAdapterRequest(
                 role=node,
@@ -375,7 +384,6 @@ def _prepare(
                 params=candidate["params"],
                 attempt_index=attempt.attempt_index,
                 visit_index=1,
-                deadline_at=deadline_at,
             )
         else:
             adapter_request = LLMAdapterRequest(
@@ -388,7 +396,6 @@ def _prepare(
                 output_schema=PlanDocument.model_json_schema(),
                 attempt_index=attempt.attempt_index,
                 visit_index=1,
-                deadline_at=deadline_at,
             )
         session.commit()
         return attempt.id, candidate, adapter_request
@@ -433,9 +440,6 @@ def _finish(
         if job.state not in ACTIVE:
             member.status = "unknown"
             member.error_json = '{"code":"cancelled_during_call"}'
-        elif utc_now() >= job.started_at + json.loads(job.budget_json)["max_wallclock_seconds"]:
-            member.status = "unknown"
-            _fail(session, job, "planning_deadline_exceeded")
         elif document is not None:
             member.status, member.error_json = "succeeded", None
             if member.role == "merger":
@@ -659,14 +663,9 @@ def dispatch_planning_job(
         while not finished.wait(0.2):
             try:
                 with factory() as session:
-                    begin_write(session)
+                    begin_write(session, cancel=finished)
                     job = _owned(session, claim)
-                    if (
-                        job.state not in ACTIVE
-                        or abort.is_set()
-                        or utc_now()
-                        >= job.started_at + json.loads(job.budget_json)["max_wallclock_seconds"]
-                    ):
+                    if job.state not in ACTIVE or abort.is_set():
                         call_stop.set()
                     job.lease_expires_at = utc_now() + LEASE_SECONDS
                     session.commit()
@@ -730,6 +729,7 @@ def dispatch_planning_job(
             job = service.get_planning_job(session, job_id)
             if job.lease_owner == claim.owner and job.generation == claim.generation:
                 job.lease_owner, job.lease_expires_at = None, None
+                job.owner_pid, job.owner_create_time = None, None
                 if job.state in ACTIVE and call_stop.is_set():
                     _fail(session, job, "planning_interrupted")
             session.commit()

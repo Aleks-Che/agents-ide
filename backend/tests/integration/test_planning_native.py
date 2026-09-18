@@ -155,7 +155,7 @@ def test_native_auth_change_requires_explicit_refresh(authenticated, tmp_path, m
         assert current["harness"]["version"] == pinned["harness"]["version"]
 
 
-def test_retry_cannot_overlap_a_live_native_process_after_lease_loss(authenticated, tmp_path):
+def test_retry_cannot_overlap_a_live_native_process_after_owner_loss(authenticated, tmp_path):
     client, job, _ = setup_native(authenticated, tmp_path)
     factory = client.app.state.session_factory
     claim = claim_planning_job(factory, "owner", job["id"])
@@ -174,6 +174,7 @@ def test_retry_cannot_overlap_a_live_native_process_after_lease_loss(authenticat
         with factory() as session:
             row = session.get(PlanningJob, job["id"])
             row.lease_expires_at = utc_now() - 1
+            row.owner_pid, row.owner_create_time = None, None
             session.commit()
         assert claim_planning_job(factory, "recovery", job["id"]) is None
         with factory() as session:

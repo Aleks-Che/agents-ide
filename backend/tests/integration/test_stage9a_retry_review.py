@@ -112,7 +112,6 @@ def test_merger_retry_does_not_repeat_accepted_participants(authenticated, tmp_p
 @pytest.mark.parametrize(
     "change,code",
     [
-        ("time", "planning_deadline_exceeded"),
         ("calls", "planning_budget_exhausted"),
         ("legacy", "legacy_planning_unverifiable"),
         ("context", "context_changed"),
@@ -123,9 +122,7 @@ def test_retry_cannot_reset_budget_or_bypass_integrity(authenticated, tmp_path, 
     job = failed_job(client, headers, tmp_path)
     with client.app.state.session_factory() as session:
         row = session.get(PlanningJob, job["id"])
-        if change == "time":
-            row.started_at = utc_now() - 1000
-        elif change == "calls":
+        if change == "calls":
             row.usage_json = '{"external_calls":8}'
         elif change == "legacy":
             row.request_hash = None
@@ -136,6 +133,21 @@ def test_retry_cannot_reset_budget_or_bypass_integrity(authenticated, tmp_path, 
     response = retry(client, headers, job)
     assert response.status_code == 409 and response.json()["code"] == code
     assert client.get(f"/api/planning_jobs/{job['id']}").json() == before
+
+
+def test_retry_is_allowed_after_old_time_budget(authenticated, tmp_path):
+    client, headers = authenticated
+    job = failed_job(client, headers, tmp_path)
+    with client.app.state.session_factory() as session:
+        row = session.get(PlanningJob, job["id"])
+        row.started_at = utc_now() - 86400
+        session.commit()
+    before = client.get(f"/api/planning_jobs/{job['id']}").json()
+    assert retry(client, headers, before).status_code == 200
+    after = client.get(f"/api/planning_jobs/{job['id']}").json()
+    assert after["state"] == "drafting"
+    assert after["started_at"] == before["started_at"]
+    assert after["usage"] == before["usage"]
 
 
 def test_retry_fences_late_worker_and_requires_unknown_consent(authenticated, tmp_path):
@@ -156,6 +168,8 @@ def test_retry_fences_late_worker_and_requires_unknown_consent(authenticated, tm
     )
     with factory() as session:
         session.get(PlanningJob, job["id"]).lease_expires_at = 0
+        session.get(PlanningJob, job["id"]).owner_pid = None
+        session.get(PlanningJob, job["id"]).owner_create_time = None
         session.commit()
     denied = retry(client, headers, failed)
     assert denied.status_code == 409

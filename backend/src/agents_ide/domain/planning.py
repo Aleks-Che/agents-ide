@@ -47,7 +47,13 @@ class PlanningMemberSpec(ApiModel):
 
 class PlanningJobBudget(ApiModel):
     max_external_calls: int = Field(default=8, ge=1, le=64)
-    max_wallclock_seconds: int = Field(default=600, ge=10, le=3600)
+    max_wallclock_seconds: int = Field(
+        default=600,
+        ge=10,
+        le=3600,
+        deprecated=True,
+        description="Legacy field; planning has no time limit.",
+    )
     concurrency: int = Field(default=2, ge=1, le=4)
 
 

@@ -7,11 +7,12 @@ import time
 from collections.abc import Iterator
 
 import portalocker
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from agents_ide import launcher
 from agents_ide.config import Settings
+from agents_ide.engine.ownership import owner_may_be_alive
 from agents_ide.errors import AppError
 from agents_ide.persistence.database import create_database
 from agents_ide.persistence.models import PlanningJob, QueueJob
@@ -35,24 +36,29 @@ def _busy(settings: Settings) -> bool:
     engine = create_database(settings)
     try:
         with Session(engine) as session:
-            return bool(
-                session.scalar(
-                    select(QueueJob.id)
-                    .where(
-                        QueueJob.claimed_by.isnot(None),
-                        QueueJob.lease_expires_at > time.time(),
+            for row in session.scalars(select(QueueJob).where(QueueJob.claimed_by.isnot(None))):
+                if (row.lease_expires_at or 0) > time.time() or owner_may_be_alive(
+                    row.owner_pid, row.owner_create_time
+                ):
+                    return True
+            # offline() also runs before upgrading an existing database. Old
+            # Council rows have no process identity, so never assume their owner died.
+            columns = {column["name"] for column in inspect(engine).get_columns("planning_jobs")}
+            if "owner_pid" not in columns:
+                return (
+                    session.scalar(
+                        select(PlanningJob.id).where(PlanningJob.lease_owner.isnot(None)).limit(1)
                     )
-                    .limit(1)
+                    is not None
                 )
-                or session.scalar(
-                    select(PlanningJob.id)
-                    .where(
-                        PlanningJob.lease_owner.isnot(None),
-                        PlanningJob.lease_expires_at > time.time(),
-                    )
-                    .limit(1)
-                )
-            )
+            for job in session.scalars(
+                select(PlanningJob).where(PlanningJob.lease_owner.isnot(None))
+            ):
+                if (job.lease_expires_at or 0) > time.time() or owner_may_be_alive(
+                    job.owner_pid, job.owner_create_time
+                ):
+                    return True
+            return False
     finally:
         engine.dispose()
 

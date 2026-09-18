@@ -532,9 +532,7 @@ class HttpLLMAdapter(LLMAdapter):
         method: str = "POST",
     ) -> tuple[httpx.Response, bytes]:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                timeout, connect=min(timeout or CONNECT_TIMEOUT_SECONDS, CONNECT_TIMEOUT_SECONDS)
-            ),
+            timeout=httpx.Timeout(timeout),
             trust_env=False,
             follow_redirects=False,
             limits=httpx.Limits(max_connections=1, max_keepalive_connections=0),

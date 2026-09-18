@@ -587,6 +587,8 @@ class PlanningJob(Base):
     request_hash: Mapped[str | None] = mapped_column(String(64))
     lease_owner: Mapped[str | None] = mapped_column(String(64))
     lease_expires_at: Mapped[float | None] = mapped_column(Float)
+    owner_pid: Mapped[int | None] = mapped_column(Integer)
+    owner_create_time: Mapped[float | None] = mapped_column(Float)
     generation: Mapped[int] = mapped_column(Integer, default=0)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"))
     chat_id: Mapped[str | None] = mapped_column(ForeignKey("chats.id"))

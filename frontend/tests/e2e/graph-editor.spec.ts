@@ -97,6 +97,14 @@ test('builds a repair cycle using forms, persists layout, publishes and runs its
     .selectOption(profile.id)
   await page.getByLabel('ID модели', { exact: true }).fill('test-model')
   await add(page, 'LLMRequest', 'Verify the change')
+  await page.getByLabel('Задать: Формат ответа', { exact: true }).check()
+  await page
+    .getByRole('combobox', { name: 'Формат ответа', exact: true })
+    .selectOption({ label: 'json' })
+  await page.getByLabel('Удалять блоки размышлений перед JSON').check()
+  await page
+    .getByLabel('Извлекать JSON из Markdown и окружающего текста')
+    .check()
   await page
     .getByRole('combobox', { name: 'Выбор модели', exact: true })
     .selectOption('group')
@@ -184,6 +192,11 @@ test('builds a repair cycle using forms, persists layout, publishes and runs its
   const firstVersion = (
     await api(page, 'GET', `/templates/${template.id}/versions`)
   )[0]
+  expect(
+    firstVersion.graph.nodes.find(
+      (item: { id: string }) => item.id === 'llmrequest_1',
+    ).config.json_processing,
+  ).toEqual({ strip_thinking_tags: true, extract_json: true })
   const node = page
     .locator('.react-flow__node')
     .filter({ hasText: 'agenttask_1' })

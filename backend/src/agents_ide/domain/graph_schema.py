@@ -98,7 +98,13 @@ def _node_base() -> dict[str, Any]:
                 "additionalProperties": False,
             },
             "visual": {"type": "object"},
-            "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+            "timeout_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400,
+                "deprecated": True,
+                "description": "Legacy field; execution has no time limit.",
+            },
             "max_retries": {"type": "integer", "minimum": 0, "maximum": 5},
         },
         "additionalProperties": False,
@@ -144,6 +150,8 @@ def _command_config() -> dict[str, Any]:
                                     "type": "integer",
                                     "minimum": 1,
                                     "maximum": 86400,
+                                    "deprecated": True,
+                                    "description": "Legacy field; execution has no time limit.",
                                 },
                                 "max_output_bytes": {
                                     "type": "integer",
@@ -295,6 +303,15 @@ def _agent_or_llm_config(node_type: str) -> dict[str, Any]:
     base["properties"]["model_selection"] = MODEL_SELECTION.json_schema(
         ref_template="#/components/schemas/{model}"
     )
+    if node_type == "LLMRequest":
+        base["properties"]["json_processing"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "strip_thinking_tags": {"type": "boolean"},
+                "extract_json": {"type": "boolean"},
+            },
+        }
     if node_type == "AgentTask":
         base["properties"]["harness_settings"] = {
             "type": "object",

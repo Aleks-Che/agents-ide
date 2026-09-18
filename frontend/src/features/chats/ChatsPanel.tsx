@@ -1,8 +1,11 @@
 import { Modal } from '../../app/Modal'
 import { useState } from 'react'
+import { LoaderCircle } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
 import { chatsApi, describeError, type Chat } from '../../api/projects'
+import { planningApi } from '../../api/planning'
+import { runsApi } from '../../api/runs'
 import { formatDateTime } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
 
@@ -24,6 +27,35 @@ export function ChatsPanel({
     queryFn: () => chatsApi.list({ projectId, includeArchived: false }),
     enabled: Boolean(projectId),
   })
+  const runs = useQuery({
+    queryKey: ['runs_summary', { projectId }],
+    queryFn: () => runsApi.list({ projectId }),
+    enabled: Boolean(projectId),
+    refetchInterval: 3000,
+  })
+  const planning = useQuery({
+    queryKey: ['planning-jobs', { projectId }],
+    queryFn: () => planningApi.list({ projectId }),
+    enabled: Boolean(projectId),
+    refetchInterval: 3000,
+  })
+  const activeChatIds = new Set([
+    ...(runs.data ?? [])
+      .filter((run) =>
+        [
+          'queued',
+          'running',
+          'pause_requested',
+          'stop_requested',
+          'retry_wait',
+          'recovering',
+        ].includes(run.state),
+      )
+      .map((run) => run.chat_id),
+    ...(planning.data ?? [])
+      .filter((job) => ['drafting', 'merging'].includes(job.state))
+      .map((job) => job.chat_id),
+  ])
 
   return (
     <section className="panel" aria-labelledby="chats-heading">
@@ -46,6 +78,7 @@ export function ChatsPanel({
         loading={chats.isLoading}
         error={chats.error ? describeError(chats.error) : null}
         selectedId={selectedId}
+        activeChatIds={activeChatIds}
         onSelect={onSelect}
         onRetry={() => void chats.refetch()}
         projectId={projectId}
@@ -79,6 +112,7 @@ interface ChatsListProps {
   loading: boolean
   error: string | null
   selectedId: string | null
+  activeChatIds: ReadonlySet<string | null>
   onSelect: (chat: Chat) => void
   onRetry: () => void
   projectId: string
@@ -89,6 +123,7 @@ function ChatsList({
   loading,
   error,
   selectedId,
+  activeChatIds,
   onSelect,
   onRetry,
   projectId,
@@ -135,7 +170,22 @@ function ChatsList({
               className={`panel-item${selected ? ' selected' : ''}`}
               onClick={() => onSelect(chat)}
             >
-              <strong>{chat.title}</strong>
+              <span className="chat-item-title">
+                <strong>{chat.title}</strong>
+                {activeChatIds.has(chat.id) ? (
+                  <span
+                    role="status"
+                    aria-label="В диалоге выполняется процесс"
+                    title="В диалоге выполняется процесс"
+                  >
+                    <LoaderCircle
+                      className="chat-activity-spinner"
+                      size={14}
+                      aria-hidden="true"
+                    />
+                  </span>
+                ) : null}
+              </span>
               <span className="meta">
                 <span>{formatDateTime(chat.updated_at)}</span>
               </span>

@@ -53,7 +53,7 @@ def test_llmrequest_large_response_and_context_without_default_limits(monkeypatc
 
     async def handler(request):
         received.append(json.loads(request.content))
-        assert request.extensions["timeout"]["read"] is None
+        assert all(value is None for value in request.extensions["timeout"].values())
         return httpx.Response(200, json=_chat_body(text))
 
     monkeypatch.setattr(

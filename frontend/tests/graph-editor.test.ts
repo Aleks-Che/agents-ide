@@ -36,6 +36,7 @@ const document = () =>
           config: {
             role: 'verifier',
             prompt: 'check',
+            json_processing: { strip_thinking_tags: true, extract_json: true },
             output_schema: {
               type: 'object',
               properties: { verdict: { type: 'string' } },
@@ -76,6 +77,12 @@ const document = () =>
   })
 
 describe('graph editing invariants', () => {
+  it('removes LLM JSON processing when switching to an agent', () => {
+    const converted = switchExecutor(document(), 'verify', 'AgentTask')
+    expect(
+      converted.graph.nodes.find((node) => node.id === 'verify')?.config,
+    ).not.toHaveProperty('json_processing')
+  })
   it('keeps implicit edge IDs out of serialized graphs, including after a label edit', () => {
     const doc = documentFrom({
       graph: {

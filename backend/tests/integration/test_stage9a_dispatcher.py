@@ -73,7 +73,7 @@ def test_invalid_or_truncated_success_never_becomes_plan(authenticated, tmp_path
     assert result["usage"]["external_calls"] <= 4
 
 
-def test_budget_includes_merger_and_deadline(authenticated, tmp_path):
+def test_budget_includes_merger_but_elapsed_time_does_not_stop_planning(authenticated, tmp_path):
     client, headers = authenticated
     *_, payload = setup(client, headers, tmp_path, budget={"max_external_calls": 2})
     job = create(client, headers, payload)
@@ -85,7 +85,7 @@ def test_budget_includes_merger_and_deadline(authenticated, tmp_path):
     with client.app.state.session_factory() as session:
         session.get(PlanningJob, job["id"]).started_at = utc_now() - 1000
         session.commit()
-    assert dispatch(client, job)["last_error"]["code"] == "planning_deadline_exceeded"
+    assert dispatch(client, job)["state"] == "ready_for_confirmation"
 
 
 def test_adapter_format_error_gets_one_explicit_repair(authenticated, tmp_path, monkeypatch):
@@ -192,6 +192,12 @@ def test_lease_exclusive_restart_does_not_repeat_unknown(authenticated, tmp_path
     with factory() as session:
         session.get(PlanningJob, job["id"]).lease_expires_at = 0
         session.commit()
+    # A delayed heartbeat cannot steal the live dispatch.
+    assert claim_planning_job(factory, "worker-two", job["id"]) is None
+    with factory() as session:
+        row = session.get(PlanningJob, job["id"])
+        row.owner_pid, row.owner_create_time = None, None
+        session.commit()
     assert claim_planning_job(factory, "worker-two", job["id"]) is None
     failed = dispatch(client, job)
     assert failed["last_error"]["code"] == "unknown_external_result"
@@ -222,6 +228,8 @@ def test_restart_keeps_committed_draft_and_shared_budget(authenticated, tmp_path
     )
     with factory() as session:
         session.get(PlanningJob, job["id"]).lease_expires_at = 0
+        session.get(PlanningJob, job["id"]).owner_pid = None
+        session.get(PlanningJob, job["id"]).owner_create_time = None
         session.commit()
     result = dispatch(
         client,

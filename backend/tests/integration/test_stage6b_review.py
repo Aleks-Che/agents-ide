@@ -252,6 +252,19 @@ def test_runtime_catalog_single_owned_process_and_cleanup(tmp_path, runtime_laun
     assert all(not t.is_alive() for t in runtime.stream._readers)
 
 
+def test_runtime_startup_has_no_elapsed_time_limit(tmp_path, runtime_launch, monkeypatch):
+    from itertools import count
+    from types import SimpleNamespace
+
+    clock = count(0, 60)
+    monkeypatch.setattr(codex_runtime, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    runtime = codex_runtime.CodexRuntime.start(executable=sys.executable, workspace_path=tmp_path)
+    try:
+        assert runtime.cached_models
+    finally:
+        runtime.close()
+
+
 @pytest.mark.parametrize("stage", ["INIT", "CATALOG"])
 def test_runtime_failed_handshake_is_failed_probe(tmp_path, runtime_launch, stage):
     _, trace, scenarios = runtime_launch

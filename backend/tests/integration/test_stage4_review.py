@@ -163,18 +163,22 @@ def test_claim_is_durable_and_exclusive(authenticated, tmp_path):
         assert row.generation == 2
 
 
-def test_refresh_rejects_expired_owner(authenticated, tmp_path):
+def test_live_owner_can_refresh_after_delayed_heartbeat(authenticated, tmp_path):
     _, factory = make_run(authenticated, tmp_path)
     job = queue.claim_next_job(factory, worker_id="a", lease_seconds=1)
-    with pytest.raises(AppError):
-        queue.refresh_lease(
-            factory,
-            job_id=job.job_id,
-            worker_id="a",
-            expected_generation=job.generation,
-            lease_seconds=30,
-            now=job.lease_expires_at + 1,
-        )
+    assert (
+        queue.claim_next_job(factory, worker_id="b", lease_seconds=30, now=job.lease_expires_at + 1)
+        is None
+    )
+    renewed = queue.refresh_lease(
+        factory,
+        job_id=job.job_id,
+        worker_id="a",
+        expected_generation=job.generation,
+        lease_seconds=30,
+        now=job.lease_expires_at + 1,
+    )
+    assert renewed == job.lease_expires_at + 31
 
 
 def test_attempt_and_execution_results_survive_new_session(
@@ -698,7 +702,7 @@ def test_scenario_edits_are_confined_and_snapshot_is_immutable(authenticated, tm
     assert after["state"] == "completed" and after["snapshot_hash"] == run["snapshot_hash"]
 
 
-def test_stale_lease_fences_result_and_new_calls(authenticated, tmp_path, settings, monkeypatch):
+def test_changed_owner_fences_result_and_new_calls(authenticated, tmp_path, settings, monkeypatch):
     from agents_ide.adapters.base import LLMResult
     from agents_ide.persistence.models import Run
     from agents_ide.worker.main import dispatch_once
@@ -711,6 +715,9 @@ def test_stale_lease_fences_result_and_new_calls(authenticated, tmp_path, settin
         with factory() as session:
             job = session.scalar(select(QueueJob))
             job.lease_expires_at = 1
+            job.claimed_by = "other"
+            job.owner_pid = None
+            job.owner_create_time = None
             session.commit()
         return LLMResult(ExternalOutcome.SUCCEEDED, "{}", {}, "passed")
 
@@ -962,7 +969,7 @@ def test_cancel_before_retry_prevents_another_external_call(
         assert len(list(session.scalars(select(StepAttempt)))) == 1
 
 
-def test_timeout_does_not_apply_late_simulated_edits(authenticated, tmp_path, settings):
+def test_legacy_node_timeout_does_not_interrupt_simulated_edits(authenticated, tmp_path, settings):
     settings.enforce_execution_limits = True
     from agents_ide.worker.main import dispatch_once
 
@@ -972,6 +979,7 @@ def test_timeout_does_not_apply_late_simulated_edits(authenticated, tmp_path, se
         authenticated,
         tmp_path,
         graph=graph,
+        overrides={"limit_overrides": {"max_duration_seconds": 1}},
         fake_scenario={
             "responses": [{"node_id": "impl", "delay_seconds": 2, "files": {"late.txt": "late"}}]
         },
@@ -979,8 +987,8 @@ def test_timeout_does_not_apply_late_simulated_edits(authenticated, tmp_path, se
     assert dispatch_once(settings, "review")
     with factory() as session:
         attempts = list(session.scalars(select(StepAttempt)))
-        assert len(attempts) == 1 and attempts[0].error_code == "timeout"
-    assert not (settings.data_dir / "simulated" / run["id"] / "late.txt").exists()
+        assert attempts and all(attempt.error_code != "timeout" for attempt in attempts)
+    assert (settings.data_dir / "simulated" / run["id"] / "late.txt").read_text() == "late"
 
 
 def test_legacy_visit_without_checkpoint_is_never_replayed(authenticated, tmp_path, settings):

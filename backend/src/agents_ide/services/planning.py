@@ -524,7 +524,12 @@ def retry_planning_job(
     if not simulated:
         require_real_council_supported(session, job)
     now = utc_now()
-    if job.lease_owner and (job.lease_expires_at or 0) > now:
+    from agents_ide.engine.ownership import owner_may_be_alive
+
+    if job.lease_owner and (
+        (job.lease_expires_at or 0) > now
+        or owner_may_be_alive(job.owner_pid, job.owner_create_time)
+    ):
         raise AppError("planning_retry_worker_active", "Дождитесь освобождения задания worker", 409)
     from agents_ide.engine.planning_native import processes_stopped
 
@@ -539,8 +544,6 @@ def retry_planning_job(
     if content_hash(json.loads(job.context_snapshot_json)) != job.read_manifest_hash:
         raise AppError("context_changed", "Контекст Council повреждён", 409)
     budget, usage = json.loads(job.budget_json), json.loads(job.usage_json)
-    if job.started_at and now >= job.started_at + budget["max_wallclock_seconds"]:
-        raise AppError("planning_deadline_exceeded", "Общий лимит времени исчерпан", 409)
     if usage.get("external_calls", 0) >= budget["max_external_calls"]:
         raise AppError("planning_budget_exhausted", "Общий лимит вызовов исчерпан", 409)
     members = list(
@@ -584,6 +587,7 @@ def retry_planning_job(
     # Fencing occurs before requeueing. A late old worker cannot finish or release this round.
     job.generation += 1
     job.lease_owner, job.lease_expires_at = None, None
+    job.owner_pid, job.owner_create_time = None, None
     for attempt in unfinished:
         attempt.outcome, attempt.error_code, attempt.finished_at = "unknown", "worker_lost", now
     reset, preserved, access_changes = [], [], []
@@ -660,7 +664,12 @@ def promote_single_member_plan(
             "Single-member promotion requires a quorum loss",
             409,
         )
-    if job.lease_owner and (job.lease_expires_at or 0) > utc_now():
+    from agents_ide.engine.ownership import owner_may_be_alive
+
+    if job.lease_owner and (
+        (job.lease_expires_at or 0) > utc_now()
+        or owner_may_be_alive(job.owner_pid, job.owner_create_time)
+    ):
         raise AppError("planning_worker_active", "Planning worker has not released the job", 409)
     if not job.request_hash:
         raise AppError("legacy_planning_unverifiable", "Legacy planning source is unverified", 409)
@@ -722,6 +731,7 @@ def promote_single_member_plan(
     job.finished_at = None
     job.generation += 1
     job.lease_owner, job.lease_expires_at = None, None
+    job.owner_pid, job.owner_create_time = None, None
     # The state move is owned by add_revision: 'needs_answers' if questions
     # remain in the lone draft, otherwise 'ready_for_confirmation'.
     _record_event(

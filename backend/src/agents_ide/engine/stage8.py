@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -374,7 +373,7 @@ def git_commit_node(
                     response_format="text",
                     stop_event=stop,
                     check_owned=runner._check_owned,
-                    deadline_at=time.time() + max(0, deadline - time.monotonic()),
+                    deadline_at=None,
                     attempt_index=visit.attempt_index,
                     visit_index=visit.visit_index,
                 )

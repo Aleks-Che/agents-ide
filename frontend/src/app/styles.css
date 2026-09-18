@@ -431,6 +431,36 @@ footer span {
   font-size: 13px;
   font-weight: 600;
 }
+.chat-item-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+.chat-item-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chat-item-title > [role='status'] {
+  display: flex;
+  flex-shrink: 0;
+  margin-left: auto;
+  color: #a3cbb6;
+}
+.chat-activity-spinner {
+  animation: chat-activity-spin 1s linear infinite;
+}
+@keyframes chat-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-activity-spinner {
+    animation: none;
+  }
+}
 .panel-item .muted {
   font-size: 11px;
   color: #8b9a9f;

@@ -19,7 +19,7 @@ from agents_ide.errors import AppError
 if TYPE_CHECKING:
     from agents_ide.worker.processes import ProcessRegistryEntry, ProcessSupervisor
 
-STARTUP_TIMEOUT_SECONDS = 30.0
+STARTUP_TIMEOUT_SECONDS = None
 
 
 def verify_read_sandbox(adapter: CodexAdapter, workspace: Path, check: Callable[[], None]) -> bool:
@@ -40,9 +40,9 @@ def verify_read_sandbox(adapter: CodexAdapter, workspace: Path, check: Callable[
                     "echo AGENTS_IDE_SANDBOX_READY",
                 ],
                 "cwd": str(workspace),
-                "timeoutMs": 5000,
+                "disableTimeout": True,
             },
-            timeout=10,
+            timeout=None,
             check=check,
         )
         result = response.get("result", {})
@@ -98,19 +98,31 @@ def codex_environment() -> dict[str, str]:
     return env
 
 
-def fetch_codex_version(executable: str, *, timeout_seconds: float = 5.0) -> str | None:
+def fetch_codex_version(
+    executable: str,
+    *,
+    check: Callable[[], None] | None = None,
+) -> str | None:
+    from agents_ide.worker.processes import ProcessGroup
+
+    group = ProcessGroup()
     try:
-        result = subprocess.run(
-            [executable, "--version"],
-            env=codex_environment(),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        process = group.popen_stdio(
+            [executable, "--version"], Path(executable).parent, codex_environment()
         )
-    except (OSError, subprocess.TimeoutExpired):
+        while True:
+            if check:
+                check()
+            try:
+                stdout, _ = process.communicate(timeout=0.1)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    except OSError:
         return None
-    for line in (result.stdout or "").splitlines():
+    finally:
+        group.close()
+    for line in (stdout or "").splitlines():
         if line.startswith(("codex-cli ", "codex ")):
             return line.strip()
     return None
@@ -136,7 +148,7 @@ class CodexRuntime:
         executable: str,
         workspace_path: Path,
         supervisor: ProcessSupervisor | None = None,
-        start_timeout: float = STARTUP_TIMEOUT_SECONDS,
+        start_timeout: float | None = STARTUP_TIMEOUT_SECONDS,
         attempt_id: str | None = None,
         check_owned: Callable[[], None] | None = None,
         stop_event: threading.Event | None = None,
@@ -151,7 +163,7 @@ class CodexRuntime:
             raise AppError(
                 "configuration_invalid", "Use the absolute native Codex executable path", 409
             )
-        deadline = time.monotonic() + start_timeout
+        deadline = time.monotonic() + start_timeout if start_timeout is not None else float("inf")
 
         def check() -> None:
             if check_owned:
@@ -167,7 +179,7 @@ class CodexRuntime:
         if isolated_read:
             from agents_ide.security.codex_policy import SUPPORTED_VERSION, arguments, config_for
 
-            if fetch_codex_version(str(path)) != SUPPORTED_VERSION:
+            if fetch_codex_version(str(path), check=check) != SUPPORTED_VERSION:
                 raise AppError(
                     "council_harness_real_unverified", "Unsupported Codex sandbox version", 422
                 )
@@ -208,15 +220,13 @@ class CodexRuntime:
             )
             adapter.initialize(check=check)
             if isolated_read:
-                readiness = adapter._request_response(
-                    "windowsSandbox/readiness", {}, timeout=10, check=check
-                )
+                readiness = adapter._request_response("windowsSandbox/readiness", {}, check=check)
                 if readiness.get("result", {}).get("status") != "ready":
                     raise AppError(
                         "council_harness_real_unverified", "Windows sandbox is not ready", 422
                     )
                 config = adapter._request_response(
-                    "config/read", {"includeLayers": False}, timeout=10, check=check
+                    "config/read", {"includeLayers": False}, check=check
                 )
                 servers = config.get("result", {}).get("config", {}).get("mcp_servers", {})
                 if config.get("error") or not isinstance(servers, dict):
@@ -230,9 +240,7 @@ class CodexRuntime:
                 runtime.sandbox_warmup_retried = verify_read_sandbox(adapter, workspace_path, check)
             runtime.cached_models = adapter.list_models(check=check)
             check()
-            runtime.server_version = fetch_codex_version(
-                str(path), timeout_seconds=min(2.0, max(0.1, deadline - time.monotonic()))
-            )
+            runtime.server_version = fetch_codex_version(str(path), check=check)
             check()
             return runtime
         except BaseException:

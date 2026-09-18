@@ -291,6 +291,20 @@ def test_explicit_node_deadline_is_not_replaced_by_adapter_default(server):
     assert adapter.run(replace(request, deadline_at=time.time() + 5)).succeeded
 
 
+def test_event_stream_can_take_longer_than_old_startup_limit(server, monkeypatch):
+    handler, adapter, request = server
+    original = handler.do_GET
+
+    def delayed(self):
+        if self.path.startswith("/event"):
+            time.sleep(3.3)
+        return original(self)
+
+    monkeypatch.setattr(handler, "do_GET", delayed)
+    result = adapter.run(request)
+    assert result.succeeded, result
+
+
 def test_stream_error_keeps_diagnostic_reason(server):
     handler, adapter, request = server
     handler.close_stream = True
