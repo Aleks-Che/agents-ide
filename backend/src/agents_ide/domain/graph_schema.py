@@ -357,7 +357,12 @@ def _git_commit_config() -> dict[str, Any]:
                     },
                 ]
             },
-            "verification_node_id": {"type": "string", "pattern": _ID_PATTERN.pattern},
+            "verification_node_id": {
+                "type": "string",
+                "pattern": _ID_PATTERN.pattern,
+                "deprecated": True,
+                "description": "Legacy PlanControl provenance only; never blocks a commit.",
+            },
             "hook_policy": {"enum": ["allow_pre_configured", "fail_on_unattended"]},
         },
         "additionalProperties": False,

@@ -38,6 +38,7 @@ from agents_ide.domain.single_agent import (
 from agents_ide.domain.workspace import (
     assert_identity_matches,
     collect_workspace,
+    reservations_overlap,
     scopes_overlap,
     workspace_scope,
 )
@@ -96,15 +97,17 @@ def reserve_workspace(session: Session, run_id: str, generation: int) -> bool:
     """
     run = get_or_404(session, RunModel, run_id)
     snapshot = json.loads(run.snapshot_json)
-    from agents_ide.engine.worktrees import effective_workspace
+    from agents_ide.engine.worktrees import effective_workspace, reservation_scope
 
-    workspace = effective_workspace(snapshot, json.loads(run.runtime_json))
+    runtime = json.loads(run.runtime_json)
+    workspace = effective_workspace(snapshot, runtime)
     _, normalized, dev, ino, git = collect_workspace(workspace["workspace_path"])
     scope = workspace_scope(Path(normalized), git)
     if [dev, ino] != [workspace["identity_dev"], workspace["identity_ino"]]:
         raise AppError("workspace_conflict", "Идентичность рабочего каталога изменилась", 409)
     if workspace.get("scope", {}).get("git_common_identity") != scope["git_common_identity"]:
         raise AppError("workspace_conflict", "Git checkout изменился или не был зафиксирован", 409)
+    scope = reservation_scope(snapshot, runtime)
     session.rollback()
     begin_write(session)
     run = get_or_404(session, RunModel, run_id)
@@ -120,7 +123,7 @@ def reserve_workspace(session: Session, run_id: str, generation: int) -> bool:
         if reservation.run_id == run_id:
             owned = reservation
             continue
-        if scopes_overlap(scope, json.loads(reservation.workspace_json)):
+        if reservations_overlap(scope, json.loads(reservation.workspace_json)):
             return False
     if owned is not None:
         return owned.owner_generation == generation

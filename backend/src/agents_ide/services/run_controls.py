@@ -207,6 +207,7 @@ def _check_resume(session: Session, run: Run) -> None:
 
     runtime, snapshot = json.loads(run.runtime_json), json.loads(run.snapshot_json)
     target = json.loads(run.resume_target_json or "{}")
+    waiting = json.loads(run.waiting_reason_json or "{}") or runtime.get("waiting_reason") or {}
     if not stored_processes_stopped(session, run) or unsettled_attempts(session, run):
         raise AppError("reconciliation_required", "Прежняя операция требует сверки", 409)
     if run.state == "stopped":
@@ -291,6 +292,16 @@ def _check_resume(session: Session, run: Run) -> None:
             runtime.pop("retry_resolution", None)
             if run.current_attempt_id:
                 runtime.setdefault("retry_authorized_attempts", []).append(run.current_attempt_id)
+        elif (code, waiting.get("details", {}).get("reason")) in {
+            ("configuration_invalid", "git_verification_required"),
+            ("missing_data", "git_verification_not_passed"),
+        } and any(
+            node["id"] == target.get("node_id") and node["type"] == "GitCommit"
+            for node in snapshot["graph"]["nodes"]
+        ):
+            # Old runs may still carry the removed verification gate. Git safety
+            # checks run again in the worker before the commit can be attempted.
+            continue
         elif (
             code == "configuration_invalid"
             and json.loads(run.waiting_reason_json or "{}").get("details", {}).get("reason")

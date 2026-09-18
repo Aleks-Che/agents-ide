@@ -156,7 +156,9 @@
           "run.waiting",
           "run.waiting_input",
           "transition.selected",
-          "workspace.reservation_released"
+          "workspace.reservation_released",
+          "workspace.worktree_created",
+          "workspace.worktree_planned"
         ],
         "title": "Type",
         "type": "string"
@@ -257,7 +259,9 @@
     "run.waiting",
     "run.waiting_input",
     "transition.selected",
-    "workspace.reservation_released"
+    "workspace.reservation_released",
+    "workspace.worktree_created",
+    "workspace.worktree_planned"
   ],
   "max_payload_bytes": 16384,
   "schema_version": "1.0.0",
@@ -329,6 +333,8 @@
     "run.waiting",
     "run.waiting_input",
     "transition.selected",
-    "workspace.reservation_released"
+    "workspace.reservation_released",
+    "workspace.worktree_created",
+    "workspace.worktree_planned"
   ]
 }

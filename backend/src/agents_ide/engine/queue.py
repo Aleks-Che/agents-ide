@@ -11,7 +11,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from agents_ide.domain.common import new_id, utc_now
-from agents_ide.domain.workspace import scopes_overlap
+from agents_ide.domain.workspace import reservations_overlap
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import QueueJob, Run, WorkspaceReservation
 from agents_ide.services.transactions import begin_write
@@ -147,21 +147,23 @@ def claim_next_job(
         for job in jobs:
             run = session.get(Run, job.run_id)
             assert run is not None
-            from agents_ide.engine.worktrees import effective_workspace
+            from agents_ide.engine.worktrees import effective_workspace, reservation_scope
 
-            workspace = effective_workspace(
-                json.loads(run.snapshot_json), json.loads(run.runtime_json)
-            )
-            scope = workspace.get("scope")
+            snapshot, runtime = json.loads(run.snapshot_json), json.loads(run.runtime_json)
+            workspace = effective_workspace(snapshot, runtime)
+            scope = reservation_scope(snapshot, runtime) if workspace.get("scope") else None
+            if scope is None:
+                continue
             blocking = [
                 r
                 for r in reservations
                 if r.run_id != run.id
                 and (
-                    r.workspace_json is None or scopes_overlap(scope, json.loads(r.workspace_json))
+                    r.workspace_json is None
+                    or reservations_overlap(scope, json.loads(r.workspace_json))
                 )
             ]
-            if scope is None or blocking:
+            if blocking:
                 continue
             generation = max(job.generation, run.worker_generation or 0) + 1
             lease = now_value + lease_seconds

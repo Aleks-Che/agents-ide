@@ -28,9 +28,13 @@ execution_hash и immutable snapshot. Чужие staged-изменения бл�
 
 ## Коммит и восстановление
 
-GitCommit принимает явный `verification_node_id`. Это успешная проверка того же
-Run, текущего пункта/scope и цикла. Её evidence должен совпадать с текущим manifest;
-required failed/incomplete, omissions и truncation не позволяют принять коммит.
+GitCommit фиксирует изменения без обязательного узла проверки или формального
+`verdict`. Агент перед ним может проверять и исправлять файлы, возвращая обычный
+текст. Если графу нужна проверка качества, она задаётся отдельным узлом и условием
+перехода. Устаревший `verification_node_id` принимается для совместимости: ссылка
+на завершённое выполнение того же Run/scope/цикла сохраняется только как метаданные
+для существующих PlanControl-графов. Отсутствующая ссылка, verdict и evidence
+предыдущего агента не блокируют GitCommit.
 
 Кандидат собирается из parent во временном `GIT_INDEX_FILE`. Удаления, пробелы в
 именах и переименования обрабатываются через NUL-разделённые записи. `*` не пересекает
@@ -41,7 +45,7 @@ Git clean/EOL-преобразования работают с зафиксир�
 
 До `git commit` сохраняется immutable git_intent: operation/attempt, parent, branch,
 expected tree, allowlist, message hash, trailer, baseline ref, manifest и hash index,
-verification ID и политика hooks/signing. Обычный `git commit` сохраняет действие
+необязательный verification ID и политика hooks/signing. Обычный `git commit` сохраняет действие
 hooks и настроенной подписи. После вызова проверяются SHA, parent, actual tree,
 единственный trailer `Agents-Ide-Intent`, рабочие файлы и fingerprint Git.
 Неожиданный созданный коммит остаётся в истории с диагностикой и не считается проверенным.

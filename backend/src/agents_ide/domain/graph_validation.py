@@ -392,19 +392,19 @@ def _validate_node_content(
     ):
         raise ASTError("Invalid evidence request source")
     if node["type"] in {"GitCommit", "PlanControl"}:
-        for key, kinds in (
-            ("verification_node_id", {"AgentTask", "LLMRequest"}),
-            ("commit_node_id", {"GitCommit"}),
-        ):
-            if key in config and (
-                config[key] not in nodes or nodes[config[key]]["type"] not in kinds
-            ):
-                raise ASTError("Invalid verification/commit reference")
         if node["type"] == "GitCommit" and isinstance(config.get("allowlist"), dict):
             ast = _check_ast(config["allowlist"], nodes, names, schema)
             if ast.op != Op.REF or ast.value[0] not in ("input", "inputs"):
                 raise ASTError("Git allowlist must reference immutable inputs")
         if node["type"] == "PlanControl":
+            for key, kinds in (
+                ("verification_node_id", {"AgentTask", "LLMRequest"}),
+                ("commit_node_id", {"GitCommit"}),
+            ):
+                if key in config and (
+                    config[key] not in nodes or nodes[config[key]]["type"] not in kinds
+                ):
+                    raise ASTError("Invalid verification/commit reference")
             operation = config["operation"]
             if (
                 operation in {"record_verified", "record_final_check"}

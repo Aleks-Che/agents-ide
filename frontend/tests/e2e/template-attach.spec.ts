@@ -48,6 +48,12 @@ test('template attachment uses current saved graph and survives a failed save', 
   await dialog.getByLabel('Шаблон', { exact: true }).selectOption(template.id)
   await expect(dialog.getByLabel('Версия шаблона')).toHaveCount(0)
   await dialog.getByLabel('Название в проекте').fill('Chosen version')
+  await dialog.getByLabel('Ветка', { exact: true }).selectOption('current')
+  await dialog.getByLabel('Рабочий каталог').selectOption('worktree')
+  await expect(dialog.getByLabel('Ветка', { exact: true })).toHaveValue(
+    'run_branch',
+  )
+  await expect(dialog.getByLabel('Ветка', { exact: true })).toBeDisabled()
   await page.route(`**/api/templates/${template.id}/bindings`, (route) =>
     route.fulfill({
       status: 409,
@@ -77,6 +83,23 @@ test('template attachment uses current saved graph and survives a failed save', 
   const bindings = await api(page, 'GET', `/bindings?project_id=${project.id}`)
   expect(bindings).toHaveLength(1)
   expect(bindings[0].version_id).toBe(second.id)
+  expect(bindings[0].workspace_mode).toBe('worktree')
+  expect(bindings[0].branch_policy).toBe('run_branch')
+  const card = page
+    .getByRole('list', { name: 'Привязки проекта' })
+    .getByRole('listitem')
+  await expect(card).toContainText('изолированная папка + отдельная ветка')
+  await card.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Параметры…' }).click()
+  const editor = page.getByRole('dialog', { name: 'Привязка: Ready flow' })
+  await expect(editor.getByLabel('Рабочий каталог')).toHaveValue('worktree')
+  await editor.getByLabel('Рабочий каталог').selectOption('project')
+  await editor.getByLabel('Ветка', { exact: true }).selectOption('current')
+  await editor.getByRole('button', { name: 'Сохранить', exact: true }).click()
+  await expect(editor).toHaveCount(0)
+  const updated = await api(page, 'GET', `/bindings/${bindings[0].id}`)
+  expect(updated.workspace_mode).toBe('project')
+  expect(updated.branch_policy).toBe('current')
   await page.getByRole('button', { name: 'Перейти к диалогам' }).click()
   await page
     .getByRole('button', { name: 'Запустить шаблон', exact: true })

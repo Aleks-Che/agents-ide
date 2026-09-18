@@ -319,7 +319,8 @@ def test_replaced_workspace_cannot_start(authenticated, tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Requires real Windows DPAPI")
-def test_snapshot_pins_settings_and_secret_revision(authenticated, tmp_path):
+def test_snapshot_pins_settings_and_secret_revision(authenticated, tmp_path, settings):
+    settings.enforce_execution_limits = True
     client, headers = authenticated
     project, template, *_ = setup_run(client, headers, tmp_path / "workspace")
     provider = client.post(

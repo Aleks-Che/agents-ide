@@ -1200,6 +1200,8 @@
                       "type": "boolean"
                     },
                     "verification_node_id": {
+                      "deprecated": true,
+                      "description": "Legacy PlanControl provenance only; never blocks a commit.",
                       "pattern": "^[a-zA-Z][a-zA-Z0-9_\\-]{0,63}$",
                       "type": "string"
                     }
@@ -2167,6 +2169,8 @@
               "type": "boolean"
             },
             "verification_node_id": {
+              "deprecated": true,
+              "description": "Legacy PlanControl provenance only; never blocks a commit.",
               "pattern": "^[a-zA-Z][a-zA-Z0-9_\\-]{0,63}$",
               "type": "string"
             }

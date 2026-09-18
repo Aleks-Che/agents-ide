@@ -442,8 +442,8 @@ export function LibraryView({
                       {binding.workspace_mode === 'worktree'
                         ? 'изолированная папка + отдельная ветка'
                         : binding.branch_policy === 'current'
-                        ? 'ветка: current'
-                        : 'ветка: run_branch'}{' '}
+                          ? 'ветка: current'
+                          : 'ветка: run_branch'}{' '}
                       · {binding.dirty_policy}
                     </span>
                   </span>

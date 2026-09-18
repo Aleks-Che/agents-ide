@@ -655,7 +655,7 @@ def test_plan_control_cannot_complete_without_verification(authenticated, tmp_pa
     assert result.waiting_reason.code == "missing_data"
 
 
-def test_git_commit_requires_verification(authenticated, tmp_path, settings):
+def test_git_commit_without_verification_and_changes_completes(authenticated, tmp_path, settings):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "a.txt").write_text("base")
@@ -663,8 +663,12 @@ def test_git_commit_requires_verification(authenticated, tmp_path, settings):
     node = {"id": "commit", "type": "GitCommit", "config": {"message": "stage8"}}
     run, factory = make_run(authenticated, tmp_path, graph=chain(node), execution_mode="real")
     result = run_now(run, factory, settings)
-    assert result.final_state == "waiting_input"
-    assert result.waiting_reason.details["reason"] == "git_verification_required"
+    assert result.final_state == "completed", result
+    with factory() as session:
+        commit = session.scalar(select(StepExecution).where(StepExecution.node_id == "commit"))
+        body = json.loads(commit.validated_result_json)
+        assert body["no_changes"] and body["sha"] is None
+        assert body["verification_id"] is None
     assert (
         subprocess.check_output(
             ["git", "-C", str(workspace), "rev-list", "--count", "HEAD"]

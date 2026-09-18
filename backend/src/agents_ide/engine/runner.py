@@ -867,6 +867,8 @@ class Runner:
         expected_head = self.runtime.get("git", {}).get("head", workspace.get("git_head_sha"))
         if git and expected_head and git.head_sha != expected_head:
             raise AppError("external_change_detected", "Git HEAD изменился после Start", 409)
+        if workspace.get("branch") and (not git or git.default_branch != workspace["branch"]):
+            raise AppError("external_change_detected", "Ветка worktree изменилась после Start", 409)
         if self.simulated:
             from agents_ide.engine.workspace_checkpoint import fingerprint
 

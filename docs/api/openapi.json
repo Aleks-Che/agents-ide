@@ -877,7 +877,9 @@
               "run.waiting",
               "run.waiting_input",
               "transition.selected",
-              "workspace.reservation_released"
+              "workspace.reservation_released",
+              "workspace.worktree_created",
+              "workspace.worktree_planned"
             ],
             "title": "Type",
             "type": "string"

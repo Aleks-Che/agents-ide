@@ -26,6 +26,7 @@ import {
   toolProgress,
 } from './observation'
 import { ArtifactDetail } from './ArtifactDetail'
+import { RunWorkspace } from './RunWorkspace'
 import { ResolutionForm } from './RunsPanel'
 
 type Stage = NonNullable<RunObservation['nodes']>[number]
@@ -279,6 +280,7 @@ export function ChatRunProgress({
           </button>
         </div>
       </header>
+      <RunWorkspace run={run} />
       {snapshot.error || bootstrap.error ? (
         <p role="alert" className="error">
           {describeRunError(snapshot.error ?? bootstrap.error)}{' '}

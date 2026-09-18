@@ -14,6 +14,7 @@ import { Modal } from '../../app/Modal'
 import { allowedCommands, resolutionPayload } from './controls'
 import { GroupSummarySection } from './GroupSummarySection'
 import { RunTimeline } from './RunTimeline'
+import { RunWorkspace } from './RunWorkspace'
 import { ArtifactDetail } from './ArtifactDetail'
 import { duration, stateDescriptions, waitingDescriptions } from './observation'
 const RunGraph = lazy(() => import('./RunGraph'))
@@ -132,6 +133,7 @@ export function RunScreen({
             ×
           </button>
         </header>
+        <RunWorkspace run={data} />
         {[run, plan, artifacts, diagnostics, journal, snapshot].map(
           (query, index) =>
             query.error ? (

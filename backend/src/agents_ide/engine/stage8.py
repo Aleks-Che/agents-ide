@@ -254,14 +254,22 @@ def git_commit_node(
             return runner._waiting(
                 "unknown_external_result", {"reason": "git_intent_requires_reconciliation"}, visit
             )
-        verification_id = config.get("verification_node_id")
-        if not verification_id:
-            return runner._waiting(
-                "configuration_invalid", {"reason": "git_verification_required"}, visit
+        # Keep provenance for existing PlanControl graphs without making it a commit gate.
+        verification_id = None
+        if config.get("verification_node_id"):
+            verification_id = session.scalar(
+                select(StepExecution.id)
+                .where(
+                    StepExecution.run_id == runner.run_id,
+                    StepExecution.node_id == config["verification_node_id"],
+                    StepExecution.scope == runner.runtime["work"]["scope"],
+                    StepExecution.cycle_id == runner.runtime["cycle_id"],
+                    StepExecution.status == "succeeded",
+                    StepExecution.raw_result_ref.is_not(None),
+                )
+                .order_by(StepExecution.visit_index.desc())
+                .limit(1)
             )
-        verified, body, evidence = verification(runner, session, verification_id)
-        if verified.decision != "true":
-            return runner._waiting("missing_data", {"reason": "git_verification_not_passed"}, visit)
         message = (
             ""
             if generation
@@ -301,7 +309,7 @@ def git_commit_node(
             runner.snapshot["resolved_settings"]["dirty_policy"],
             config.get("hook_policy", "allow_pre_configured"),
             baseline.signing_required,
-            verification_id=verified.id,
+            verification_id=verification_id,
             allow_untracked=config.get("allow_untracked", True),
         )
 
@@ -398,10 +406,6 @@ def git_commit_node(
 
         try:
             with using_transport(transport(runner, stop, deadline)):
-                if context_sources.workspace_hash(workspace) != evidence["workspace_hash"]:
-                    raise AppError(
-                        "external_change_detected", "Files changed since verification", 409
-                    )
                 result = git.execute(
                     workspace,
                     baseline,
@@ -452,7 +456,7 @@ def git_commit_node(
             "allowlist": list(allowed),
             "message": message,
             "branch": state["branch"],
-            "verification_id": verified.id,
+            "verification_id": verification_id,
             **({"message_generation": generation} if generation else {}),
         },
         metadata={"kind": "git_commit"},

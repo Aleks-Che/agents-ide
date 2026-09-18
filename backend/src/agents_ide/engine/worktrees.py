@@ -22,6 +22,17 @@ def effective_workspace(snapshot: dict[str, Any], runtime: dict[str, Any]) -> di
     return runtime.get("workspace", snapshot["workspace"])  # type: ignore[no-any-return]
 
 
+def reservation_scope(snapshot: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
+    workspace = effective_workspace(snapshot, runtime)
+    scope = dict(workspace["scope"])
+    if (
+        snapshot.get("resolved_settings", {}).get("workspace_mode") == "worktree"
+        and snapshot.get("execution_mode") != "simulated"
+    ):
+        scope["worktree_path"] = snapshot["workspace"]["worktree_path"]
+    return scope
+
+
 def prepare_worktree(runner: Runner) -> None:
     if runner.simulated or runner.snapshot["resolved_settings"].get("workspace_mode") != "worktree":
         return
@@ -37,10 +48,9 @@ def prepare_worktree(runner: Runner) -> None:
     head = source["git_head_sha"]
     _, normalized, dev, ino, git = collect_workspace(str(root))
     scope = workspace_scope(Path(normalized), git)
-    if (
-        [dev, ino] != [source["identity_dev"], source["identity_ino"]]
-        or scope["git_common_identity"] != source["scope"]["git_common_identity"]
-    ):
+    if [dev, ino] != [source["identity_dev"], source["identity_ino"]] or scope[
+        "git_common_identity"
+    ] != source["scope"]["git_common_identity"]:
         raise AppError("workspace_conflict", "Исходный Git-каталог изменился после Start", 409)
     if target.resolve() != target or target.parent.resolve() != target.parent:
         raise AppError("workspace_conflict", "Каталог worktree перенаправлен", 409)
@@ -71,6 +81,7 @@ def prepare_worktree(runner: Runner) -> None:
         or scope["git_common_identity"] != source["scope"]["git_common_identity"]
         or git.default_branch != branch
         or git.head_sha != head
+        or git.dirty
     ):
         raise AppError("workspace_conflict", "Не удалось подтвердить созданный worktree", 409)
     workspace = {

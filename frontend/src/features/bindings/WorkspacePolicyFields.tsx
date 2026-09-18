@@ -8,7 +8,9 @@ export function WorkspacePolicyFields({
 }: {
   workspaceMode: NonNullable<PipelineBinding['workspace_mode']>
   branchPolicy: PipelineBinding['branch_policy']
-  onWorkspaceMode: (value: NonNullable<PipelineBinding['workspace_mode']>) => void
+  onWorkspaceMode: (
+    value: NonNullable<PipelineBinding['workspace_mode']>,
+  ) => void
   onBranchPolicy: (value: PipelineBinding['branch_policy']) => void
 }) {
   const isolated = workspaceMode === 'worktree'
@@ -17,6 +19,7 @@ export function WorkspacePolicyFields({
       <label>
         Рабочий каталог
         <select
+          aria-label="Рабочий каталог"
           value={workspaceMode}
           onChange={(event) => {
             const mode = event.target.value as typeof workspaceMode
@@ -31,6 +34,7 @@ export function WorkspacePolicyFields({
       <label>
         Ветка
         <select
+          aria-label="Ветка"
           value={branchPolicy}
           disabled={isolated}
           onChange={(event) =>

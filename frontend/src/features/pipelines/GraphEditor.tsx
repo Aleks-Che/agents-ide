@@ -782,6 +782,9 @@ function GraphEditorForm({
                           'generate_message',
                           'message_generation',
                           'harness_settings',
+                          ...(selectedNode.type === 'GitCommit'
+                            ? ['verification_node_id']
+                            : []),
                           ...(selectedNode.type === 'GitCommit' &&
                           selectedNode.config?.generate_message === true
                             ? ['message']

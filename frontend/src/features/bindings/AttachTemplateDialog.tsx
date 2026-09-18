@@ -30,8 +30,12 @@ export function AttachTemplateDialog({
   const [projectId, setProjectId] = useState(initialProjectId ?? '')
   const [templateId, setTemplateId] = useState(initialTemplateId ?? '')
   const [name, setName] = useState<string | null>(null)
-  const [workspaceMode, setWorkspaceMode] = useState<'project' | 'worktree'>('project')
-  const [branchPolicy, setBranchPolicy] = useState<'run_branch' | 'current'>('run_branch')
+  const [workspaceMode, setWorkspaceMode] = useState<'project' | 'worktree'>(
+    'project',
+  )
+  const [branchPolicy, setBranchPolicy] = useState<'run_branch' | 'current'>(
+    'run_branch',
+  )
   const projects = useQuery({
     queryKey: ['projects', { includeArchived: false }],
     queryFn: () => projectsApi.list({ includeArchived: false }),
