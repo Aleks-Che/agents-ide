@@ -82,7 +82,7 @@ class SelectionSummary(BaseModel):
     groups: list[GroupRef] = Field(default_factory=list)
     nodes: list[NodeSelection] = Field(default_factory=list)
     visit: VisitCandidateState | None = None
-    group_changes_apply_only_to_new_runs: bool = True
+    group_changes_apply_only_to_new_runs: bool = False
 
 
 def save_node_selection(runtime: dict[str, Any], run: Run, snapshot: dict[str, Any]) -> None:
@@ -106,14 +106,18 @@ def save_node_selection(runtime: dict[str, Any], run: Run, snapshot: dict[str, A
 
 
 def build_selection_summary(session: Session, run: Run) -> SelectionSummary | None:
-    """Read pinned configuration and attempts, never live catalogs or retained SSE events."""
+    """Show current external groups alongside immutable evidence from past attempts."""
     from agents_ide.engine.run_configuration import effective_snapshot
+    from agents_ide.services.live_groups import candidate_identity, refresh_groups
 
     snapshot = effective_snapshot(run)
     runtime = json.loads(run.runtime_json or "{}")
     dependencies = snapshot.get("dependencies")
     if not isinstance(dependencies, dict):
         return None
+    if run.state not in {"completed", "failed", "cancelled"}:
+        dependencies = refresh_groups(session, snapshot)
+        snapshot["dependencies"] = dependencies
     latest = (
         select(StepExecution.node_id, func.max(StepExecution.visit_index).label("visit_index"))
         .where(StepExecution.run_id == run.id)
@@ -188,7 +192,7 @@ def build_selection_summary(session: Session, run: Run) -> SelectionSummary | No
             node.direct_provider_connection_id = direct.provider_connection_id
         execution = executions.get(node_id)
         history: list[dict[str, Any]] = []
-        used: dict[int, StepAttempt] = {}
+        used: dict[tuple[Any, ...], StepAttempt] = {}
         state: dict[str, Any] = {}
         if execution:
             state = runtime.get("node_selections", {}).get(node_id, {})
@@ -201,7 +205,7 @@ def build_selection_summary(session: Session, run: Run) -> SelectionSummary | No
                 metadata = json.loads(attempt.selection_json)
                 if "member_index" not in metadata:
                     continue
-                used[metadata["member_index"]] = attempt
+                used[candidate_identity(metadata)] = attempt
                 node.actual = ActualSelection(
                     **{
                         key: metadata[key]
@@ -232,11 +236,12 @@ def build_selection_summary(session: Session, run: Run) -> SelectionSummary | No
             if execution.id == run.current_execution_id:
                 result.visit = visit
         # Reasons belong to this node/visit. Later rounds overwrite earlier diagnostics.
-        reasons = {entry["member_index"]: entry["reason"] for entry in history}
+        reasons = {candidate_identity(entry): entry["reason"] for entry in history}
         for candidate in node.candidates:
             index = candidate.member_index
-            used_attempt = used.get(index)
-            candidate.last_reason = reasons.get(index) or (
+            identity = candidate_identity(candidate.model_dump())
+            used_attempt = used.get(identity)
+            candidate.last_reason = reasons.get(identity) or (
                 used_attempt.error_code if used_attempt else None
             )
             if not candidate.enabled or candidate.unavailable_reason:
@@ -246,7 +251,7 @@ def build_selection_summary(session: Session, run: Run) -> SelectionSummary | No
                 )
             elif used_attempt:
                 candidate.state = "succeeded" if used_attempt.status == "succeeded" else "consumed"
-            elif index in reasons:
+            elif identity in reasons:
                 candidate.state = "skipped"
             # candidate_index remains set even after exhaustion; the forward cursor disqualifies it.
             if (
@@ -254,7 +259,10 @@ def build_selection_summary(session: Session, run: Run) -> SelectionSummary | No
                 and execution
                 and execution.id == run.current_execution_id
                 and execution.status != "succeeded"
-                and index == state.get("candidate_index")
+                and (
+                    (used_attempt and used_attempt.id == run.current_attempt_id)
+                    or (not node.actual and index == state.get("candidate_index"))
+                )
                 and index >= (state.get("next_candidate_index") or 0)
                 and run.state not in {"completed", "failed", "cancelled"}
             ):

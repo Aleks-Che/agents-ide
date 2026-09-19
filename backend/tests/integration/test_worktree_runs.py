@@ -176,7 +176,7 @@ def claim(factory, settings, run):
     )
 
 
-def test_two_dialogs_run_and_commit_concurrently_without_touching_source(
+def test_four_dialogs_run_and_commit_concurrently_without_touching_source(
     authenticated,
     repository,
     settings,
@@ -195,12 +195,12 @@ def test_two_dialogs_run_and_commit_concurrently_without_touching_source(
     assert checked.json()["ok"], checked.text
     assert checked.json()["git_plan"]["will_create_worktree"]
     assert len(command(repository, "worktree", "list", "--porcelain").split("worktree ")) == 2
-    runs = [start(authenticated, project, binding) for _ in range(2)]
+    runs = [start(authenticated, project, binding) for _ in range(4)]
     factory = client.app.state.session_factory
     runners = [claim(factory, settings, run) for run in runs]
-    agent = WritingAgent(threading.Barrier(2))
+    agent = WritingAgent(threading.Barrier(4))
     monkeypatch.setattr(Runner, "_build_adapters", lambda *_: (agent, None))
-    with ThreadPoolExecutor(2) as pool:
+    with ThreadPoolExecutor(4) as pool:
         futures = [
             pool.submit(runner.execute, run["id"])
             for runner, run in zip(runners, runs, strict=True)
@@ -211,7 +211,7 @@ def test_two_dialogs_run_and_commit_concurrently_without_touching_source(
                 result.waiting_reason.model_dump() if result.waiting_reason else {},
                 ensure_ascii=True,
             )
-    assert len(set(agent.paths)) == 2
+    assert len(set(agent.paths)) == 4
     with factory() as session:
         for run, root in zip(
             runs, [Path(r.runtime["workspace"]["workspace_path"]) for r in runners], strict=True
@@ -307,21 +307,48 @@ def test_resume_reuses_worktree_even_without_git_commit_node(
     assert (repository / "README.md").read_text() == "user changes"
 
 
-@pytest.mark.parametrize("mode", ["project", "worktree"])
-def test_regular_checkout_keeps_exclusive_reservation(authenticated, repository, settings, mode):
+@pytest.mark.parametrize(
+    "first_mode,second_mode",
+    [("project", "project"), ("project", "worktree"), ("worktree", "project")],
+)
+def test_only_shared_working_files_block_other_dialogs(
+    authenticated, repository, settings, first_mode, second_mode
+):
     client, _ = authenticated
-    project, binding = binding_for(authenticated, repository, mode="project")
+    project, binding = binding_for(authenticated, repository, mode=first_mode)
     first = start(authenticated, project, binding)
-    start(authenticated, project, binding, overrides={"workspace_mode": mode})
+    second = start(authenticated, project, binding, overrides={"workspace_mode": second_mode})
     factory = client.app.state.session_factory
     claim(factory, settings, first)
-    assert queue.claim_next_job(factory, worker_id="second", lease_seconds=300) is None
+    claimed = queue.claim_next_job(factory, worker_id="second", lease_seconds=300)
+    if first_mode == second_mode:
+        assert claimed is None
+    else:
+        assert claimed and claimed.run_id == second["id"]
+
+
+def test_worktree_executes_while_source_checkout_is_reserved(
+    authenticated, repository, settings, monkeypatch
+):
+    client, _ = authenticated
+    project, binding = binding_for(authenticated, repository, commit=False, mode="project")
+    source = start(authenticated, project, binding)
+    isolated = start(authenticated, project, binding, overrides={"workspace_mode": "worktree"})
+    factory = client.app.state.session_factory
+    claim(factory, settings, source)
+    runner = claim(factory, settings, isolated)
+    agent = WritingAgent()
+    monkeypatch.setattr(Runner, "_build_adapters", lambda *_: (agent, None))
+    assert runner.execute(isolated["id"]).final_state == "completed"
+    assert (repository / "src/a.txt").read_text() == "base\n"
+    assert (agent.paths[0] / "src/a.txt").read_text() == isolated["id"]
 
 
 def test_binding_update_and_invalid_worktree_configuration(authenticated, tmp_path):
     client, headers = authenticated
     workspace = tmp_path / "plain"
     workspace.mkdir()
+    command(workspace, "init")  # No commit; do not inherit the checkout containing test files.
     _, binding = binding_for(authenticated, workspace, commit=False, mode="project")
     url = f"/api/bindings/{binding['id']}"
     updated = client.patch(

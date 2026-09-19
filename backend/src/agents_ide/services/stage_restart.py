@@ -119,6 +119,7 @@ def apply_restart(session: Session, run: Run, payload: dict[str, Any], command_i
     if pending.get("command_id") == command_id:
         configuration = pending["configuration"]
         runtime["template_configuration"] = configuration
+        runtime.pop("group_dependencies", None)
         runtime.get("json_processing_overrides", {}).pop(execution.node_id, None)
     invalidated = set(runtime.get("invalidated_executions", []))
     affected = list(

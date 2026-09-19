@@ -8,7 +8,7 @@ import threading
 from dataclasses import dataclass
 
 import psutil
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from agents_ide.domain.common import new_id, utc_now
@@ -17,8 +17,6 @@ from agents_ide.engine.ownership import owner_may_be_alive
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import QueueJob, Run, WorkspaceReservation
 from agents_ide.services.transactions import begin_write
-
-MAX_ACTIVE_RUNS = 2
 
 
 @dataclass(frozen=True)
@@ -121,15 +119,6 @@ def claim_next_job(
             # recovery must prove the old operation stopped before any dispatch.
             job.claimed_by, job.lease_expires_at = None, None
         session.flush()
-        active = (
-            session.scalar(
-                select(func.count()).select_from(QueueJob).where(QueueJob.claimed_by.isnot(None))
-            )
-            or 0
-        )
-        if active >= MAX_ACTIVE_RUNS:
-            session.commit()
-            return None
         reservations = list(
             session.scalars(
                 select(WorkspaceReservation).where(WorkspaceReservation.released_at.is_(None))

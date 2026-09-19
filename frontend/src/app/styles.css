@@ -465,22 +465,30 @@ footer span {
   font-size: 13px;
   font-weight: 600;
 }
-.chat-item-title {
+.panel-item-title {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
   min-width: 0;
 }
-.chat-item-title strong {
+.panel-item-title strong {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.chat-item-title > [role='status'] {
+.activity-indicators {
   display: flex;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
   margin-left: auto;
   color: #a3cbb6;
+}
+.activity-indicators > [role='status'] {
+  display: flex;
+}
+.activity-attention {
+  color: #efbc68;
 }
 .chat-activity-spinner {
   animation: chat-activity-spin 1s linear infinite;
@@ -2102,6 +2110,9 @@ button.primary {
   font-size: 12px;
   padding: 8px 12px;
 }
+.chat-run-progress > .run-workspace {
+  padding-inline: 16px;
+}
 .chat-run-header {
   display: flex;
   justify-content: space-between;
@@ -2146,6 +2157,73 @@ button.primary {
   gap: 14px;
   padding: 14px;
   align-items: start;
+}
+.run-loops {
+  padding: 12px 14px;
+}
+.run-loops h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.run-loop-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.run-loop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #3b514c;
+  border-radius: 7px;
+  background: #182824;
+}
+.run-loop.exhausted {
+  border-color: #ad914f;
+}
+.run-loop-title {
+  display: grid;
+  gap: 3px;
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+.run-loops small {
+  color: #a9bbb5;
+  font-size: 12px;
+}
+.run-loop-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+.run-loop-buttons {
+  display: flex;
+  gap: 4px;
+}
+.run-loop-buttons button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+.run-loop progress {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 5px;
+  accent-color: #7ac7b0;
+}
+.run-loop p {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  color: #eddb9f;
 }
 .stage-navigation {
   position: sticky;

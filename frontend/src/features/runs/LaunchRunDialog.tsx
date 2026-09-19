@@ -210,6 +210,7 @@ export function LaunchRunDialog({
       sessionStorage.removeItem(pendingStartKey(chat.id))
       setPending(null)
       void client.invalidateQueries({ queryKey: ['runs_summary'] })
+      void client.invalidateQueries({ queryKey: ['sidebar_activity'] })
       void client.invalidateQueries({ queryKey: ['runs_for_chat'] })
       onLaunched(run)
     },

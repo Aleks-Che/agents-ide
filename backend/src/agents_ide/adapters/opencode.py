@@ -35,6 +35,7 @@ from agents_ide.errors import AppError
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 HEALTH_TIMEOUT_SECONDS = OPENCODE_HEALTH_TIMEOUT = 2.0
 STARTUP_TIMEOUT_SECONDS = 30.0
+TOOL_OUTPUT_SAMPLE_SECONDS = 1.0
 DENY_TOOLS = [{"permission": "*", "pattern": "*", "action": "deny"}]
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 
@@ -205,6 +206,8 @@ class OpenCodeAdapter(AgentAdapter):
         observed_output = threading.Event()
         activity_message_ids: set[str] = set()
         message_roles: dict[str, str] = {}
+        tool_progress: dict[tuple[str, str], dict[str, Any]] = {}
+        tool_archived_at: dict[tuple[str, str], float] = {}
         errors: list[Exception] = []
         threads: list[threading.Thread] = []
         questions: dict[str, list[dict[str, Any]]] = {}
@@ -351,7 +354,46 @@ class OpenCodeAdapter(AgentAdapter):
                 if sid != self.external_session_id:
                     return
                 kind = event["type"]
+                tool_update = None
+                tool_key = None
+                tool_changed = True
+                if (
+                    kind == "message.part.updated"
+                    and isinstance(part, dict)
+                    and part.get("type") == "tool"
+                ):
+                    observe_output(part.get("messageID"))
+                    state = part.get("state", {})
+                    inputs = state.get("input", {})
+                    summary = state.get("title") or next(
+                        (inputs[k] for k in ("command", "filePath", "pattern") if inputs.get(k)),
+                        "",
+                    )
+                    call_id = part.get("callID") or part.get("id")
+                    tool_update = {
+                        "session_id": sid,
+                        "call_id": call_id,
+                        "tool": part.get("tool"),
+                        "status": state.get("status"),
+                        "summary": str(summary)[:500],
+                    }
+                    if isinstance(call_id, str):
+                        tool_key = (str(part.get("messageID", "")), call_id)
+                        now = time.monotonic()
+                        tool_changed = tool_progress.get(tool_key) != tool_update
+                        # OpenCode repeats the entire growing output for each chunk.
+                        # Sample intermediate snapshots before the durable callback;
+                        # always preserve state changes and the full terminal result.
+                        if (
+                            not tool_changed
+                            and state.get("status") in {"pending", "running"}
+                            and now - tool_archived_at[tool_key] < TOOL_OUTPUT_SAMPLE_SECONDS
+                        ):
+                            return
+                        tool_progress[tool_key] = tool_update
                 archive_native(request.emit_event, "opencode", kind, event, str(sid))
+                if tool_key is not None:
+                    tool_archived_at[tool_key] = time.monotonic()
                 if kind == "question.asked" and request.receive_message:
                     from agents_ide.adapters.interaction import questions_for_ui
 
@@ -449,28 +491,8 @@ class OpenCodeAdapter(AgentAdapter):
                     if part.get("type") in {"text", "reasoning", "tool"}:
                         observe_output(part.get("messageID"))
                     if part.get("type") == "tool":
-                        state = part.get("state", {})
-                        inputs = state.get("input", {})
-                        summary = state.get("title") or next(
-                            (
-                                inputs[k]
-                                for k in ("command", "filePath", "pattern")
-                                if inputs.get(k)
-                            ),
-                            "",
-                        )
-                        # Full output is already archived above. Keep progress compact
-                        # so a large tool result does not evict the chat's event window.
-                        emit(
-                            "agent.tool_call",
-                            {
-                                "session_id": sid,
-                                "call_id": part.get("callID") or part.get("id"),
-                                "tool": part.get("tool"),
-                                "status": state.get("status"),
-                                "summary": str(summary)[:500],
-                            },
-                        )
+                        if tool_changed and tool_update is not None:
+                            emit("agent.tool_call", tool_update)
                     elif isinstance(props.get("delta"), str):
                         text_delta(props["delta"])
                 elif kind == "message.updated" and isinstance(info, dict):
@@ -723,6 +745,43 @@ class OpenCodeAdapter(AgentAdapter):
                     )
                 )
                 data = native_error.get("data", {}) if isinstance(native_error, dict) else {}
+                from agents_ide.adapters.provider_limits import limit_error_code
+
+                handoff_code = None
+                if (
+                    isinstance(native_error, dict)
+                    and native_error.get("name") == "APIError"
+                    and isinstance(data, dict)
+                ):
+                    status = data.get("statusCode")
+                    handoff_code = limit_error_code(data, status)
+                    if handoff_code is None and (
+                        data.get("isRetryable") is True
+                        or (type(status) is int and (status == 408 or 500 <= status < 600))
+                    ):
+                        # OpenCode has finished this turn after exhausting its
+                        # provider retries. Connection failures often have no HTTP
+                        # status at all; isRetryable is the native classification.
+                        handoff_code = "provider_unavailable"
+                if handoff_code:
+                    # The native message completed with a definite rejection.
+                    # Earlier tool effects remain in the workspace: transfer the
+                    # task, never claim that replaying the whole attempt is safe.
+                    return AgentResult(
+                        ExternalOutcome.UNAVAILABLE,
+                        text_tail,
+                        None,
+                        None,
+                        tool_calls=tuple(tool_progress.values())[-20:],
+                        error=AdapterError(
+                            handoff_code,
+                            handoff_code,
+                            "unknown",
+                            {"status": data.get("statusCode"), "native_error": "APIError"},
+                        ),
+                        can_handoff=True,
+                        elapsed_seconds=time.monotonic() - started,
+                    )
                 if (
                     isinstance(native_error, dict)
                     and native_error.get("name") == "APIError"

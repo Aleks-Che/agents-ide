@@ -70,7 +70,8 @@ def test_general_defaults_and_node_overrides_are_pinned(authenticated):
         assert client.put("/api/settings/general", headers=headers, json=invalid).status_code == 422
 
 
-def test_exact_staged_diff_omits_deleted_contents_and_preserves_message(repository):
+@pytest.mark.parametrize("format_", ["plain", "thinking", "fenced_thinking"])
+def test_exact_staged_diff_omits_deleted_contents_and_preserves_message(repository, format_):
     value = baseline(repository, allowlist=("src/**", "README.md"))
     (repository / "src/a.txt").unlink()
     (repository / "src/new.txt").write_text("new content\n")
@@ -80,6 +81,13 @@ def test_exact_staged_diff_omits_deleted_contents_and_preserves_message(reposito
 
     def generate(diff):
         seen.append(diff)
+        if format_ == "thinking":
+            return (
+                "<think>\nDraft reasoning.<think>Nested draft.</think>Still reasoning.\n</think>\n"
+                f"{message}\n<THINK>Another private block.</THINK>"
+            )
+        if format_ == "fenced_thinking":
+            return "<think>" + "reasoning\n" * 1000 + f"</think>\n```text\n{message}\n```"
         return message
 
     result = git.execute(repository, value, intent(value), generate_message=generate)
@@ -88,7 +96,10 @@ def test_exact_staged_diff_omits_deleted_contents_and_preserves_message(reposito
     assert "base" not in seen[0]["staged_diff"]
     assert "new content" in seen[0]["staged_diff"]
     assert "outside selected node" not in seen[0]["staged_diff"]
-    assert command(repository, "log", "-1", "--format=%B").startswith(message)
+    committed = command(repository, "log", "-1", "--format=%B")
+    assert committed.startswith(message)
+    assert "think" not in committed.lower() and "reasoning" not in committed
+    assert result.intent.message == message
     assert command(repository, "diff", "--cached", "--name-only") == ""
     git.execute(
         repository,
@@ -99,14 +110,24 @@ def test_exact_staged_diff_omits_deleted_contents_and_preserves_message(reposito
     )
 
 
-def test_no_diff_skips_generation_and_failure_does_not_commit(repository):
+@pytest.mark.parametrize(
+    "invalid_message",
+    [
+        "  ",
+        "<think>Only reasoning</think>",
+        "<think>Unclosed reasoning\nfix: draft answer",
+        "reasoning</think>\nfix: draft answer",
+        "<think>Outer<think>Inner</think>Unfinished outer\nfix: draft answer",
+    ],
+)
+def test_no_diff_skips_generation_and_failure_does_not_commit(repository, invalid_message):
     value = baseline(repository)
     assert git.execute(
         repository, value, intent(value), generate_message=lambda _: pytest.fail("No diff")
     ).no_changes
     (repository / "src/a.txt").write_text("changed")
     with pytest.raises(git.GitCommitError, match="empty or invalid"):
-        git.execute(repository, value, intent(value), generate_message=lambda _: "  ")
+        git.execute(repository, value, intent(value), generate_message=lambda _: invalid_message)
     assert command(repository, "rev-list", "--count", "HEAD") == "1"
     assert command(repository, "diff", "--cached", "--name-only") == ""
 
@@ -147,7 +168,7 @@ def test_real_git_node_generates_with_custom_settings(
             )
         return LLMResult(
             ExternalOutcome.SUCCEEDED,
-            message,
+            f"<think>Inspect the staged diff before writing the message.</think>\n{message}",
             {"text": message},
             None,
             tokens_used=12,

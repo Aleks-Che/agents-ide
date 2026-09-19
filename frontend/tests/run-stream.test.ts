@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { connectRunStream } from '../src/app/useRunStream'
 import {
   allowedCommands,
+  pendingAgentRecovery,
   resolutionPayload,
 } from '../src/features/runs/controls'
 import type { RunRecord } from '../src/api/runs'
@@ -233,6 +234,40 @@ describe('Run controls and binding drafts', () => {
       } as RunRecord),
     ).toEqual(['cancel', 'resolve'])
   })
+  it('shows saved continuation only while its attempt awaits resume', () => {
+    const run = {
+      state: 'waiting_input',
+      waiting_reason: { details: { attempt_id: 'current' } },
+      runtime: {
+        agent_recovery_attempts: { current: 'continue_session' },
+        pending_agent_recovery: {
+          attempt_id: 'current',
+          execution_id: 'execution',
+          action: 'continue_session',
+        },
+      },
+    } as unknown as RunRecord
+    expect(pendingAgentRecovery(run)).toBe(true)
+    expect(pendingAgentRecovery({ ...run, state: 'queued' })).toBe(false)
+    expect(pendingAgentRecovery({ ...run, runtime: {} })).toBe(false)
+    expect(
+      pendingAgentRecovery({
+        ...run,
+        waiting_reason: {
+          ...run.waiting_reason!,
+          details: { attempt_id: 'later' },
+        },
+      }),
+    ).toBe(false)
+    // A failed continuation can retain the same attempt ID. Its audit record is
+    // not an unconsumed decision and must not display "ready to continue".
+    expect(
+      pendingAgentRecovery({
+        ...run,
+        runtime: { agent_recovery_attempts: { current: 'continue_session' } },
+      }),
+    ).toBe(false)
+  })
   it('sends explicit limits and rejects empty or unconfirmed resolutions', () => {
     const run = {
       state: 'waiting_input',
@@ -266,6 +301,26 @@ describe('Run controls and binding drafts', () => {
     })
     expect(() => resolutionPayload(run, '', 'reprocess', {})).toThrow()
   })
+  it.each(['continue_session', 'next_candidate'])(
+    'continues the saved agent attempt with %s without replay authorization',
+    (action) => {
+      const run = {
+        waiting_reason: {
+          code: 'unknown_external_result',
+          resolution_schema: {
+            agent_recovery: {
+              attempt_id: 'saved-attempt',
+              actions: ['continue_session', 'next_candidate'],
+            },
+          },
+        },
+      } as unknown as RunRecord
+      expect(resolutionPayload(run, '', action)).toEqual({
+        agent_recovery: { attempt_id: 'saved-attempt', action },
+      })
+      expect(() => resolutionPayload({} as RunRecord, '', action)).toThrow()
+    },
+  )
   it.each([
     'broken',
     '[]',

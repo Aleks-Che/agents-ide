@@ -51,21 +51,33 @@ export default function RunGraph({
   )
   const edges = useMemo<Edge[]>(
     () =>
-      (observation.edges ?? []).map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        markerEnd: { type: MarkerType.ArrowClosed },
-        label: [edge.when, edge.loop_id ? `цикл ${edge.loop_id}` : '']
-          .filter(Boolean)
-          .join(' · '),
-        className: selectedEdge(edge, observation.last_transition)
-          ? 'observed-edge-selected'
-          : '',
-        style: selectedEdge(edge, observation.last_transition)
-          ? { stroke: '#dcca86', strokeWidth: 4 }
-          : undefined,
-      })),
+      (observation.edges ?? []).map((edge) => {
+        const loop = observation.loops?.find((item) =>
+          item.edge_ids.includes(edge.id),
+        )
+        return {
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          markerEnd: { type: MarkerType.ArrowClosed },
+          label: [
+            edge.when,
+            loop
+              ? `цикл ${loop.id}: пройдено ${loop.completed}, осталось ${loop.remaining}`
+              : edge.loop_id
+                ? `цикл ${edge.loop_id}`
+                : '',
+          ]
+            .filter(Boolean)
+            .join(' · '),
+          className: selectedEdge(edge, observation.last_transition)
+            ? 'observed-edge-selected'
+            : '',
+          style: selectedEdge(edge, observation.last_transition)
+            ? { stroke: '#dcca86', strokeWidth: 4 }
+            : undefined,
+        }
+      }),
     [observation],
   )
   return (

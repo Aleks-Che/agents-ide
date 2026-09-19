@@ -17,6 +17,7 @@ import {
 } from '../features/settings/SettingsView'
 import { LibraryView } from '../features/bindings/LibraryView'
 import { RunsView } from '../features/runs/RunsView'
+import { getSidebarActivity } from '../api/activity'
 
 const pairingCommand = 'agents-ide auth pair-code'
 
@@ -288,6 +289,11 @@ function SignedInShell({
   onLogout,
   logoutPending,
 }: SignedInShellProps) {
+  const activity = useQuery({
+    queryKey: ['sidebar_activity'],
+    queryFn: getSidebarActivity,
+    refetchInterval: 3000,
+  })
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [view, setView] = useState<MainView>('chats')
@@ -321,6 +327,7 @@ function SignedInShell({
         </a>
         <span className="section-label">РАБОЧАЯ ОБЛАСТЬ</span>
         <ProjectsPanel
+          activity={activity.data?.projects}
           selectedId={selectedProject?.id ?? null}
           onRenamed={(project) => {
             setSelectedProject((selected) =>
@@ -387,6 +394,7 @@ function SignedInShell({
         hidden={view === 'settings' || view === 'library' || view === 'runs'}
       >
         <ChatsPanel
+          activity={activity.data?.chats}
           key={selectedProject?.id ?? ''}
           projectId={selectedProject?.id ?? ''}
           selectedId={selectedChat?.id ?? null}

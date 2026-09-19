@@ -155,12 +155,13 @@ def scopes_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
 def reservations_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
     """Distinct managed worktrees may share a repository, never a working directory.
 
-    Before checkout, each reservation holds the source identity plus its immutable
-    destination. Ordinary/legacy reservations keep the conservative repository lock.
+    Before checkout, managed runs reserve their destination, not the source
+    checkout. A shared Git object database does not mean shared working files.
     """
     left_target, right_target = left.get("worktree_path"), right.get("worktree_path")
-    if left_target and right_target:
-        left_path, right_path = Path(left_target), Path(right_target)
+    if left_target or right_target:
+        left_path = Path(left_target or left["normalized_path"]).resolve()
+        right_path = Path(right_target or right["normalized_path"]).resolve()
         return left_path.is_relative_to(right_path) or right_path.is_relative_to(left_path)
     return scopes_overlap(left, right)
 

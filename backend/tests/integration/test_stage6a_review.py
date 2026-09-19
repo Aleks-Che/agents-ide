@@ -38,6 +38,8 @@ from agents_ide.persistence.models import (
     ProcessSupervision,
     Run,
     RunEvent,
+    StepAttempt,
+    StepExecution,
 )
 from agents_ide.worker.processes import ProcessGroup, ProcessRegistry
 
@@ -156,6 +158,46 @@ def test_provider_error_in_successful_http_is_not_success(server):
     result = adapter.run(request)
     assert result.outcome == ExternalOutcome.UNKNOWN
     assert "private-provider-error" not in repr(result)
+    assert not result.can_handoff
+
+
+@pytest.mark.parametrize("prior_output", [False, True])
+@pytest.mark.parametrize(
+    "status,message,retryable,code",
+    [
+        (
+            429,
+            "The Token Plan usage limit has been reached. (2067)",
+            True,
+            "provider_quota_exhausted",
+        ),
+        (429, "Too many requests", True, "provider_rate_limited"),
+        (402, "Payment required", True, "provider_quota_exhausted"),
+        (
+            None,
+            "Cannot connect to API: Unable to connect. Is the computer able to access the url?",
+            True,
+            "provider_unavailable",
+        ),
+        (503, "Service unavailable", False, "provider_unavailable"),
+        (408, "Request timeout", False, "provider_unavailable"),
+    ],
+)
+def test_native_provider_failure_allows_handoff_without_claiming_no_effect(
+    server, prior_output, status, message, retryable, code
+):
+    handler, adapter, request = server
+    handler.auth_only_error = not prior_output
+    handler.response_error = {
+        "name": "APIError",
+        "data": {"statusCode": status, "isRetryable": retryable, "message": message},
+    }
+    result = adapter.run(request)
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.error.code == code
+    assert result.can_handoff
+    assert not result.no_effect
+    assert result.error.retry_safety != "safe"
 
 
 @pytest.mark.parametrize("prior_output", [False, True])
@@ -276,6 +318,37 @@ def test_large_tool_events_and_long_stream_do_not_abort(server):
     assert all(len(json.dumps(p)) < 1000 for p in tools)
     archived = [p for t, p in events if t == "agent.native_event"]
     assert sum(len(json.dumps(p)) for p in archived) > 10 * 1024 * 1024
+
+
+def test_tool_output_burst_keeps_progress_current_with_slow_event_storage(server):
+    handler, adapter, request = server
+    events = []
+
+    def persist(kind, payload):
+        # A durable event callback must not be called for every output chunk.
+        time.sleep(0.005)
+        events.append((kind, payload))
+
+    result = adapter.run(replace(request, prompt="tool output burst slow", emit_event=persist))
+    assert result.succeeded, result
+    assert not handler.aborts
+    progress = [p for kind, p in events if kind == "agent.tool_call"]
+    assert [(p["call_id"], p["status"]) for p in progress] == [
+        (f"call_{call}", status)
+        for call in ("first", "second")
+        for status in ("pending", "running", "completed")
+    ]
+    snapshots = [
+        p["payload"]["properties"]["part"]
+        for kind, p in events
+        if kind == "agent.native_event" and p["native_type"] == "message.part.updated"
+    ]
+    assert 6 <= len(snapshots) < 30
+    assert [p["state"]["output"] for p in snapshots if p["state"]["status"] == "completed"] == [
+        "complete output",
+        "complete output",
+    ]
+    assert any(kind == "attempt.text_delta" and p["text"] == "hello" for kind, p in events)
 
 
 def test_sse_accepts_single_frame_above_old_response_limit():
@@ -428,6 +501,8 @@ def seed(
     permission_mode="no_tools",
     prompt="force_decision=passed",
     node_overrides=None,
+    first_group_model="unavailable",
+    last_group_model="claude-sonnet-4-20250514",
 ):
     client, headers = authenticated
 
@@ -464,10 +539,13 @@ def seed(
             {
                 "name": "oc-group",
                 "members": [
-                    {"harness_profile_id": profile["id"], "model_id": "anthropic/unavailable"},
                     {
                         "harness_profile_id": profile["id"],
-                        "model_id": "anthropic/claude-sonnet-4-20250514",
+                        "model_id": f"anthropic/{first_group_model}",
+                    },
+                    {
+                        "harness_profile_id": profile["id"],
+                        "model_id": f"anthropic/{last_group_model}",
                     },
                 ],
             },
@@ -625,6 +703,150 @@ def test_group_auth_fallback_uses_new_native_session(
     assert messages[0]["path"] != messages[1]["path"]
 
 
+@pytest.mark.parametrize("recover", [False, True])
+@pytest.mark.parametrize(
+    "model,code",
+    [
+        ("quota-exhausted", "provider_quota_exhausted"),
+        ("connection-failed", "provider_unavailable"),
+    ],
+)
+def test_group_provider_handoff_preserves_partial_work_and_survives_recovery(
+    authenticated, settings, tmp_path, launch_fixture, monkeypatch, recover, model, code
+):
+    from agents_ide.persistence.models import QueueJob
+
+    run, _ = seed(
+        authenticated,
+        tmp_path,
+        roles=("reviewer",),
+        group=True,
+        first_group_model=model,
+    )
+    client, _ = authenticated
+    original = Runner._save_attempt
+    crashed = False
+
+    def save(self, visit, attempt_id, result, validation_error):
+        nonlocal crashed
+        original(self, visit, attempt_id, result, validation_error)
+        if recover and result.can_handoff and not crashed:
+            crashed = True
+            raise RuntimeError("crash after durable handoff")
+
+    monkeypatch.setattr(Runner, "_save_attempt", save)
+    runner = runner_for(client, settings)
+    if recover:
+        with pytest.raises(RuntimeError, match="crash after durable handoff"):
+            runner.execute(run["id"])
+        with client.app.state.session_factory() as db:
+            job = db.scalar(select(QueueJob))
+            job.lease_expires_at = 0
+            job.owner_pid, job.owner_create_time = 99999999, 1
+            db.commit()
+        runner = runner_for(client, settings)
+    result = runner.execute(run["id"])
+    assert result.final_state == "completed", result
+    assert (tmp_path / "workspace" / "partial-work.txt").read_text() == "preserve this work"
+    rows = [json.loads(line) for line in launch_fixture[1].read_text().splitlines()]
+    messages = [r for r in rows if r["path"].endswith("/message")]
+    assert [r["body"]["model"]["modelID"] for r in messages] == [
+        model,
+        "claude-sonnet-4-20250514",
+    ]
+    assert messages[0]["path"] == messages[1]["path"]  # retained OpenCode conversation
+    assert "Preserve completed work" in messages[1]["body"]["parts"][0]["text"]
+    context = json.loads(messages[1]["body"]["parts"][1]["text"].split("\n", 1)[1])
+    assert context["agent_handoff"]["tool_calls"][0]["summary"] == "partial-work.txt"
+    with client.app.state.session_factory() as db:
+        attempts = list(
+            db.scalars(
+                select(StepAttempt)
+                .join(StepExecution, StepExecution.id == StepAttempt.execution_id)
+                .where(StepExecution.run_id == run["id"], StepExecution.node_id == "a0")
+                .order_by(StepAttempt.started_at)
+            )
+        )
+        assert [a.status for a in attempts] == ["failed", "succeeded"]
+        details = json.loads(attempts[0].error_details_json)
+        assert details["can_handoff"] and not details["no_effect"]
+        assert attempts[0].error_code == code
+        switched = list(
+            db.scalars(
+                select(RunEvent).where(
+                    RunEvent.run_id == run["id"], RunEvent.type == "model_group.candidate_switched"
+                )
+            )
+        )
+        assert len(switched) == 1
+        assert json.loads(switched[0].payload_json)["reason"] == code
+    assert len(launch_fixture[0]) == 2  # old process tree stopped before the next candidate
+    assert not runner.registry.by_run(run["id"])
+
+
+@pytest.mark.parametrize(
+    "first,last,code",
+    [
+        ("quota-exhausted", "quota-empty", "provider_quota_exhausted"),
+        ("connection-failed", "connection-empty", "provider_unavailable"),
+    ],
+)
+def test_group_waits_only_after_all_candidates_are_unavailable(
+    authenticated, settings, tmp_path, launch_fixture, first, last, code
+):
+    run, _ = seed(
+        authenticated,
+        tmp_path,
+        roles=("reviewer",),
+        group=True,
+        first_group_model=first,
+        last_group_model=last,
+    )
+    result = runner_for(authenticated[0], settings).execute(run["id"])
+    assert result.final_state == "waiting_input"
+    assert result.waiting_reason.code == "model_group_exhausted"
+    assert len(result.waiting_reason.details["candidates"]) == 2
+    assert all(c["reason"] == code for c in result.waiting_reason.details["candidates"])
+    rows = [json.loads(line) for line in launch_fixture[1].read_text().splitlines()]
+    assert len([r for r in rows if r["path"].endswith("/message")]) == 2
+    with authenticated[0].app.state.session_factory() as db:
+        runtime = json.loads(db.get(Run, run["id"]).runtime_json)
+        assert runtime["agent_handoff"]["tool_calls"][0]["summary"] == "partial-work.txt"
+
+
+@pytest.mark.parametrize("model", ["quota-exhausted", "connection-failed"])
+def test_provider_handoff_waits_if_old_process_stop_is_unconfirmed(
+    authenticated, settings, tmp_path, launch_fixture, monkeypatch, model
+):
+    run, _ = seed(
+        authenticated,
+        tmp_path,
+        roles=("reviewer",),
+        group=True,
+        first_group_model=model,
+    )
+    runner = runner_for(authenticated[0], settings)
+    original = runner._close_harness_live
+    failed = False
+
+    def close():
+        nonlocal failed
+        if runner._opencode_live and not failed:
+            failed = True
+            raise AppError("process_not_responding", "Unconfirmed process stop", 409)
+        original()
+
+    monkeypatch.setattr(runner, "_close_harness_live", close)
+    result = runner.execute(run["id"])
+    assert result.final_state == "waiting_input"
+    rows = [json.loads(line) for line in launch_fixture[1].read_text().splitlines()]
+    messages = [r for r in rows if r["path"].endswith("/message")]
+    assert len(messages) == 1
+    with authenticated[0].app.state.session_factory() as db:
+        runtime = json.loads(db.get(Run, run["id"]).runtime_json)
+        assert not runtime.get("agent_handoff")
+
+
 def test_preflight_blocks_unverified_write_before_launch(
     authenticated, settings, tmp_path, launch_fixture
 ):
@@ -676,6 +898,39 @@ def test_occupied_port_is_not_attached_or_killed(tmp_path):
         assert listener.getsockname()[1]
     finally:
         listener.close()
+
+
+@pytest.mark.parametrize("path", ["/global/health", "/path", "/config/providers"])
+def test_stalled_startup_probe_reconnects_without_restarting_task(
+    authenticated, settings, tmp_path, launch_fixture, monkeypatch, path
+):
+    import agents_ide.engine.opencode_runtime as runtime_module
+
+    launch = ProcessGroup.start
+
+    def delayed_start(self, argv, cwd, env, before_resume=None):
+        return launch(
+            self,
+            argv,
+            cwd,
+            {**env, "FIXTURE_STARTUP_STALL_PATH": path},
+            before_resume,
+        )
+
+    monkeypatch.setattr(ProcessGroup, "start", delayed_start)
+    monkeypatch.setattr(runtime_module, "HEALTH_TIMEOUT_SECONDS", 0.2)
+    run, _ = seed(authenticated, tmp_path, roles=("reviewer",))
+    runner = runner_for(authenticated[0], settings)
+    assert runner.execute(run["id"]).final_state == "completed"
+    launches, trace = launch_fixture
+    assert len(launches) == 1
+    rows = [json.loads(line) for line in trace.read_text().splitlines()]
+    probes = [row for row in rows if row["kind"] == "startup_probe"]
+    assert len(probes) >= 3
+    assert [row["body"]["stall"] for row in probes[:3]] == [True, True, False]
+    assert sum(row["path"] == "/session" for row in rows) == 1
+    assert sum(row["path"].endswith("/message") for row in rows) == 1
+    assert not runner.registry.by_run(run["id"])
 
 
 def test_session_survives_more_than_three_continuations(

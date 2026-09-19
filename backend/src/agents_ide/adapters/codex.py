@@ -839,6 +839,20 @@ class CodexAdapter(AgentAdapter):
                         emit("agent.session_aborted", message_id=self._turn_id)
                         return failure("interrupted", interruption_confirmed=True)
                     if turn.get("error") or turn.get("status") != "completed":
+                        from agents_ide.adapters.provider_limits import limit_error_code
+
+                        limit_code = limit_error_code(turn.get("error"))
+                        if turn.get("status") == "failed" and limit_code:
+                            return AgentResult(
+                                ExternalOutcome.UNAVAILABLE,
+                                "\n".join(texts.values())[-8000:],
+                                None,
+                                None,
+                                error=AdapterError(limit_code, limit_code),
+                                can_handoff=True,
+                                elapsed_seconds=time.monotonic() - started,
+                                tokens_used=tokens,
+                            )
                         if not texts and not tools:
                             try:
                                 rejection = json.loads(turn.get("error", {}).get("message", ""))

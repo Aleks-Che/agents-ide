@@ -19,9 +19,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import psutil
 
 from agents_ide.adapters.opencode import (
+    HEALTH_TIMEOUT_SECONDS,
     RunSession,
     fetch_opencode_version,
     list_opencode_models,
@@ -143,6 +145,12 @@ class OpenCodeRuntime:
                 "configuration_invalid", "Use the absolute native OpenCode executable path", 409
             )
         deadline = time.monotonic() + start_timeout if start_timeout is not None else float("inf")
+
+        def probe_timeout() -> float:
+            # Reconnect stalled readiness requests, without imposing a deadline on
+            # startup or model execution. Each retry also checks stop/ownership.
+            return min(HEALTH_TIMEOUT_SECONDS, max(0.01, deadline - time.monotonic()))
+
         last_error: AppError | None = None
         for _ in range(3):
             if check_owned:
@@ -213,7 +221,7 @@ class OpenCodeRuntime:
                     version = fetch_opencode_version(
                         runtime.base_url,
                         password=password,
-                        timeout_seconds=None,
+                        timeout_seconds=probe_timeout(),
                     )
                     if version:
                         # Auth health alone cannot prove this is our listener. Check its
@@ -234,12 +242,17 @@ class OpenCodeRuntime:
                                 "OpenCode listener ownership is not confirmed",
                                 409,
                             )
-                        info = probe_json(
-                            runtime.base_url,
-                            "/path",
-                            password=password,
-                            directory=str(workspace_path),
-                        )
+                        try:
+                            info = probe_json(
+                                runtime.base_url,
+                                "/path",
+                                password=password,
+                                directory=str(workspace_path),
+                                timeout_seconds=probe_timeout(),
+                            )
+                        except httpx.TransportError:
+                            (stop_event or threading.Event()).wait(0.1)
+                            continue
                         if (
                             not isinstance(info, dict)
                             or Path(info.get("directory", "")).resolve() != workspace_path.resolve()
@@ -247,10 +260,17 @@ class OpenCodeRuntime:
                             raise AppError(
                                 "configuration_invalid", "OpenCode directory mismatch", 409
                             )
+                        try:
+                            runtime.cached_models = list_opencode_models(
+                                runtime.base_url,
+                                password=password,
+                                directory=str(workspace_path),
+                                timeout_seconds=probe_timeout(),
+                            )
+                        except httpx.TransportError:
+                            (stop_event or threading.Event()).wait(0.1)
+                            continue
                         runtime.server_version = version
-                        runtime.cached_models = list_opencode_models(
-                            runtime.base_url, password=password, directory=str(workspace_path)
-                        )
                         return runtime
                     (stop_event or threading.Event()).wait(0.1)
                 raise AppError("opencode_startup_timeout", "OpenCode health deadline expired", 409)

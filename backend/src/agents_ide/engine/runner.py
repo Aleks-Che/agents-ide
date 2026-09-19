@@ -53,7 +53,7 @@ from agents_ide.domain.workspace import collect_workspace, workspace_scope
 from agents_ide.engine import artifacts, context_sources, events, visits
 from agents_ide.engine import commands as command_engine
 from agents_ide.engine.queue import owned_job
-from agents_ide.engine.run_configuration import effective_snapshot
+from agents_ide.engine.run_configuration import effective_snapshot, harness_configuration_matches
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
     AgentSession,
@@ -76,6 +76,10 @@ if TYPE_CHECKING:
 
 INTERRUPT_SECONDS = 10.0
 KILL_SECONDS = 5.0
+
+
+class _GroupConfigurationChanged(Exception):
+    """Restart candidate selection at a boundary, never replay an active call."""
 
 
 def _build_http_llm() -> Any:
@@ -167,6 +171,9 @@ class Runner:
             )
             if reservation is None:
                 raise AppError("queue_job_lost", "Нет резервации рабочего каталога", 409)
+            # The API owns iteration budgets. Merge under the same write lock
+            # as transitions so a running agent cannot overwrite a user's edit.
+            self.runtime["loop_limits"] = json.loads(run.runtime_json).get("loop_limits", {})
             yield session, run
             if self.abort.is_set():
                 raise AppError("queue_job_lost", "Worker запретил фиксацию результата", 409)
@@ -197,6 +204,9 @@ class Runner:
     def _persist(self, run: Run) -> None:
         from agents_ide.services.run_selection import save_node_selection
 
+        # Telemetry checkpoints also use this method outside _write(). Preserve
+        # budgets edited while the provider was producing a progress event.
+        self.runtime["loop_limits"] = json.loads(run.runtime_json).get("loop_limits", {})
         save_node_selection(self.runtime, run, self.snapshot)
         now = utc_now()
         active = self.runtime.get("active_since")
@@ -304,6 +314,7 @@ class Runner:
         )
         self.runtime["waiting_reason"] = reason.model_dump(mode="json")
         self.runtime["waiting_code"] = code
+        self.runtime.pop("pending_agent_recovery", None)
         with self._write() as (session, run):
             # A response/error can arrive at the same time as a restart request.
             # Do not strand that accepted request by consuming the queue below.
@@ -503,6 +514,7 @@ class Runner:
                     )
                 )
                 if attempt.id not in self.runtime.get("retry_authorized_attempts", [])
+                and attempt.id not in self.runtime.get("agent_recovery_attempts", {})
             ]
             for attempt in attempts:
                 if attempt.status in {"prepared", "running"}:
@@ -556,9 +568,13 @@ class Runner:
             return None
         if attempt.id in self.runtime.get("retry_authorized_attempts", []):
             return None
+        if attempt.id in self.runtime.get("agent_recovery_attempts", {}):
+            return None
         if self.runtime.get("json_reprocessing", {}).get("attempt_id") == attempt.id:
             return None
         details = json.loads(attempt.error_details_json or "{}")
+        if attempt.external_outcome == "unavailable" and details.get("can_handoff"):
+            return None  # Terminal agent rejection; durable cursor continues existing work.
         if (
             attempt.external_outcome in {"retryable_failure", "unavailable"}
             and attempt.retry_safety == "safe"
@@ -724,6 +740,7 @@ class Runner:
                             retry_at=None,
                             server_retries=0,
                             logical_evidence_hash=None,
+                            agent_handoff=None,
                         )
                         run.current_node_id, run.current_execution_id, run.current_attempt_id = (
                             node["id"],
@@ -1658,6 +1675,12 @@ class Runner:
             if (
                 candidate.get("resource_version")
                 and resource.version != candidate["resource_version"]
+                and not (
+                    isinstance(resource, HarnessProfile)
+                    and harness_configuration_matches(
+                        resource, self.snapshot["dependencies"]["harness_profiles"].get(ref, {})
+                    )
+                )
             ):
                 return "resource_changed"
             if isinstance(resource, ProviderConnection) and resource.secret_reference:
@@ -2360,6 +2383,95 @@ class Runner:
     def _external(
         self, node: dict[str, Any], visit: visits.VisitState, adapter: AgentAdapter | LLMAdapter
     ) -> AgentResult | LLMResult | RunnerResult:
+        while True:
+            self._refresh_group(node)
+            config = self._node_config(node["id"])
+            if reason := config.get("group_unavailable_reason"):
+                return self._waiting(
+                    "model_unavailable", {"node_id": node["id"], "reason": reason}, visit
+                )
+            if reason := self.runtime.get("agent_continuation", {}).get("unavailable_reason"):
+                return self._waiting("session_resume_unavailable", {"reason": reason}, visit)
+            try:
+                return self._external_selected(node, visit, adapter)
+            except _GroupConfigurationChanged:
+                continue
+
+    def _refresh_group(self, node: dict[str, Any]) -> bool:
+        from agents_ide.services.live_groups import (
+            candidate_identity,
+            refresh_groups,
+            save_group_dependencies,
+        )
+
+        old = self.snapshot["dependencies"]
+        config = old["nodes"][node["id"]]
+        if not config.get("model_group_id"):
+            return False
+        with self._write() as (session, run):
+            fresh = refresh_groups(session, self.snapshot, node["id"])
+            if fresh == old:
+                return False
+            candidates = fresh["nodes"][node["id"]].get("candidates", [])
+            old_candidates = config.get("candidates", [])
+            index = self.runtime.get("candidate_index")
+            previous: dict[str, Any] = next(
+                (c for c in old_candidates if c["member_index"] == index), {}
+            )
+            continuation = self.runtime.get("agent_continuation")
+            if continuation:
+                selection = continuation.setdefault("selection", previous)
+                match = next(
+                    (
+                        c
+                        for c in candidates
+                        if candidate_identity(c) == candidate_identity(selection)
+                    ),
+                    None,
+                )
+                if match is None or not match.get("enabled", True):
+                    continuation["unavailable_reason"] = "group_member_removed_or_disabled"
+                else:
+                    continuation.pop("unavailable_reason", None)
+                    continuation["member_index"] = match["member_index"]
+                    self.runtime["next_candidate_index"] = match["member_index"]
+                    self.runtime["candidate_index"] = match["member_index"]
+            else:
+
+                def lineup(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                    return [
+                        {k: v for k, v in c.items() if k not in {"resource_version", "revision"}}
+                        for c in items
+                    ]
+
+                if lineup(candidates) != lineup(old_candidates):
+                    match = next(
+                        (
+                            c
+                            for c in candidates
+                            if candidate_identity(c) == candidate_identity(previous)
+                        ),
+                        None,
+                    )
+                    advanced = (
+                        isinstance(index, int)
+                        and self.runtime.get("next_candidate_index", 0) > index
+                    )
+                    self.runtime["next_candidate_index"] = (
+                        match["member_index"] + 1 if advanced and match else 0
+                    )
+                    self.runtime["candidate_index"] = None
+                    self.runtime["candidate_retries"] = 0
+                    self.runtime["retry_at"] = None
+                    self.runtime["selection_round"] = self.runtime.get("selection_round", 0) + 1
+            self.snapshot["dependencies"] = fresh
+            save_group_dependencies(self.runtime, fresh)
+            self._persist(run)
+        return True
+
+    def _external_selected(
+        self, node: dict[str, Any], visit: visits.VisitState, adapter: AgentAdapter | LLMAdapter
+    ) -> AgentResult | LLMResult | RunnerResult:
         config = self._node_config(node["id"])
         mode = self.runtime["work"]["mode"]
         template = config.get(
@@ -2371,6 +2483,7 @@ class Runner:
         ) or config.get("prompt", "")
         with self.session_factory() as session:
             prompt = substitute(template, self._context(session), strict=True)
+        task_prompt = prompt
         continuation = self.runtime.get("agent_continuation", {})
         if continuation.get("execution_id") != visit.execution_id:
             continuation = {}
@@ -2383,11 +2496,16 @@ class Runner:
             )
         previous: dict[str, Any] | None = None
         diagnostics: list[dict[str, Any]] = list(self.runtime.get("candidate_history", []))
+        saved_handoff = self.runtime.get("agent_handoff") or {}
+        if saved_handoff.get("execution_id") == visit.execution_id and diagnostics:
+            previous = diagnostics[-1]
         if self.runtime.get("retry_at") and (
             waiting := self._wait_retry(visit, self.runtime["retry_at"])
         ):
             return waiting
         for candidate in self._candidate_list(node):
+            if self._refresh_group(node):
+                raise _GroupConfigurationChanged
             if continuation and candidate["member_index"] != continuation["member_index"]:
                 continue
             if not continuation and candidate["member_index"] < self.runtime.get(
@@ -2432,6 +2550,8 @@ class Runner:
                 self._persist(run)
             retries = self.runtime.get("candidate_retries", 0)
             while True:
+                if self._refresh_group(node):
+                    raise _GroupConfigurationChanged
                 control = self._controls()
                 if control:
                     return control
@@ -2477,6 +2597,16 @@ class Runner:
                         self._persist(run)
                     break
                 with self._write() as (session, run):
+                    if group_id := config.get("model_group_id"):
+                        from agents_ide.persistence.models import ModelGroup
+
+                        group = session.get(ModelGroup, group_id)
+                        if (
+                            group is None
+                            or group.archived_at is not None
+                            or group.revision != metadata["group_revision"]
+                        ):
+                            raise _GroupConfigurationChanged
                     attempt = visits.create_attempt(session, visit)
                     attempt_id = attempt.id
                     attempt.operation_id = new_id()
@@ -2496,12 +2626,27 @@ class Runner:
                         "evidence": evidence_package,
                         "plan": self.snapshot.get("plan"),
                     }
+                    handoff = self.runtime.get("agent_handoff") or {}
+                    if handoff.get("execution_id") != visit.execution_id:
+                        handoff = {}
+                    attempt_prompt = prompt
+                    if handoff:
+                        context_package["agent_handoff"] = handoff
+                        attempt_prompt = (
+                            "Continue this task from the previous agent's stopping point. "
+                            "Its process has stopped, but its workspace changes remain. "
+                            "Inspect the current files and the handoff context before acting. "
+                            "Preserve completed work; verify effects before repeating any tool "
+                            "action. Complete only the remaining work and follow the original "
+                            "output requirements.\n\nOriginal task:\n"
+                            + (handoff.get("original_prompt") or task_prompt)
+                        )
                     artifact = self._artifact(
                         session,
                         visit,
                         "attempt_input",
                         {
-                            "prompt": prompt,
+                            "prompt": attempt_prompt,
                             "inputs": self.snapshot["input"],
                             "context": context_package,
                             "candidate": metadata,
@@ -2676,7 +2821,7 @@ class Runner:
                 common = {
                     "role": str(config.get("role", "")),
                     "model_id": str(candidate["model_id"]),
-                    "prompt": prompt,
+                    "prompt": attempt_prompt,
                     "context_package": context_package,
                     "params": candidate.get("params", {}),
                     "attempt_index": visit.attempt_index,
@@ -2686,6 +2831,7 @@ class Runner:
                     "check_owned": self._check_owned,
                     "deadline_at": None,
                 }
+                transferred: dict[str, Any] = {}
                 if node["type"] == "AgentTask":
 
                     def receive_message(_attempt_id: str = attempt_id) -> dict[str, Any] | None:
@@ -2707,10 +2853,15 @@ class Runner:
                     )
                     key = self._agent_session_key(candidate, str(config.get("role", "")))
                     native = self.runtime.get("native_sessions", {}).get(key, {})
+                    transferred = handoff.get("native_session", {})
+                    if transferred.get("harness_profile_id") != candidate.get("harness_profile_id"):
+                        transferred = {}
                     request = replace(
                         request,
                         resume_session_id=continuation.get("session_id")
                         if continuation
+                        else transferred.get("session_id")
+                        if handoff
                         else native.get("session_id"),
                         resume_required=bool(continuation),
                     )
@@ -2735,6 +2886,8 @@ class Runner:
                     _adapter: AgentAdapter | LLMAdapter = bound_adapter,
                     _request: AgentAdapterRequest | LLMAdapterRequest = request,
                     _candidate: dict[str, Any] = candidate,
+                    _continuation: dict[str, Any] = continuation,
+                    _transferred: dict[str, Any] = transferred,
                 ) -> AgentResult | LLMResult:
                     if (
                         type(_adapter) is AgentAdapter
@@ -2746,8 +2899,10 @@ class Runner:
                             key = self._agent_session_key(_candidate, _request.role)
                             native = self.runtime.get("native_sessions", {}).get(key, {})
                             expected_version = (
-                                continuation.get("server_version")
+                                _continuation.get("server_version")
                                 if _request.resume_required
+                                else _transferred.get("server_version")
+                                if _transferred
                                 else native.get("server_version")
                             )
                             if expected_version != getattr(_adapter, "server_version", None):
@@ -2792,6 +2947,15 @@ class Runner:
                     stop_event=cast(threading.Event, request.stop_event),
                     allow_pause=node["type"] == "AgentTask",
                 )
+                can_handoff = (
+                    isinstance(result, AgentResult)
+                    and result.outcome == ExternalOutcome.UNAVAILABLE
+                    and result.can_handoff
+                )
+                if can_handoff:
+                    # Confirm the previous process tree is stopped before making
+                    # a durable handoff eligible for dispatch or crash recovery.
+                    self._close_harness_live()
                 if self.simulated:
                     from agents_ide.engine.workspace_checkpoint import fingerprint
 
@@ -2804,7 +2968,7 @@ class Runner:
                     return control
                 if result.outcome == ExternalOutcome.SUCCEEDED and validation_error is None:
                     return result
-                if continuation and result.no_effect:
+                if continuation and result.no_effect and not can_handoff:
                     return self._waiting(
                         "session_resume_unavailable",
                         {"reason": result.error.code if result.error else "unavailable"},
@@ -2838,8 +3002,11 @@ class Runner:
                             return wait
                         continue
                     reason = "retries_exhausted"
-                elif result.outcome == ExternalOutcome.UNAVAILABLE and safe:
+                elif result.outcome == ExternalOutcome.UNAVAILABLE and (safe or can_handoff):
                     reason = result.error.code if result.error else "unavailable"
+                    if can_handoff:
+                        continuation = {}
+                        prompt = task_prompt
                 elif result.outcome == ExternalOutcome.CONFIRMED_FAILURE and safe:
                     if result.error and result.error.code != "configuration_invalid":
                         with self._write() as (session, run):
@@ -2887,7 +3054,8 @@ class Runner:
                 previous = {**metadata, "reason": reason}
                 diagnostics.append(previous)
                 with self._write() as (session, run):
-                    self.runtime["candidate_history"].append(previous)
+                    if not can_handoff:
+                        self.runtime["candidate_history"].append(previous)
                     self.runtime["next_candidate_index"] = candidate["member_index"] + 1
                     self._persist(run)
                 break
@@ -3162,6 +3330,11 @@ class Runner:
                 self.runtime.pop("active_call_owner", None)
             attempt = session.get(StepAttempt, attempt_id)
             assert attempt is not None
+            can_handoff = (
+                isinstance(result, AgentResult)
+                and result.outcome == ExternalOutcome.UNAVAILABLE
+                and result.can_handoff
+            )
             unknown = result.outcome in {
                 ExternalOutcome.UNKNOWN,
                 ExternalOutcome.TRANSPORT_DROPPED,
@@ -3169,6 +3342,7 @@ class Runner:
             } or (
                 result.outcome != ExternalOutcome.SUCCEEDED
                 and not result.no_effect
+                and not can_handoff
                 and result.outcome
                 not in {ExternalOutcome.PERMISSION_DENIED, ExternalOutcome.INVALID_FORMAT}
             )
@@ -3207,6 +3381,57 @@ class Runner:
                         "server_version": native.get("server_version"),
                     }
             selection = json.loads(attempt.selection_json)
+            if can_handoff:
+                assert isinstance(result, AgentResult)
+                prior_handoff = self.runtime.get("agent_handoff") or self.runtime.get(
+                    "agent_continuation", {}
+                ).get("handoff_context", {})
+                if prior_handoff.get("execution_id") != visit.execution_id:
+                    prior_handoff = {}
+                self.runtime.pop("agent_continuation", None)
+                self.runtime["next_candidate_index"] = selection["member_index"] + 1
+                self.runtime["agent_handoff"] = {
+                    "execution_id": visit.execution_id,
+                    "attempt_id": attempt_id,
+                    "model_id": selection.get("model_id"),
+                    "reason": result.error.code if result.error else "provider_unavailable",
+                    "last_output": result.raw_text[-8000:] or prior_handoff.get("last_output", ""),
+                    "tool_calls": (
+                        prior_handoff.get("tool_calls", []) + list(result.tool_calls[-20:])
+                    )[-20:],
+                    "workspace_changes_preserved": True,
+                }
+                if prior_handoff.get("original_prompt"):
+                    self.runtime["agent_handoff"]["original_prompt"] = prior_handoff[
+                        "original_prompt"
+                    ]
+                current = self.runtime.get("current_agent_session", {})
+                native = self.runtime.get("native_sessions", {}).get(current.get("session_key"), {})
+                agent_session = session.scalar(
+                    select(AgentSession).where(
+                        AgentSession.attempt_id == attempt_id,
+                    )
+                )
+                if (
+                    agent_session is not None
+                    and agent_session.harness_kind == "opencode"
+                    and native.get("session_id")
+                    and agent_session.external_session_id == native["session_id"]
+                ):
+                    self.runtime["agent_handoff"]["native_session"] = {
+                        **current,
+                        **native,
+                        "harness_profile_id": selection.get("harness_profile_id"),
+                    }
+                self.runtime["candidate_history"].append(
+                    {
+                        **selection,
+                        "reason": self.runtime["agent_handoff"]["reason"],
+                    }
+                )
+                self.runtime["logical_evidence_hash"] = artifacts.compute_hash(
+                    artifacts.encode(self._evidence_package(session))
+                )
             if (
                 result.no_effect
                 and result.error
@@ -3243,6 +3468,7 @@ class Runner:
                             "message": result.error.message,
                             "details": result.error.details,
                             "no_effect": result.no_effect,
+                            "can_handoff": can_handoff,
                         }
                     )
                 )
@@ -3446,24 +3672,22 @@ class Runner:
             edge = edges[0]
             target = edge.get("to") or edge.get("target") or edge.get("to_node")
             loop = edge.get("loop")
-            loop_key = (
-                loop["id"] + ":" + self.runtime["work"]["scope"]
-                if loop and loop.get("scope") == "item"
-                else loop["id"]
-                if loop
-                else ""
-            )
+            from agents_ide.engine.loops import loop_key as get_loop_key
+            from agents_ide.engine.loops import loop_limit
+
+            loop_key = get_loop_key(loop, self.runtime) if loop else ""
             if loop:
                 count = self.runtime["loop_counts"].get(loop_key, 0)
                 limit = (
                     "max_backward_transitions"
-                    if self.runtime["backward_transitions"]
+                    if self.enforce_limits
+                    and self.runtime["backward_transitions"]
                     >= self._limits()["max_backward_transitions"]
                     else f"loop:{loop['id']}"
-                    if count >= loop["max_iterations"]
+                    if count >= loop_limit(loop, self.runtime)
                     else None
                 )
-                if limit and self.enforce_limits:
+                if limit:
                     reason = WaitingReason(
                         code="limit_exceeded",
                         details={"limit": limit, "node_id": node["id"]},

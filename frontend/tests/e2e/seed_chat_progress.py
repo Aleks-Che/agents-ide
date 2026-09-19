@@ -4,22 +4,34 @@ import json
 import sys
 from pathlib import Path
 
-from agents_ide.config import Settings
-from agents_ide.domain.common import to_json, utc_now
-from agents_ide.engine.events import append_event
-from agents_ide.persistence.database import create_database
-from agents_ide.persistence.models import Run, StepAttempt, StepExecution
-from agents_ide.services.run_messages import claim_message, finish_message
-from agents_ide.services.transactions import begin_write
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from agents_ide.config import Settings
+from agents_ide.domain.common import new_id, to_json, utc_now
+from agents_ide.engine.events import append_event
+from agents_ide.persistence.database import create_database
+from agents_ide.persistence.models import AgentSession, Run, StepAttempt, StepExecution
+from agents_ide.services.run_messages import claim_message, finish_message
+from agents_ide.services.transactions import begin_write
 
 data_dir, run_id, mode = sys.argv[1:]
 engine = create_database(Settings(data_dir=Path(data_dir)))
 with Session(engine) as session:
     begin_write(session)
     run = session.get(Run, run_id)
-    if mode == "deliver":
+    if mode in {"historical-failed", "historical-waiting"}:
+        run.state = "failed" if mode == "historical-failed" else "waiting_input"
+        run.state_version += 1
+        run.waiting_reason_json = to_json(
+            {"code": "configuration_invalid", "allowed_actions": ["resolve", "resume", "cancel"]}
+        )
+    elif mode == "loop-counts":
+        runtime = json.loads(run.runtime_json)
+        runtime["loop_counts"] = {"repair": 2}
+        run.runtime_json = to_json(runtime)
+        run.state_version += 1
+    elif mode == "deliver":
         message = claim_message(session, run, run.current_attempt_id)
         assert message
         if message.get("question_id") or message.get("permission_id"):
@@ -115,7 +127,27 @@ with Session(engine) as session:
             execution_id=run.current_execution_id,
             attempt_id=run.current_attempt_id,
         )
-    elif mode == "waiting":
+    elif mode == "resume-unavailable":
+        # Resume failed during availability checks, before a new attempt. Keep
+        # the prior attempt and recovery audit, as in the production regression.
+        run.state = "waiting_input"
+        run.state_version += 1
+        run.waiting_reason_json = to_json(
+            {
+                "code": "session_resume_unavailable",
+                "details": {"reason": "resource_changed"},
+                "allowed_actions": ["resolve", "resume", "pause", "stop", "cancel"],
+            }
+        )
+        run.resume_target_json = to_json(
+            {
+                "action": "retry_attempt",
+                "node_id": run.current_node_id,
+                "execution_id": run.current_execution_id,
+                "blockers": ["session_resume_unavailable"],
+            }
+        )
+    elif mode in {"waiting", "waiting-recovery"}:
         run.state = "waiting_input"
         run.state_version += 1
         session.get(StepAttempt, run.current_attempt_id).status = "unknown"
@@ -126,6 +158,40 @@ with Session(engine) as session:
                 "allowed_actions": ["resolve", "stop", "cancel"],
             }
         )
+        if mode == "waiting-recovery":
+            attempt = session.get(StepAttempt, run.current_attempt_id)
+            attempt.finished_at = utc_now()
+            candidate = json.loads(run.snapshot_json)["dependencies"]["nodes"][run.current_node_id][
+                "candidates"
+            ][0]
+            attempt.selection_json = to_json({**candidate, "member_id": candidate["id"]})
+            runtime = json.loads(run.runtime_json)
+            runtime.update(
+                candidate_index=0,
+                current_agent_session={
+                    "execution_id": run.current_execution_id,
+                    "session_key": "saved",
+                    "member_index": 0,
+                },
+                native_sessions={
+                    "saved": {
+                        "session_id": "saved-session",
+                        "server_version": "fixture",
+                    }
+                },
+            )
+            run.runtime_json = to_json(runtime)
+            session.add(
+                AgentSession(
+                    id=new_id(),
+                    attempt_id=attempt.id,
+                    harness_kind="codex",
+                    role="reviewer",
+                    external_session_id="saved-session",
+                    started_at=utc_now(),
+                    finished_at=utc_now(),
+                )
+            )
     elif mode in {"stopped", "paused"}:
         run.state = mode
         run.state_version += 1
@@ -137,9 +203,7 @@ with Session(engine) as session:
     else:
         node_id = "first" if mode == "first" else "second"
         for attempt in session.scalars(
-            select(StepAttempt)
-            .join(StepExecution)
-            .where(StepExecution.run_id == run_id)
+            select(StepAttempt).join(StepExecution).where(StepExecution.run_id == run_id)
         ):
             attempt.status = "succeeded"
         for execution in session.scalars(
@@ -191,11 +255,7 @@ with Session(engine) as session:
             session,
             run_id,
             "attempt.text_delta",
-            {
-                "text": "Checking the first files"
-                if node_id == "first"
-                else "Reviewing the result"
-            },
+            {"text": "Checking the first files" if node_id == "first" else "Reviewing the result"},
             node_id=node_id,
             execution_id=execution_id,
             attempt_id=attempt_id,

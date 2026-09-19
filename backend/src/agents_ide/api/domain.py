@@ -130,6 +130,7 @@ from agents_ide.services import (
     templates,
 )
 from agents_ide.services.run_observation import HistoryCategory, HistoryPage, read_history
+from agents_ide.services.sidebar_activity import SidebarActivity, sidebar_activity
 
 router = APIRouter(prefix="/api", tags=["domain"])
 
@@ -137,6 +138,11 @@ router = APIRouter(prefix="/api", tags=["domain"])
 SessionDep = Annotated[Session, Depends(get_session, scope="function")]
 SecretDep = Annotated[SecretStore, Depends(get_secret_store)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+@router.get("/sidebar/activity", response_model=SidebarActivity)
+def sidebar_activity_endpoint(session: SessionDep) -> SidebarActivity:
+    return sidebar_activity(session)
 
 
 @router.get("/settings/general", response_model=GeneralSettings)

@@ -32,6 +32,8 @@ class Handler(BaseHTTPRequestHandler):
     close_stream = False
     pending_permission = False
     requests = []
+    startup_stall_path = None
+    startup_probes = 0
     catalog = [
         {
             "id": "anthropic",
@@ -86,6 +88,13 @@ class Handler(BaseHTTPRequestHandler):
         self.path = parsed.path
         if not self.authorized():
             return
+        if self.path == self.startup_stall_path:
+            with self.lock:
+                type(self).startup_probes += 1
+                stall = self.startup_probes <= 2
+            self.trace("startup_probe", {"stall": stall})
+            if stall:
+                time.sleep(1)
         if self.path == "/event":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -182,9 +191,69 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(401, {"name": "ProviderAuthError"})
             return
         prompt = body["parts"][0]["text"]
+        quota_error = model["modelID"] in {"quota-exhausted", "quota-empty"} or (
+            model["modelID"] == "recoverable-quota" and not self.sessions[sid].get("prompts")
+        )
+        connection_error = model["modelID"] in {"connection-failed", "connection-empty"}
+        provider_error = quota_error or connection_error
+        empty_error = model["modelID"] in {"quota-empty", "connection-empty"}
+        if provider_error and not empty_error:
+            (Path(self.directory) / "partial-work.txt").write_text(
+                "preserve this work", encoding="utf-8"
+            )
+            self.publish(
+                {
+                    "type": "message.part.updated",
+                    "properties": {
+                        "sessionID": sid,
+                        "part": {
+                            "id": "part_write",
+                            "messageID": "msg_write",
+                            "callID": "call_write",
+                            "type": "tool",
+                            "tool": "write",
+                            "sessionID": sid,
+                            "state": {
+                                "status": "completed",
+                                "input": {"filePath": "partial-work.txt"},
+                            },
+                        },
+                    },
+                }
+            )
         self.sessions[sid].setdefault("prompts", []).append(prompt)
         if self.persistence_path:
             Path(self.persistence_path).write_text(json.dumps(self.sessions), encoding="utf-8")
+        if prompt == "tool output burst slow":
+            for call in ("first", "second"):
+                for index in range(1202):
+                    status = (
+                        "pending" if index == 0 else "completed" if index == 1201 else "running"
+                    )
+                    self.publish(
+                        {
+                            "type": "message.part.updated",
+                            "properties": {
+                                "sessionID": sid,
+                                "part": {
+                                    "id": f"part_{call}",
+                                    "callID": f"call_{call}",
+                                    "messageID": "msg_tools",
+                                    "type": "tool",
+                                    "tool": "bash",
+                                    "sessionID": sid,
+                                    "state": {
+                                        "status": status,
+                                        "input": {"command": "list files"},
+                                        "output": "complete output"
+                                        if status == "completed"
+                                        else "",
+                                        "metadata": {"output": f"file {index}\n" * 100},
+                                    },
+                                },
+                            },
+                        }
+                    )
         if prompt == "large tool stream":
             # Read output is duplicated in metadata by the real OpenCode server.
             output = "file content " * 4000
@@ -236,7 +305,7 @@ class Handler(BaseHTTPRequestHandler):
                 "properties": {"sessionID": "ses_foreign", "field": "text", "delta": "FOREIGN"},
             }
         )
-        if not self.auth_only_error:
+        if not self.auth_only_error and not empty_error:
             self.publish(
                 {
                     "type": "message.part.delta",
@@ -271,18 +340,38 @@ class Handler(BaseHTTPRequestHandler):
         }
         if self.response_error or sid in self.aborts:
             info["error"] = self.response_error or {"name": "MessageAbortedError"}
-        if self.auth_only_error:
+        if self.auth_only_error or provider_error:
             info["tokens"] = {
                 "input": 0,
                 "output": 0,
                 "reasoning": 0,
                 "cache": {"read": 0, "write": 0},
             }
+        if quota_error:
+            info["error"] = {
+                "name": "APIError",
+                "data": {
+                    "statusCode": 429,
+                    "isRetryable": True,
+                    "message": "The Token Plan usage limit has been reached. (2067)",
+                },
+            }
+        elif connection_error:
+            info["error"] = {
+                "name": "APIError",
+                "data": {
+                    "isRetryable": True,
+                    "message": "Cannot connect to API: Unable to connect. "
+                    "Is the computer able to access the url?",
+                },
+            }
         self._send_json(
             self.response_status,
             {
                 "info": info,
-                "parts": [] if self.auth_only_error else [{"type": "text", "text": text}],
+                "parts": []
+                if self.auth_only_error or provider_error
+                else [{"type": "text", "text": text}],
             },
         )
 
@@ -298,6 +387,7 @@ def main():
         "OPENCODE_SERVER_PASSWORD", os.environ.get("FAKE_OPENCODE_PASSWORD", "")
     )
     Handler.trace_path = os.environ.get("FIXTURE_TRACE")
+    Handler.startup_stall_path = os.environ.get("FIXTURE_STARTUP_STALL_PATH")
     Handler.persistence_path = os.environ.get("FIXTURE_SESSIONS")
     if Handler.persistence_path and Path(Handler.persistence_path).exists():
         Handler.sessions = json.loads(Path(Handler.persistence_path).read_text())

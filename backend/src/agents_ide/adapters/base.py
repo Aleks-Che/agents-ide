@@ -54,6 +54,9 @@ class AgentResult:
     tokens_used: int | None = None
     cost_estimated: float | None = None
     budget_quality: str | None = None
+    # A terminal provider rejection allows another agent to continue existing
+    # work. This does not mean the entire attempt had no effects or can be replayed.
+    can_handoff: bool = False
 
     @property
     def succeeded(self) -> bool:

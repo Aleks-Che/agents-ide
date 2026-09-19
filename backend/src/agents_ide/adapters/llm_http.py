@@ -27,6 +27,7 @@ from agents_ide.adapters.base import (
     LLMAdapterRequest,
     LLMResult,
 )
+from agents_ide.adapters.provider_limits import limit_error_code
 from agents_ide.engine.artifacts import encode
 from agents_ide.errors import AppError
 from agents_ide.security.provider_url import chat_completions_url, models_url
@@ -117,25 +118,30 @@ def _classify_http_error(
 ) -> tuple[ExternalOutcome, AdapterError, bool]:
     message = _provider_message(payload, f"HTTP {response.status_code}")
     lowered = message.lower()
+    limit_code = limit_error_code(
+        payload.get("error", {}) if isinstance(payload, dict) else {}, response.status_code
+    )
+    if limit_code:
+        details: dict[str, Any] = {"status": response.status_code}
+        retry_after = _retry_after(response)
+        if limit_code == "provider_rate_limited" and retry_after is not None:
+            details["retry_after_seconds"] = retry_after
+        return _error(
+            limit_code,
+            message,
+            outcome=ExternalOutcome.UNAVAILABLE
+            if limit_code == "provider_quota_exhausted"
+            else ExternalOutcome.RETRYABLE_FAILURE,
+            retry_safety="safe",
+            no_effect=True,
+            details=details,
+        )
     if response.status_code in {401, 403}:
         return _error(
             "provider_unauthorized",
             message,
             outcome=ExternalOutcome.PERMISSION_DENIED,
             retry_safety="unsafe",
-        )
-    if response.status_code == 429:
-        details: dict[str, Any] = {"status": response.status_code}
-        retry_after = _retry_after(response)
-        if retry_after is not None:
-            details["retry_after_seconds"] = retry_after
-        return _error(
-            "provider_rate_limited" if response.status_code == 429 else "provider_retryable",
-            message,
-            outcome=ExternalOutcome.RETRYABLE_FAILURE,
-            retry_safety="safe",
-            no_effect=True,
-            details=details,
         )
     if response.status_code >= 500 or response.status_code in {408, 409, 425}:
         return _error(
@@ -260,6 +266,12 @@ def _usage(payload: dict[str, Any]) -> int | None:
     return None
 
 
+class _ProviderLimitError(ValueError):
+    def __init__(self, error: dict[str, Any]):
+        self.error = error
+        super().__init__("provider_limit")
+
+
 def _parse_stream(text: str) -> tuple[str, int | None]:
     chunks: list[str] = []
     tokens: int | None = None
@@ -280,6 +292,8 @@ def _parse_stream(text: str) -> tuple[str, int | None]:
         if not isinstance(payload, dict):
             raise ValueError("invalid_stream_payload")
         if payload.get("error"):
+            if limit_error_code(payload["error"]):
+                raise _ProviderLimitError(payload["error"])
             raise ValueError("stream_error")
         delta = None
         choices = payload.get("choices")
@@ -444,6 +458,8 @@ class HttpLLMAdapter(LLMAdapter):
         if body.get("stream") is True:
             try:
                 content, tokens = _parse_stream(text)
+            except _ProviderLimitError as exc:
+                return failure(*_classify_http_error(response, {"error": exc.error}))
             except ValueError as exc:
                 return failure(
                     *_error(
@@ -465,6 +481,9 @@ class HttpLLMAdapter(LLMAdapter):
                     )
                 )
             if isinstance(payload.get("error"), (dict, str)):
+                if limit_error_code(payload["error"]):
+                    # A structured rejection can be wrapped in HTTP 200.
+                    return failure(*_classify_http_error(response, payload))
                 return failure(
                     *_error(
                         "provider_result_unknown",
@@ -480,6 +499,8 @@ class HttpLLMAdapter(LLMAdapter):
                 if isinstance(first, dict) and (
                     first.get("error") or first.get("finish_reason") == "error"
                 ):
+                    if limit_error_code(first.get("error")):
+                        return failure(*_classify_http_error(response, first))
                     return failure(
                         *_error(
                             "provider_result_unknown",

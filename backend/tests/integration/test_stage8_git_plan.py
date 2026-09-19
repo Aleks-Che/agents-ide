@@ -331,6 +331,60 @@ def test_deleted_path_recovery_uses_the_same_manifest(repository):
     assert recovered.sha == result.sha
 
 
+@pytest.mark.parametrize("isolated", [False, True])
+def test_new_ignored_setup_files_do_not_block_commit(repository, isolated):
+    (repository / ".gitignore").write_text(".env\n")
+    command(repository, "add", ".gitignore")
+    command(repository, "commit", "-qm", "ignore local environment")
+    if isolated:
+        workspace = repository.parent / "isolated"
+        command(repository, "worktree", "add", "-b", "isolated", str(workspace))
+    else:
+        workspace = repository
+    value = baseline(workspace, allowlist=("**",))
+    (workspace / ".env").write_text("LOCAL_SETTING=test\n")
+    cache = workspace / ".pytest_cache"
+    cache.mkdir()
+    (cache / ".gitignore").write_text("*\n")
+    (cache / "README.md").write_text("test cache\n")
+    (workspace / "src/a.txt").write_text("agent change\n")
+    # Both single ignored files and self-ignoring caches reproduce the failures.
+    manifest = git.file_manifest(workspace)
+    assert manifest[".env"]["ignored"]
+    assert manifest[".pytest_cache/README.md"]["ignored"]
+    operation = intent(value, allowlist=("**",))
+    result = git.execute(workspace, value, operation)
+    assert result.sha
+    assert git.execute(workspace, value, operation, recover_only=True).sha == result.sha
+    tracked = command(workspace, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+    assert ".env" not in tracked
+    assert not any(path.startswith(".pytest_cache/") for path in tracked)
+    assert (workspace / ".env").read_text() == "LOCAL_SETTING=test\n"
+    assert (cache / "README.md").read_text() == "test cache\n"
+    assert command(workspace, "status", "--porcelain") == ""
+    if isolated:
+        assert command(repository, "rev-parse", "HEAD") == value.head_sha
+        assert (repository / "src/a.txt").read_text() == "base\n"
+
+
+@pytest.mark.parametrize("change", ["modify", "delete"])
+def test_preexisting_ignored_files_remain_protected(repository, change):
+    (repository / ".gitignore").write_text(".env\n")
+    command(repository, "add", ".gitignore")
+    command(repository, "commit", "-qm", "ignore local environment")
+    private = repository / ".env"
+    private.write_text("user setting\n")
+    value = baseline(repository, allowlist=("**",))
+    (repository / "src/a.txt").write_text("agent change\n")
+    if change == "modify":
+        private.write_text("changed setting\n")
+    else:
+        private.unlink()
+    with pytest.raises(git.GitCommitError, match="outside the allowlist"):
+        git.execute(repository, value, intent(value, allowlist=("**",)))
+    assert command(repository, "rev-parse", "HEAD") == value.head_sha
+
+
 def test_ignored_dependency_tree_does_not_exhaust_manifest_or_freshness_budget(
     repository, monkeypatch
 ):

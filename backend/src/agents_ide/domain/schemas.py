@@ -901,7 +901,7 @@ class Run(ApiOutput):
 class RunCommand(ApiModel):
     command_id: ShortStr
     command_type: Literal[
-        "pause", "stop", "cancel", "resume", "resolve", "message", "restart_stage"
+        "pause", "stop", "cancel", "resume", "resolve", "message", "restart_stage", "adjust_loop"
     ]
     expected_state_version: int = Field(ge=0)
     payload: dict[str, Any] = Field(default_factory=dict)

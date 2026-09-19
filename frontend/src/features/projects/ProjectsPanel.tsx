@@ -16,12 +16,15 @@ import {
 } from '../../api/workspace'
 import { basename, formatDateTime, shortHash } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
+import type { SidebarActivity } from '../../api/activity'
+import { ActivityIndicators } from '../../app/ActivityIndicators'
 
 interface ProjectMenuTarget extends ContextMenuTarget {
   project: Project
 }
 
 interface ProjectsPanelProps {
+  activity: SidebarActivity['projects']
   selectedId: string | null
   onSelect: (project: Project) => void
   onRenamed: (project: Project) => void
@@ -29,6 +32,7 @@ interface ProjectsPanelProps {
 }
 
 export function ProjectsPanel({
+  activity,
   selectedId,
   onSelect,
   onRenamed,
@@ -80,6 +84,7 @@ export function ProjectsPanel({
         </button>
       </header>
       <ProjectsList
+        activity={activity}
         projects={projects.data ?? []}
         loading={projects.isLoading}
         error={projects.error ? describeError(projects.error) : null}
@@ -158,6 +163,7 @@ export function ProjectsPanel({
 }
 
 interface ProjectsListProps {
+  activity: SidebarActivity['projects']
   projects: Project[]
   loading: boolean
   error: string | null
@@ -168,6 +174,7 @@ interface ProjectsListProps {
 }
 
 function ProjectsList({
+  activity,
   projects,
   loading,
   error,
@@ -216,7 +223,13 @@ function ProjectsList({
                 onContextMenu({ ...target, project }),
               )}
             >
-              <strong>{project.name}</strong>
+              <span className="panel-item-title">
+                <strong>{project.name}</strong>
+                <ActivityIndicators
+                  activity={activity?.[project.id]}
+                  scope="project"
+                />
+              </span>
               <span className="muted" title={project.workspace.normalized_path}>
                 {basename(project.workspace.normalized_path) ||
                   project.workspace.entered_path}

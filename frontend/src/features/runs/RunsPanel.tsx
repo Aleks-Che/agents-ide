@@ -13,10 +13,15 @@ import { formatDateTime, shortHash } from '../../app/format'
 import { Modal } from '../../app/Modal'
 import { LlmResponseSettings } from '../pipelines/LlmResponseSettings'
 import { object } from '../pipelines/graph'
-import { allowedCommands, resolutionPayload } from './controls'
+import {
+  allowedCommands,
+  pendingAgentRecovery,
+  resolutionPayload,
+} from './controls'
 import { GroupSummarySection } from './GroupSummarySection'
 import { RunTimeline } from './RunTimeline'
 import { RunWorkspace } from './RunWorkspace'
+import { LoopProgress } from './LoopProgress'
 import { ArtifactDetail } from './ArtifactDetail'
 import { duration, stateDescriptions, waitingDescriptions } from './observation'
 const RunGraph = lazy(() => import('./RunGraph'))
@@ -76,6 +81,7 @@ export function RunScreen({
       ['run_commands', runId],
       ['run_snapshot', runId],
       ['runs_summary'],
+      ['sidebar_activity'],
     ]) {
       void client.invalidateQueries({ queryKey })
     }
@@ -119,6 +125,7 @@ export function RunScreen({
   const actions = data
     ? allowedCommands(data, diagnostics.data?.resume_target)
     : []
+  const readyToContinue = pendingAgentRecovery(data)
   return (
     <Modal onClose={onClose} busy={command.isPending} labelledBy="run-title">
       <div className="dialog wide run-screen">
@@ -232,10 +239,14 @@ export function RunScreen({
             </section>
             {waiting ? (
               <section aria-label="Причина ожидания">
-                <h4>{waiting.code}</h4>
+                <h4>
+                  {readyToContinue ? 'Готов к продолжению' : waiting.code}
+                </h4>
                 <p>
-                  {waitingDescriptions[waiting.code] ??
-                    'Предоставьте недостающие данные, указанные в причине ожидания.'}
+                  {readyToContinue
+                    ? 'Решение сохранено. Нажмите «Продолжить» ниже.'
+                    : (waitingDescriptions[waiting.code] ??
+                      'Предоставьте недостающие данные, указанные в причине ожидания.')}
                 </p>
                 <pre>{JSON.stringify(waiting.details, null, 2)}</pre>
                 <p>Доступные действия: {waiting.allowed_actions.join(', ')}</p>
@@ -317,6 +328,13 @@ export function RunScreen({
                 onSelect={setNodeId}
               />
             </Suspense>
+            <LoopProgress
+              observation={observation}
+              disabled={!csrf || command.isPending || uncertain}
+              onAdjust={(key, delta) =>
+                send('adjust_loop', { loop_key: key, delta })
+              }
+            />
             <p>
               Последняя выбранная связь:{' '}
               {observation.last_transition
@@ -532,6 +550,13 @@ export function ResolutionForm({
     run.waiting_reason ??
     (run.runtime?.waiting_reason as RunRecord['waiting_reason'])
   const reason = waiting?.code ?? String(run.runtime?.waiting_code ?? '')
+  const recovery = object(waiting?.resolution_schema?.agent_recovery)
+  const recoveryActions = Array.isArray(recovery.actions)
+    ? recovery.actions
+    : []
+  const recoveringAgent = ['continue_session', 'next_candidate'].includes(
+    action,
+  )
   return (
     <form
       aria-label="Решение ожидания"
@@ -557,7 +582,7 @@ export function ResolutionForm({
         Сохранение решения не запускает выполнение. Затем используйте
         «Продолжить».
       </p>
-      {reason === 'unknown_external_result' ? (
+      {reason === 'unknown_external_result' || recoveryActions.length > 0 ? (
         <>
           <label htmlFor="resolution-action">Действие после сверки</label>
           <select
@@ -567,13 +592,36 @@ export function ResolutionForm({
             required
           >
             <option value="">Выберите действие</option>
-            <option value="accept_result">
-              Принять подтверждённый поздний результат
-            </option>
-            <option value="retry_authorized">
-              Разрешить повтор операции после проверки её последствий
-            </option>
+            {recoveryActions.includes('continue_session') ? (
+              <option value="continue_session">
+                Продолжить в той же сессии агента
+              </option>
+            ) : null}
+            {recoveryActions.includes('next_candidate') ? (
+              <option value="next_candidate">
+                Продолжить следующей моделью группы
+              </option>
+            ) : null}
+            {reason === 'unknown_external_result' ? (
+              <>
+                <option value="accept_result">
+                  Принять подтверждённый поздний результат
+                </option>
+                <option value="retry_authorized">
+                  Разрешить повтор операции после проверки её последствий
+                </option>
+              </>
+            ) : null}
           </select>
+          {recoveringAgent ? (
+            <p>
+              {action === 'continue_session'
+                ? 'Агент продолжит текущий этап в сохранённой сессии с историей сообщений и инструментов.'
+                : `Следующая модель: ${String(recovery.next_model ?? '')}. Она продолжит текущий этап. В том же OpenCode сохранится история сессии; другой исполнитель получит задание и последние действия.`}{' '}
+              Сделанные изменения в файлах сохраняются. Этап не запускается
+              заново.
+            </p>
+          ) : null}
         </>
       ) : null}
       {reason === 'invalid_response_format' ? (
@@ -607,7 +655,7 @@ export function ResolutionForm({
           />
           Разрешаю новую попытку после устранения причины
         </label>
-      ) : (
+      ) : recoveringAgent ? null : (
         <>
           <label htmlFor="resolution-text">
             {reason === 'limit_exceeded'

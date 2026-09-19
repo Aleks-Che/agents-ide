@@ -271,14 +271,23 @@ def test_real_llm_run_completes_via_worker(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="DPAPI secrets are Windows-only")
-@pytest.mark.parametrize("status", [404, 503])
+@pytest.mark.parametrize("status", [404, 503, 429])
 def test_llm_group_fallback_across_connections_isolates_credentials(
     fake_worker, authenticated, provider_server, tmp_path, status
 ):
     server, base_url = provider_server
     Handler.authorizations = []
     Handler.responses = {
-        "alpha": {"status": status, "body": {"error": {"message": "model not found"}}},
+        "alpha": {
+            "status": status,
+            "body": {
+                "error": {
+                    "message": "The Token Plan usage limit has been reached. (2067)"
+                    if status == 429
+                    else "model not found"
+                }
+            },
+        },
         "beta": {"status": 200, "content": json.dumps({"verdict": "passed"})},
     }
     client, headers = authenticated
@@ -359,6 +368,8 @@ def test_llm_group_fallback_across_connections_isolates_credentials(
     events = client.get(f"/api/runs/{run['id']}/events", headers=headers).json()
     switched = [e for e in events["events"] if e["type"] == "model_group.candidate_switched"]
     assert switched
+    if status == 429:
+        assert Handler.authorizations == ["Bearer sk-first", "Bearer sk-second"]
     assert any("sk-first" in (auth or "") for auth in Handler.authorizations)
     assert any("sk-second" in (auth or "") for auth in Handler.authorizations)
     assert any("sk-first" in (auth or "") for auth in Handler.authorizations) and any(

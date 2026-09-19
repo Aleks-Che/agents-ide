@@ -22,7 +22,7 @@ import {
   type ContextMenuTarget,
 } from '../../app/context_menu'
 import { useRunEventSource } from '../../app/useRunStream'
-import { allowedCommands } from './controls'
+import { allowedCommands, pendingAgentRecovery } from './controls'
 import {
   mergeEvents,
   stateDescriptions,
@@ -32,6 +32,7 @@ import { stageOutput } from './stage_output'
 import { ArtifactDetail } from './ArtifactDetail'
 import { RunWorkspace } from './RunWorkspace'
 import { ResolutionForm } from './RunsPanel'
+import { LoopProgress } from './LoopProgress'
 
 type Stage = NonNullable<RunObservation['nodes']>[number]
 const stageStates: Record<string, string> = {
@@ -103,6 +104,7 @@ export function ChatRunProgress({
     void client.invalidateQueries({ queryKey: ['run_snapshot', runId] })
     void client.invalidateQueries({ queryKey: ['runs_for_chat'] })
     void client.invalidateQueries({ queryKey: ['runs_summary'] })
+    void client.invalidateQueries({ queryKey: ['sidebar_activity'] })
   }
   const stream = useRunEventSource({
     runId,
@@ -117,6 +119,9 @@ export function ChatRunProgress({
           'run.state_changed',
           'run.waiting_input',
           'agent.input_requested',
+          'agent.input_closed',
+          'budget.updated',
+          'transition.selected',
         ].includes(event.type)
       )
         refresh()
@@ -179,6 +184,7 @@ export function ChatRunProgress({
   const events = mergeEvents(bootstrap.data?.events ?? [], live)
   const actions = run ? allowedCommands(run) : []
   const waiting = run?.waiting_reason
+  const readyToContinue = pendingAgentRecovery(run)
   const menuNode = nodes.find((node) => node.id === stageMenu?.nodeId)
   return (
     <section className="chat-run-progress" aria-label="Выполнение шаблона">
@@ -186,7 +192,11 @@ export function ChatRunProgress({
         <div>
           <h3>Выполнение шаблона</h3>
           <span role="status">
-            {run ? (stateDescriptions[run.state] ?? run.state) : 'Загружаем…'}
+            {readyToContinue
+              ? 'Готов к продолжению'
+              : run
+                ? (stateDescriptions[run.state] ?? run.state)
+                : 'Загружаем…'}
           </span>
         </div>
         <div className="actions">
@@ -307,19 +317,36 @@ export function ChatRunProgress({
             : 'Восстанавливаем поток сообщений…'}
         </p>
       ) : null}
+      <LoopProgress
+        observation={observation}
+        disabled={
+          !csrf ||
+          command.isPending ||
+          restart.isPending ||
+          restartUncertain ||
+          uncertain
+        }
+        onAdjust={(key, delta) => send('adjust_loop', { loop_key: key, delta })}
+      />
       {waiting ? (
         <div className="stage-waiting" role="status">
-          <strong>Этап {current}: требуется действие</strong>
+          <strong>
+            Этап {current}:{' '}
+            {readyToContinue ? 'готов к продолжению' : 'требуется действие'}
+          </strong>
           <p>
-            {waiting.details?.reason === 'process_not_responding'
-              ? waitingDescriptions.process_not_responding
-              : waiting.details?.reason === 'event_stream_lost'
-                ? 'Потеряна связь с агентом. Последние действия сохранены в журнале; выполнение остановлено.'
-                : waiting.details?.reason === 'runtime_expression_invalid'
-                  ? 'Не удалось подставить результат предыдущего этапа в промпт. Проверьте ссылку на поле отчёта.'
-                  : waiting.details?.reason === 'provider_tool_protocol_invalid'
-                    ? 'Модель повторяет служебные маркеры вместо вызовов инструментов. Генерация остановлена. Проверьте режим доступа harness и перезапустите задание.'
-                    : (waitingDescriptions[waiting.code] ?? waiting.code)}
+            {readyToContinue
+              ? 'Решение сохранено. Нажмите «Продолжить выполнение», чтобы продолжить текущий этап с выбранным контекстом.'
+              : waiting.details?.reason === 'process_not_responding'
+                ? waitingDescriptions.process_not_responding
+                : waiting.details?.reason === 'event_stream_lost'
+                  ? 'Потеряна связь с агентом. Последние действия сохранены в журнале; выполнение остановлено.'
+                  : waiting.details?.reason === 'runtime_expression_invalid'
+                    ? 'Не удалось подставить результат предыдущего этапа в промпт. Проверьте ссылку на поле отчёта.'
+                    : waiting.details?.reason ===
+                        'provider_tool_protocol_invalid'
+                      ? 'Модель повторяет служебные маркеры вместо вызовов инструментов. Генерация остановлена. Проверьте режим доступа harness и перезапустите задание.'
+                      : (waitingDescriptions[waiting.code] ?? waiting.code)}
           </p>
           {typeof waiting.details?.message === 'string' ? (
             <p>{waiting.details.message}</p>
@@ -328,12 +355,26 @@ export function ChatRunProgress({
             <summary>Причина остановки</summary>
             <pre>{JSON.stringify(waiting.details, null, 2)}</pre>
           </details>
+          {readyToContinue ? (
+            <button
+              type="button"
+              disabled={
+                !csrf ||
+                command.isPending ||
+                restart.isPending ||
+                restartUncertain ||
+                uncertain ||
+                !actions.includes('resume')
+              }
+              onClick={() => send('resume')}
+            >
+              Продолжить выполнение
+            </button>
+          ) : null}
           {actions.includes('resolve') &&
-          !['configuration_invalid', 'session_resume_unavailable'].includes(
-            waiting.code,
-          ) ? (
+          waiting.code !== 'configuration_invalid' ? (
             <button onClick={() => setResolution(!resolution)}>
-              Предоставить решение
+              {readyToContinue ? 'Изменить решение' : 'Предоставить решение'}
             </button>
           ) : null}
         </div>
@@ -391,7 +432,9 @@ export function ChatRunProgress({
               </span>
               <small>
                 {node.id === current && run?.state === 'waiting_input'
-                  ? 'Нужно решение'
+                  ? readyToContinue
+                    ? 'Готов к продолжению'
+                    : 'Нужно решение'
                   : (stageStates[node.status ?? 'pending'] ?? node.status)}
               </small>
             </button>
@@ -410,7 +453,9 @@ export function ChatRunProgress({
                 </strong>
                 <span>
                   {opened.id === current && run?.state === 'waiting_input'
-                    ? 'Нужно решение'
+                    ? readyToContinue
+                      ? 'Готов к продолжению'
+                      : 'Нужно решение'
                     : (stageStates[opened.status ?? 'pending'] ??
                       opened.status)}
                 </span>

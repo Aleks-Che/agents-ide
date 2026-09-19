@@ -392,6 +392,7 @@ function ReviewForm({
   const refresh = () => {
     void client.invalidateQueries({ queryKey: ['planning-job', job.id] })
     void client.invalidateQueries({ queryKey: ['planning-jobs'] })
+    void client.invalidateQueries({ queryKey: ['sidebar_activity'] })
   }
   const submit = useMutation({
     mutationFn: () =>

@@ -195,6 +195,37 @@ def test_llm_adapter_rate_limit_carries_retry_after(llm_server):
     assert result.error.details["retry_after_seconds"] == 3
 
 
+@pytest.mark.parametrize("status", [200, 402, 429])
+def test_llm_quota_exhaustion_skips_retries(llm_server, status):
+    _, base_url = llm_server
+    FakeOpenAIHandler.routes["chat"] = {
+        "status": status,
+        "body": {"error": {"message": "The Token Plan usage limit has been reached. (2067)"}},
+        "retry_after": 3600,
+    }
+    result = HttpLLMAdapter().run(_request(base_url))
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.no_effect and result.error.retry_safety == "safe"
+    assert result.error.code == "provider_quota_exhausted"
+    assert "retry_after_seconds" not in result.error.details
+
+
+def test_llm_stream_quota_after_partial_text_allows_fallback(llm_server):
+    _, base_url = llm_server
+    FakeOpenAIHandler.routes["chat"] = {
+        "status": 200,
+        "raw": (
+            b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+            b'data: {"error":{"code":"insufficient_quota"}}\n\n'
+        ),
+    }
+    result = HttpLLMAdapter().run(_request(base_url, params={"stream": True}))
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.error.code == "provider_quota_exhausted"
+    assert result.no_effect
+    assert "partial" in result.raw_text
+
+
 def test_llm_adapter_unauthorized_is_permission_denied(llm_server):
     server, base_url = llm_server
     FakeOpenAIHandler.routes["chat"] = {"status": 401, "body": {"error": {"message": "no key"}}}

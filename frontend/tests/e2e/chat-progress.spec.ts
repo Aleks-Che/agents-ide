@@ -42,11 +42,14 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   const template = await api(page, 'POST', '/templates', {
     name: `Progress template ${randomUUID()}`,
   })
-  const selection = {
-    kind: 'direct',
-    harness_profile_id: profile.id,
-    model_id: 'test',
-  }
+  const group = await api(page, 'POST', '/model_groups/agent', {
+    name: `Recovery ${randomUUID()}`,
+    members: [
+      { harness_profile_id: profile.id, model_id: 'test' },
+      { harness_profile_id: profile.id, model_id: 'backup' },
+    ],
+  })
+  const selection = { kind: 'group', group_id: group.id }
   const version = await api(
     page,
     'POST',
@@ -81,6 +84,17 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     project_id: project.id,
     name: 'Progress',
   })
+  for (const mode of ['historical-failed', 'historical-waiting']) {
+    const historical = await api(page, 'POST', '/runs', {
+      project_id: project.id,
+      chat_id: chat.id,
+      binding_id: binding.id,
+      execution_mode: 'simulated',
+      message: 'previous run',
+      idempotency_key: randomUUID(),
+    })
+    checkpoint(historical.id, mode)
+  }
   const run = await api(page, 'POST', '/runs', {
     project_id: project.id,
     chat_id: chat.id,
@@ -99,6 +113,21 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     name: 'В диалоге выполняется процесс',
   })
   await expect(activity).toBeVisible()
+  const projectOption = page.getByRole('option', {
+    name: new RegExp(project.name),
+  })
+  const projectActivity = projectOption.getByRole('status', {
+    name: 'В проекте выполняется процесс',
+  })
+  const projectAttention = projectOption.getByRole('status', {
+    name: 'В проекте требуется внимание: ошибка или запрос',
+  })
+  const chatAttention = chatOption.getByRole('status', {
+    name: 'В диалоге требуется внимание: ошибка или запрос',
+  })
+  await expect(projectActivity).toBeVisible()
+  await expect(projectAttention).toHaveCount(0)
+  await expect(chatAttention).toHaveCount(0)
   await expect(activity.locator('svg')).toHaveCSS(
     'animation-name',
     'chat-activity-spin',
@@ -180,6 +209,9 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     progress.getByRole('log').getByText('Инструмент', { exact: true }),
   ).toHaveCount(0)
   await expect(progress.getByText('Агент ожидает ответа')).toBeVisible()
+  await expect(projectAttention).toBeVisible()
+  await expect(chatAttention).toBeVisible()
+  await expect(activity).toHaveCount(0)
   await page.reload()
   await page.getByRole('option', { name: new RegExp(project.name) }).click()
   await progress.getByLabel('Which file should I check?').fill('README.md')
@@ -189,6 +221,9 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   await expect(progress).toContainText('Ожидает передачи агенту')
   checkpoint(run.id, 'deliver')
   await expect(progress.getByText('Агент ожидает ответа')).toHaveCount(0)
+  await expect(chatAttention).toHaveCount(0)
+  await expect(projectAttention).toHaveCount(0)
+  await expect(projectActivity).toBeVisible()
   await progress
     .getByLabel('Сообщение текущему агенту')
     .fill('Please also check README')
@@ -203,6 +238,8 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   expect(commands[0].status).toBe('applied')
   checkpoint(run.id, 'permission')
   await expect(progress.getByText('Агент запрашивает разрешение')).toBeVisible()
+  await expect(chatAttention).toBeVisible()
+  await expect(projectAttention).toBeVisible()
   await page.reload()
   await page.getByRole('option', { name: new RegExp(project.name) }).click()
   const permissionReply = page.waitForResponse(
@@ -276,9 +313,11 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   await expect(progress.getByRole('log')).toContainText(
     'Please also check README',
   )
-  checkpoint(run.id, 'waiting')
+  checkpoint(run.id, 'waiting-recovery')
   const warning = progress.locator('.stage-waiting')
   await expect(warning).toBeVisible()
+  await expect(projectAttention).toBeVisible()
+  await expect(chatAttention).toBeVisible()
   await expect(activity).toHaveCount(0)
   await navigation.getByRole('button', { name: /Review/ }).click()
   await expect(
@@ -288,6 +327,79 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   await expect(
     warning.getByRole('button', { name: 'Предоставить решение' }),
   ).toHaveCSS('font-size', '12px')
+  await warning.getByRole('button', { name: 'Предоставить решение' }).click()
+  const resolution = page.getByRole('form', { name: 'Решение ожидания' })
+  await resolution
+    .getByLabel('Действие после сверки')
+    .selectOption('continue_session')
+  await expect(resolution).toContainText('с историей сообщений и инструментов')
+  await expect(resolution.getByRole('textbox')).toHaveCount(0)
+  await resolution
+    .getByLabel('Действие после сверки')
+    .selectOption('next_candidate')
+  await expect(resolution).toContainText('Следующая модель: backup')
+  await resolution
+    .getByLabel('Действие после сверки')
+    .selectOption('continue_session')
+  await resolution.getByRole('button', { name: 'Сохранить решение' }).click()
+  await expect(resolution).toHaveCount(0)
+  const recovered = await api(page, 'GET', `/runs/${run.id}`)
+  expect(recovered.state).toBe('waiting_input')
+  expect(recovered.runtime.next_candidate_index).toBe(0)
+  expect(
+    recovered.runtime.agent_continuation.handoff_context.last_output,
+  ).toContain('Reviewing the result')
+  await expect(
+    warning.getByRole('button', { name: 'Продолжить выполнение' }),
+  ).toBeEnabled()
+  await expect(warning).toContainText('Решение сохранено')
+  await expect(progress.locator('.chat-run-header')).toContainText(
+    'Готов к продолжению',
+  )
+  await page.reload()
+  await page.getByRole('option', { name: new RegExp(project.name) }).click()
+  await expect(warning).toContainText('Решение сохранено')
+  const continueResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/runs/${run.id}/commands`) &&
+      response.request().method() === 'POST',
+  )
+  await warning.getByRole('button', { name: 'Продолжить выполнение' }).click()
+  const continued = await continueResponse
+  expect(continued.status()).toBe(200)
+  expect(continued.request().postDataJSON()).toMatchObject({
+    command_type: 'resume',
+  })
+  await expect(warning).toHaveCount(0)
+  await expect(projectAttention).toHaveCount(0)
+  await expect(chatAttention).toHaveCount(0)
+  await expect(projectActivity).toBeVisible()
+  await expect(activity).toBeVisible()
+  await expect(progress).toContainText('В очереди исполнителя')
+  checkpoint(run.id, 'resume-unavailable')
+  await expect(warning).toContainText(
+    'Не удалось продолжить сохранённую сессию',
+  )
+  await expect(warning).not.toContainText('Решение сохранено')
+  await expect(progress.locator('.chat-run-header')).not.toContainText(
+    'Готов к продолжению',
+  )
+  await warning.getByRole('button', { name: 'Предоставить решение' }).click()
+  await resolution
+    .getByLabel('Действие после сверки')
+    .selectOption('next_candidate')
+  await expect(resolution).toContainText('Следующая модель: backup')
+  await resolution.getByRole('button', { name: 'Сохранить решение' }).click()
+  await expect(resolution).toHaveCount(0)
+  await expect(warning).toContainText('Решение сохранено')
+  const switched = await api(page, 'GET', `/runs/${run.id}`)
+  expect(switched.runtime.next_candidate_index).toBe(1)
+  expect(switched.runtime.agent_handoff.last_output).toContain(
+    'Reviewing the result',
+  )
+  await warning.getByRole('button', { name: 'Продолжить выполнение' }).click()
+  await expect(warning).toHaveCount(0)
+  await expect(progress).toContainText('В очереди исполнителя')
   await page.screenshot({
     path: '../.local/chat-progress-restart.png',
     fullPage: true,

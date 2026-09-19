@@ -50,6 +50,23 @@
         "title": "ActiveInterval",
         "type": "object"
       },
+      "ActivityStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "attention": {
+            "default": false,
+            "title": "Attention",
+            "type": "boolean"
+          },
+          "running": {
+            "default": false,
+            "title": "Running",
+            "type": "boolean"
+          }
+        },
+        "title": "ActivityStatus",
+        "type": "object"
+      },
       "ActualSelection": {
         "properties": {
           "attempt_id": {
@@ -2642,6 +2659,67 @@
           "target"
         ],
         "title": "ObservedEdge",
+        "type": "object"
+      },
+      "ObservedLoop": {
+        "properties": {
+          "can_adjust": {
+            "default": false,
+            "title": "Can Adjust",
+            "type": "boolean"
+          },
+          "completed": {
+            "title": "Completed",
+            "type": "integer"
+          },
+          "edge_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Edge Ids",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "max_iterations": {
+            "title": "Max Iterations",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "integer"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "total_completed": {
+            "title": "Total Completed",
+            "type": "integer"
+          },
+          "waiting": {
+            "default": false,
+            "title": "Waiting",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "scope",
+          "completed",
+          "max_iterations",
+          "remaining",
+          "total_completed",
+          "edge_ids"
+        ],
+        "title": "ObservedLoop",
         "type": "object"
       },
       "ObservedNode": {
@@ -5888,7 +5966,8 @@
               "resume",
               "resolve",
               "message",
-              "restart_stage"
+              "restart_stage",
+              "adjust_loop"
             ],
             "title": "Command Type",
             "type": "string"
@@ -5965,6 +6044,13 @@
               }
             ],
             "title": "Last Transition"
+          },
+          "loops": {
+            "items": {
+              "$ref": "#/components/schemas/ObservedLoop"
+            },
+            "title": "Loops",
+            "type": "array"
           },
           "nodes": {
             "items": {
@@ -6187,7 +6273,7 @@
       "SelectionSummary": {
         "properties": {
           "group_changes_apply_only_to_new_runs": {
-            "default": true,
+            "default": false,
             "title": "Group Changes Apply Only To New Runs",
             "type": "boolean"
           },
@@ -6364,6 +6450,27 @@
           }
         },
         "title": "SettingsOverrides",
+        "type": "object"
+      },
+      "SidebarActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "chats": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ActivityStatus"
+            },
+            "title": "Chats",
+            "type": "object"
+          },
+          "projects": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ActivityStatus"
+            },
+            "title": "Projects",
+            "type": "object"
+          }
+        },
+        "title": "SidebarActivity",
         "type": "object"
       },
       "SingleAgentSpec": {
@@ -11247,6 +11354,27 @@
           }
         },
         "summary": "Save Council Defaults Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/sidebar/activity": {
+      "get": {
+        "operationId": "sidebar_activity_endpoint_api_sidebar_activity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SidebarActivity"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Sidebar Activity Endpoint",
         "tags": [
           "domain"
         ]

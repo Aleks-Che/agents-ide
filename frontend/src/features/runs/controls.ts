@@ -1,5 +1,20 @@
 import type { RunRecord, RunCommand } from '../../api/runs'
 
+export function pendingAgentRecovery(run?: RunRecord): boolean {
+  if (!run || !['waiting_input', 'paused'].includes(run.state)) return false
+  const recovery = run.waiting_reason?.resolution_schema?.agent_recovery as
+    { attempt_id?: string } | undefined
+  const attempt =
+    recovery?.attempt_id ?? run.waiting_reason?.details?.attempt_id
+  const pending = run.runtime?.pending_agent_recovery as
+    { attempt_id?: string; execution_id?: string; action?: string } | undefined
+  return (
+    !!pending?.attempt_id &&
+    pending.attempt_id === attempt &&
+    ['continue_session', 'next_candidate'].includes(String(pending.action))
+  )
+}
+
 export function allowedCommands(
   run: RunRecord,
   target?: Record<string, unknown>,
@@ -39,6 +54,13 @@ export function resolutionPayload(
     run.waiting_reason ??
     (run.runtime?.waiting_reason as RunRecord['waiting_reason'])
   const code = reason?.code ?? run.runtime?.waiting_code
+  if (['continue_session', 'next_candidate'].includes(action)) {
+    const recovery = reason?.resolution_schema?.agent_recovery as
+      { attempt_id?: string; actions?: string[] } | undefined
+    if (!recovery?.attempt_id || !recovery.actions?.includes(action))
+      throw new Error('Продолжение недоступно для этой попытки.')
+    return { agent_recovery: { attempt_id: recovery.attempt_id, action } }
+  }
   if (code === 'invalid_response_format' && action === 'reprocess') {
     if (
       !processing ||

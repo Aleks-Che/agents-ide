@@ -622,6 +622,10 @@ def _next_command_sequence(session: Session, run_id: str) -> int:
 
 
 def _command_allowed(command_type: str, state: str) -> bool:
+    if command_type == "adjust_loop":
+        from agents_ide.services.run_loops import ADJUSTABLE_STATES
+
+        return state in ADJUSTABLE_STATES
     if command_type == "restart_stage":
         from agents_ide.services.stage_restart import RESTART_STATES
 
@@ -651,6 +655,18 @@ def _command_allowed(command_type: str, state: str) -> bool:
 
 def _run_from_model(model: RunModel) -> Run:
     from agents_ide.domain.active_intervals import interval_view
+    from agents_ide.services.agent_recovery import recovery_options
+
+    waiting = json.loads(model.waiting_reason_json or "null")
+    if options := recovery_options(model):
+        waiting = waiting or json.loads(model.runtime_json).get("waiting_reason") or {}
+        waiting = {
+            **waiting,
+            "resolution_schema": {
+                **waiting.get("resolution_schema", {}),
+                "agent_recovery": options,
+            },
+        }
 
     return Run(
         simulated=json.loads(model.snapshot_json).get("execution_mode") == "simulated",
@@ -673,7 +689,7 @@ def _run_from_model(model: RunModel) -> Run:
         updated_at=_dt(model.updated_at) or _now(),
         worker_id=model.worker_id,
         worker_generation=model.worker_generation,
-        waiting_reason=json.loads(model.waiting_reason_json) if model.waiting_reason_json else None,
+        waiting_reason=waiting,
         active_intervals=[
             ActiveInterval.model_validate(item)
             for item in interval_view(json.loads(model.active_intervals_json))

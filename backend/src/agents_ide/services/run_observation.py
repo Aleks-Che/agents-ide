@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from agents_ide.engine.events import EventEnvelope
+from agents_ide.engine.loops import loop_progress
 from agents_ide.engine.run_configuration import effective_snapshot
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
@@ -60,6 +61,19 @@ class ObservedEdge(BaseModel):
     loop_id: str | None = None
 
 
+class ObservedLoop(BaseModel):
+    id: str
+    key: str
+    scope: str
+    completed: int
+    max_iterations: int
+    remaining: int
+    total_completed: int
+    edge_ids: list[str]
+    can_adjust: bool = False
+    waiting: bool = False
+
+
 class RunObservation(BaseModel):
     nodes: list[ObservedNode] = Field(default_factory=list)
     edges: list[ObservedEdge] = Field(default_factory=list)
@@ -67,6 +81,7 @@ class RunObservation(BaseModel):
     current_execution_id: str | None = None
     cycle_id: int | None = None
     last_transition: dict[str, Any] | None = None
+    loops: list[ObservedLoop] = Field(default_factory=list)
 
 
 class HistoryPage(BaseModel):
@@ -78,8 +93,11 @@ class HistoryPage(BaseModel):
 
 
 def build_observation(session: Session, run: Run) -> RunObservation:
+    from agents_ide.services.run_loops import ADJUSTABLE_STATES
+
     graph = effective_snapshot(run).get("graph", {})
     runtime = json.loads(run.runtime_json or "{}")
+    waiting = json.loads(run.waiting_reason_json or "null") or {}
     latest = (
         select(StepExecution.node_id, func.max(StepExecution.visit_index).label("visit"))
         .where(
@@ -126,6 +144,15 @@ def build_observation(session: Session, run: Run) -> RunObservation:
         current_execution_id=run.current_execution_id,
         cycle_id=runtime.get("cycle_id", run.current_cycle_id),
         last_transition=runtime.get("last_transition"),
+        loops=[
+            ObservedLoop(
+                **value,
+                can_adjust=run.state in ADJUSTABLE_STATES,
+                waiting=waiting.get("code") == "limit_exceeded"
+                and waiting.get("details", {}).get("limit") == f"loop:{value['id']}",
+            )
+            for value in loop_progress(graph, runtime)
+        ],
     )
     # Older Runs have no checkpoint; retained events can still supply the last edge.
     if result.last_transition is None:

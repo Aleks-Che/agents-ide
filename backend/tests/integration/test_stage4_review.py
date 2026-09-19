@@ -459,11 +459,11 @@ def test_real_limits_stop_calls_and_do_not_reset_on_second_execute(
     assert queue.claim_next_job(factory, worker_id="later", lease_seconds=30) is None
 
 
-def test_default_automation_ignores_saved_budgets_and_loop_limits(
+def test_default_automation_ignores_saved_budgets_and_timeouts(
     authenticated, tmp_path, settings, monkeypatch
 ):
     assert not settings.enforce_execution_limits
-    graph = repair_graph(max_iterations=1)
+    graph = repair_graph(max_iterations=3)
     for node in graph["nodes"]:
         node["timeout_seconds"] = 1
     run, factory = make_run(
@@ -744,7 +744,7 @@ def test_changed_owner_fences_result_and_new_calls(authenticated, tmp_path, sett
     assert called == [True]
 
 
-def test_claim_skips_reserved_workspace_and_limits_two_active_runs(authenticated, tmp_path):
+def test_claim_has_no_global_active_run_limit(authenticated, tmp_path):
     import subprocess
 
     for suffix in ("1", "2", "3"):
@@ -756,8 +756,7 @@ def test_claim_skips_reserved_workspace_and_limits_two_active_runs(authenticated
     third, _ = make_run(authenticated, tmp_path, suffix="3")
     assert queue.claim_next_job(factory, worker_id="a", lease_seconds=30).run_id == first["id"]
     assert queue.claim_next_job(factory, worker_id="b", lease_seconds=30).run_id == second["id"]
-    assert queue.claim_next_job(factory, worker_id="c", lease_seconds=30) is None
-    assert third["state"] == "queued"
+    assert queue.claim_next_job(factory, worker_id="c", lease_seconds=30).run_id == third["id"]
 
 
 def test_large_utf8_events_use_artifact_and_unique_sequence(authenticated, tmp_path):

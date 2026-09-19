@@ -65,6 +65,22 @@ def test_wire_ids_scoping_final_message_usage_and_feedback(transport):
     assert len([r for r in records if r.get("method") == "initialize"]) == 1
 
 
+def test_codex_terminal_quota_after_tools_allows_handoff(transport):
+    adapter, _ = transport(
+        response_error_json=json.dumps(
+            {
+                "message": "Usage limit reached",
+                "codexErrorInfo": "usageLimitExceeded",
+            }
+        )
+    )
+    result = adapter.run(_make_request())
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.error.code == "provider_quota_exhausted"
+    assert result.can_handoff and not result.no_effect
+    assert result.raw_text == "hello from codex"
+
+
 @pytest.mark.parametrize("kind", ["file", "command", "permissions"])
 def test_approval_has_schema_correct_decline_and_no_success(transport, kind):
     adapter, trace = transport(pending_permission=1, permission_kind=kind)

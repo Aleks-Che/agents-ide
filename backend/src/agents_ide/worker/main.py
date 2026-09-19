@@ -1,4 +1,4 @@
-"""Independent worker: heartbeat and at most two concurrent leased Runs.
+"""Independent worker: heartbeat and concurrent leased runs without a fixed limit.
 
 Stage 5 adds:
 
@@ -17,7 +17,7 @@ import signal
 import threading
 import time
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
 from typing import Any
 
 import portalocker
@@ -26,12 +26,23 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from agents_ide.config import Settings
-from agents_ide.engine.planning_worker import dispatch_planning_job
-from agents_ide.engine.queue import abandon_job, claim_next_job, refresh_lease, release_job
+from agents_ide.engine.planning_worker import (
+    PlanningClaim,
+    claim_planning_job,
+    dispatch_planning_job,
+)
+from agents_ide.engine.queue import (
+    ClaimedJob,
+    abandon_job,
+    claim_next_job,
+    refresh_lease,
+    release_job,
+)
 from agents_ide.engine.runner import build_runner
 from agents_ide.persistence.database import check_database, create_database, migrate
 from agents_ide.security.secrets import SecretStore
 from agents_ide.worker.processes import ProcessRegistry, ProcessSupervisor
+from agents_ide.worker.tasks import DispatchThreads
 
 logger = logging.getLogger("agents_ide.worker")
 
@@ -81,11 +92,8 @@ def run_worker(settings: Settings) -> None:
         worker_id, started_at = uuid.uuid4().hex, time.time()
         registry = ProcessRegistry()
         logger.info("worker.started", extra={"worker_id": worker_id})
-        pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="run")
-        planning_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="planning")
+        tasks = DispatchThreads()
         try:
-            pending: list[Future[bool]] = []
-            planning_pending: list[Future[bool]] = []
             last_heartbeat = 0.0
             last_gc = time.monotonic()
             db_failures = 0
@@ -123,23 +131,9 @@ def run_worker(settings: Settings) -> None:
                         )
                         stopping.set()
                         break
-                for future in pending[:]:
-                    if future.done():
-                        pending.remove(future)
-                        try:
-                            future.result()
-                        except Exception:
-                            logger.exception("worker.dispatch_error")
-                for future in planning_pending[:]:
-                    if future.done():
-                        planning_pending.remove(future)
-                        try:
-                            future.result()
-                        except Exception:
-                            logger.exception("worker.planning_dispatch_error")
+                tasks.reap()
                 if (
-                    not pending
-                    and not planning_pending
+                    not tasks.threads
                     and not requested(settings)
                     and not db_failures
                     and time.monotonic() - last_gc >= 60
@@ -151,43 +145,44 @@ def run_worker(settings: Settings) -> None:
                     except Exception:
                         logger.warning("worker.retention_failed")
                     last_gc = time.monotonic()
-                while (
-                    len(pending) < 2
-                    and db_failures == 0
-                    and not stopping.is_set()
-                    and not requested(settings)
-                ):
-                    pending.append(
-                        pool.submit(
-                            dispatch_once,
-                            settings,
-                            worker_id,
-                            factory,
-                            stopping,
-                            registry,
+                dispatched = False
+                if not db_failures and not stopping.is_set() and not requested(settings):
+                    job = claim_next_job(factory, worker_id=worker_id, lease_seconds=30)
+                    if job is not None:
+                        tasks.start(
+                            f"run-{job.run_id}",
+                            partial(
+                                dispatch_once,
+                                settings,
+                                worker_id,
+                                factory,
+                                stopping,
+                                registry,
+                                job=job,
+                            ),
                         )
-                    )
-                while (
-                    len(planning_pending) < 2
-                    and db_failures == 0
-                    and not stopping.is_set()
-                    and not requested(settings)
-                ):
-                    planning_pending.append(
-                        planning_pool.submit(
-                            dispatch_planning_once,
-                            settings,
-                            worker_id,
-                            factory,
-                            stopping,
+                        dispatched = True
+                    claim = claim_planning_job(factory, worker_id)
+                    if claim is not None:
+                        tasks.start(
+                            f"planning-{claim.job_id}",
+                            partial(
+                                dispatch_planning_once,
+                                settings,
+                                worker_id,
+                                factory,
+                                stopping,
+                                claim=claim,
+                            ),
                         )
-                    )
-                stopping.wait(min(0.25, settings.heartbeat_seconds))
+                        dispatched = True
+                # Drain ready work immediately; still check heartbeat and shutdown each turn.
+                if not dispatched:
+                    stopping.wait(min(0.25, settings.heartbeat_seconds))
         finally:
             stopping.set()
             registry.abort_all()
-            pool.shutdown(wait=True, cancel_futures=True)
-            planning_pool.shutdown(wait=True, cancel_futures=True)
+            tasks.shutdown()
             for entry in registry.entries():
                 if entry.group:
                     entry.group.close()
@@ -205,17 +200,18 @@ def dispatch_planning_once(
     worker_id: str,
     session_factory: sessionmaker[Session] | None = None,
     stopping: threading.Event | None = None,
+    *,
+    claim: PlanningClaim | None = None,
 ) -> bool:
-    from agents_ide.engine.planning_worker import claim_planning_job
     from agents_ide.operations.maintenance import requested
     from agents_ide.security.secrets import SecretStore
 
-    if requested(settings):
+    if claim is None and requested(settings):
         return False
     owned_engine = create_database(settings) if session_factory is None else None
     factory = session_factory or sessionmaker(bind=owned_engine, expire_on_commit=False)
     try:
-        claim = claim_planning_job(factory, worker_id)
+        claim = claim or claim_planning_job(factory, worker_id)
         if claim is None:
             return False
         dispatch_planning_job(
@@ -237,15 +233,17 @@ def dispatch_once(
     session_factory: sessionmaker[Session] | None = None,
     stopping: threading.Event | None = None,
     registry: ProcessRegistry | None = None,
+    *,
+    job: ClaimedJob | None = None,
 ) -> bool:
     from agents_ide.operations.maintenance import requested
 
-    if requested(settings):
+    if job is None and requested(settings):
         return False
     owned_engine = create_database(settings) if session_factory is None else None
     factory = session_factory or sessionmaker(bind=owned_engine, expire_on_commit=False)
     try:
-        job = claim_next_job(factory, worker_id=worker_id, lease_seconds=30)
+        job = job or claim_next_job(factory, worker_id=worker_id, lease_seconds=30)
         if job is None:
             return False
         abort = threading.Event()
@@ -316,9 +314,7 @@ def dispatch_once(
         finally:
             stop_renewal.set()
             thread.join(timeout=2)
-            abandon_job(
-                factory, job_id=job.job_id, worker_id=worker_id, generation=job.generation
-            )
+            abandon_job(factory, job_id=job.job_id, worker_id=worker_id, generation=job.generation)
             if registry is not None:
                 with registry.lock:
                     registry.aborts.pop(job.run_id, None)

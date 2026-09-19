@@ -365,10 +365,15 @@ def check_workspace(
         if item["code"] != "??" and item["code"][0] != ".":
             raise GitCommitError("git_index_dirty", "User staged changes after Start")
     manifest = file_manifest(workspace)
+    # Fresh worktrees acquire ignored setup/test files (.env, pytest caches).
+    # They cannot enter the index and were not user files present at Start.
+    # Still protect every pre-existing ignored file and every nonignored path
+    # outside the allowlist.
     protected = {
         p: v
         for p, v in manifest.items()
-        if v.get("ignored") or not is_path_allowed(p, baseline.allowlist or allowlist)
+        if p in baseline.protected
+        or (not v.get("ignored") and not is_path_allowed(p, baseline.allowlist or allowlist))
     }
     if protected != baseline.protected:
         raise GitCommitError("external_change_detected", "Files outside the allowlist changed")
@@ -633,8 +638,26 @@ def staged_message_diff(workspace: Path, index: Path, parent: str) -> dict[str, 
     return result
 
 
+def _without_commit_thinking(text: str) -> str:
+    # Keep the provider's reasoning in the raw response artifact, never in Git.
+    parts: list[str] = []
+    depth, start = 0, 0
+    for tag in re.finditer(r"<(/?)think\s*>", text, re.IGNORECASE):
+        if not tag[1]:
+            if depth == 0:
+                parts.append(text[start : tag.start()])
+            depth += 1
+        else:
+            if depth == 0:
+                return ""  # An unmatched tag is not a complete final answer.
+            depth -= 1
+            if depth == 0:
+                start = tag.end()
+    return "" if depth else "".join([*parts, text[start:]]).strip()
+
+
 def safe_generated_message(text: str) -> str:
-    value = text.replace("\r\n", "\n").strip()
+    value = _without_commit_thinking(text.replace("\r\n", "\n").strip())
     if value.startswith("```") and value.endswith("```"):
         value = "\n".join(value.splitlines()[1:-1]).strip()
     if (

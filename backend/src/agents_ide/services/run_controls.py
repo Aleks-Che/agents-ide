@@ -11,7 +11,7 @@ from agents_ide.domain.schemas import RunCommand
 from agents_ide.engine import artifacts
 from agents_ide.engine.events import append_event
 from agents_ide.engine.policy import effective_limits
-from agents_ide.engine.run_configuration import effective_snapshot
+from agents_ide.engine.run_configuration import effective_snapshot, harness_configuration_matches
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
     AgentSession,
@@ -60,7 +60,7 @@ def unsettled_attempts(session: Session, run: Run) -> list[StepAttempt]:
                 StepAttempt.status.in_(["prepared", "running", "unknown", "waiting_input"]),
             )
         )
-        if a.id not in authorized
+        if a.id not in authorized and a.id not in runtime.get("agent_recovery_attempts", {})
     ]
 
 
@@ -68,6 +68,8 @@ def reset_stopped_agent(runtime: dict[str, Any], session_id: str | None = None) 
     """STOP retries the stage's original task in a fresh native session."""
     current = runtime.pop("current_agent_session", {})
     continuation = runtime.pop("agent_continuation", {})
+    runtime.pop("agent_handoff", None)
+    runtime.pop("pending_agent_recovery", None)
     for key in (current.get("session_key"), continuation.get("session_key")):
         runtime.get("native_sessions", {}).pop(key, None)
     # Runs stopped before session checkpoints were introduced still have AgentSession rows.
@@ -90,8 +92,13 @@ def _resolve(session: Session, run: Run, command: RunCommand) -> dict[str, Any]:
         "retry",
         "reconciliation",
         "json_processing",
+        "agent_recovery",
     }:
         raise AppError("resolution_invalid", "Неизвестные поля решения", 422)
+    if "agent_recovery" in payload:
+        from agents_ide.services.agent_recovery import prepare_agent_recovery
+
+        return prepare_agent_recovery(session, run, command)
     if "json_processing" in payload:
         from agents_ide.services.json_resolution import prepare_json_reprocessing
 
@@ -215,14 +222,55 @@ def _resolve(session: Session, run: Run, command: RunCommand) -> dict[str, Any]:
     return response
 
 
+def _git_check_retry(
+    session: Session, run: Run, snapshot: dict[str, Any], waiting: dict[str, Any]
+) -> str | None:
+    """A failed Git guard can be checked again before any durable commit intent."""
+    if waiting.get("code") != "external_change_detected" or not run.current_attempt_id:
+        return None
+    attempt = session.get(StepAttempt, run.current_attempt_id)
+    execution = session.get(StepExecution, attempt.execution_id) if attempt else None
+    if (
+        not attempt
+        or attempt.status != "unknown"
+        or attempt.error_code
+        not in {"external_change_detected", "git_index_dirty", "path_violation"}
+        or not execution
+        or execution.run_id != run.id
+        or execution.id != run.current_execution_id
+        or not any(
+            node["id"] == execution.node_id and node["type"] == "GitCommit"
+            for node in snapshot["graph"]["nodes"]
+        )
+    ):
+        return None
+    if session.scalar(
+        select(ArtifactManifest.id).where(
+            ArtifactManifest.step_execution_id == execution.id,
+            ArtifactManifest.schema_type == "git_intent",
+        )
+    ):
+        return None
+    # execute() persists its intent before invoking git commit. Without it,
+    # retrying only reruns the guards; a real conflict still blocks the commit.
+    return attempt.id
+
+
 def _check_resume(session: Session, run: Run) -> None:
+    from agents_ide.services.live_groups import refresh_groups
     from agents_ide.worker.processes import stored_processes_stopped
 
     runtime, snapshot = json.loads(run.runtime_json), effective_snapshot(run)
+    snapshot["dependencies"] = refresh_groups(session, snapshot)
     target = json.loads(run.resume_target_json or "{}")
     waiting = json.loads(run.waiting_reason_json or "{}") or runtime.get("waiting_reason") or {}
-    if not stored_processes_stopped(session, run) or unsettled_attempts(session, run):
+    if not stored_processes_stopped(session, run):
         raise AppError("reconciliation_required", "Прежняя операция требует сверки", 409)
+    git_retry = _git_check_retry(session, run, snapshot, waiting)
+    if any(attempt.id != git_retry for attempt in unsettled_attempts(session, run)):
+        raise AppError("reconciliation_required", "Прежняя операция требует сверки", 409)
+    if git_retry and git_retry not in runtime.get("retry_authorized_attempts", []):
+        runtime.setdefault("retry_authorized_attempts", []).append(git_retry)
     if run.state == "stopped":
         execution = (
             session.get(StepExecution, run.current_execution_id)
@@ -239,6 +287,19 @@ def _check_resume(session: Session, run: Run) -> None:
     blockers = target.get("blockers", [])
     for code in blockers:
         if code == "limit_exceeded":
+            from agents_ide.engine.loops import loop_key, loop_limit
+
+            loop = target.get("blocked_edge", {}).get("loop")
+            if loop and waiting.get("details", {}).get("limit") == f"loop:{loop['id']}":
+                if runtime.get("loop_counts", {}).get(loop_key(loop, runtime), 0) >= loop_limit(
+                    loop, runtime
+                ):
+                    raise AppError(
+                        "limit_exceeded",
+                        "Добавьте оставшиеся итерации цикла перед продолжением",
+                        409,
+                    )
+                continue
             from agents_ide.operations.storage import settings_for
 
             if not settings_for(session).enforce_execution_limits:
@@ -290,6 +351,13 @@ def _check_resume(session: Session, run: Run) -> None:
                     and (
                         not candidate.get("resource_version")
                         or resource.version == candidate["resource_version"]
+                        or (
+                            isinstance(resource, HarnessProfile)
+                            and harness_configuration_matches(
+                                resource,
+                                snapshot["dependencies"]["harness_profiles"].get(ref, {}),
+                            )
+                        )
                     )
                 ):
                     available = True
@@ -329,6 +397,9 @@ def _check_resume(session: Session, run: Run) -> None:
         elif code == "session_resume_unavailable":
             # Retry only the saved session; STOP explicitly starts this stage afresh.
             continue
+        elif code == "external_change_detected" and git_retry:
+            # The worker rechecks HEAD, index, config and protected files before dispatch.
+            continue
         elif code in {"unknown_external_result", "owner_expired", "reconciliation_required"}:
             if not runtime.get("work"):
                 raise AppError(
@@ -339,6 +410,7 @@ def _check_resume(session: Session, run: Run) -> None:
                 "resolution_required", "Причина ожидания не устранена", 409, {"blocker": code}
             )
     target["blockers"] = []
+    runtime.pop("pending_agent_recovery", None)
     if target.get("action") == "reconcile":
         target["action"] = "retry_attempt" if target.get("execution_id") else "dispatch_next"
     run.resume_target_json, run.runtime_json = to_json(target), to_json(runtime)
@@ -391,6 +463,10 @@ def prepare_command(
 ) -> tuple[str, dict[str, Any] | None]:
     previous = run.state
     kind = command.command_type
+    if kind == "adjust_loop":
+        from agents_ide.services.run_loops import adjust_loop
+
+        return "applied", adjust_loop(session, run, command)
     if kind == "restart_stage":
         from agents_ide.services.stage_restart import prepare_restart
 

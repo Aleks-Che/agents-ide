@@ -160,7 +160,7 @@ def test_snapshot_summary_surfaces_group_and_candidates(authenticated, tmp_path)
     snapshot = client.get(f"/api/runs/{run['id']}/snapshot", headers=headers).json()
     assert snapshot["selection"] is not None
     selection = snapshot["selection"]
-    assert selection["group_changes_apply_only_to_new_runs"] is True
+    assert selection["group_changes_apply_only_to_new_runs"] is False
     groups = {entry["id"]: entry for entry in selection["groups"]}
     assert group["id"] in groups
     assert groups[group["id"]]["enabled_count"] == 1
