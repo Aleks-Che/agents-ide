@@ -2,6 +2,39 @@
 
 from typing import Any
 
+from agents_ide.domain.graph_schema import edge_endpoints
+
+
+def loop_body_nodes(graph: dict[str, Any], edge: dict[str, Any]) -> set[str]:
+    """Nodes on paths from a loop's target back to its source, including branches.
+
+    Stop at both boundaries so surrounding loops do not pull unrelated stages
+    into this iteration. Inner loop branches remain part of the outer body.
+    """
+    source, target, _ = edge_endpoints(edge)
+    if source is None or target is None:
+        return set()
+    forward: dict[str, list[str]] = {}
+    reverse: dict[str, list[str]] = {}
+    for link in graph.get("edges", []):
+        start, end, _ = edge_endpoints(link)
+        if start is not None and end is not None:
+            forward.setdefault(start, []).append(end)
+            reverse.setdefault(end, []).append(start)
+
+    def reachable(start: str, stop: str, links: dict[str, list[str]]) -> set[str]:
+        pending, seen = [start], set()
+        while pending:
+            node = pending.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            if node != stop:
+                pending.extend(links.get(node, []))
+        return seen
+
+    return reachable(target, source, forward) & reachable(source, target, reverse)
+
 
 def loop_key(loop: dict[str, Any], runtime: dict[str, Any]) -> str:
     return (

@@ -192,15 +192,17 @@ def test_interrupt_has_turn_id_and_long_call_stops(transport, trigger):
     assert not worker.is_alive()
     assert results[0].outcome == ExternalOutcome.UNKNOWN
     assert not results[0].no_effect
+    assert not results[0].can_handoff
     rows = [r["message"] for r in _read_records(trace)]
     interrupts = [r for r in rows if r.get("method") == "turn/interrupt"]
     assert interrupts and all(r.get("id") and r["params"].get("turnId") for r in interrupts)
 
 
-def test_post_dispatch_transport_loss_never_allows_retry(transport):
+def test_post_dispatch_transport_loss_allows_handoff_without_claiming_no_effect(transport):
     adapter, _ = transport(close_stream=1)
     result = adapter.run(_make_request())
-    assert result.outcome == ExternalOutcome.UNKNOWN and not result.no_effect
+    assert result.outcome == ExternalOutcome.UNAVAILABLE and not result.no_effect
+    assert result.can_handoff
 
 
 @pytest.mark.parametrize(

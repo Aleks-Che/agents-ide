@@ -447,6 +447,10 @@ def _finish(
                 job.merged_by_member_id = member.id
             else:
                 job.n_participants_actual += 1
+        elif result.can_fallback:
+            member.candidate_index += 1
+            member.status = "pending"
+            member.error_json = service._serialise({"code": attempt.error_code or attempt.outcome})
         elif result.outcome in {
             ExternalOutcome.UNKNOWN,
             ExternalOutcome.TRANSPORT_DROPPED,
@@ -626,6 +630,7 @@ def _agent_result(result: Any) -> LLMResult:
         finished_at=result.finished_at,
         no_effect=result.no_effect,
         result_schema="harness_council",
+        can_fallback=result.can_handoff,
     )
 
 

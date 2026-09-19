@@ -395,6 +395,8 @@ class CodexAdapter(AgentAdapter):
         )
         sent = False
         terminal = False
+        texts: dict[str, str] = {}
+        tools: dict[str, dict[str, Any]] = {}
         self._turn_id = None
         interrupt_started: float | None = None
         interrupt_sent = False
@@ -431,6 +433,12 @@ class CodexAdapter(AgentAdapter):
             interruption_confirmed: bool = False,
             cause: Exception | None = None,
         ) -> AgentResult:
+            can_handoff = sent and code not in {
+                "interrupted",
+                "permission_denied",
+                "configuration_invalid",
+                "session_resume_unavailable",
+            }
             details: dict[str, Any] = {}
             if interruption_confirmed:
                 details["interruption_confirmed"] = True
@@ -462,10 +470,11 @@ class CodexAdapter(AgentAdapter):
                 }:
                     details["field"] = field
             return AgentResult(
-                outcome,
-                "",
+                ExternalOutcome.UNAVAILABLE if can_handoff else outcome,
+                "\n".join(texts.values())[-8000:],
                 None,
                 None,
+                tool_calls=tuple(tools.values()),
                 error=AdapterError(
                     code,
                     code,
@@ -473,6 +482,7 @@ class CodexAdapter(AgentAdapter):
                     details,
                 ),
                 no_effect=safe,
+                can_handoff=can_handoff,
                 elapsed_seconds=time.monotonic() - started,
             )
 
@@ -630,9 +640,7 @@ class CodexAdapter(AgentAdapter):
             self._turn_id = validate_turn_id(response["result"]["turn"]["id"])
             emit("agent.turn_started", turn_id=self._turn_id)
             emit("attempt.progress", message_id=self._turn_id, role="assistant")
-            texts: dict[str, str] = {}
             phases: dict[str, str] = {}
-            tools: dict[str, dict[str, Any]] = {}
             tokens: int | None = None
             denied = False
             questions: dict[str, tuple[Any, list[dict[str, Any]]]] = {}
@@ -842,33 +850,19 @@ class CodexAdapter(AgentAdapter):
                         from agents_ide.adapters.provider_limits import limit_error_code
 
                         limit_code = limit_error_code(turn.get("error"))
-                        if turn.get("status") == "failed" and limit_code:
+                        if turn.get("status") == "failed":
+                            code = limit_code or "provider_unavailable"
                             return AgentResult(
                                 ExternalOutcome.UNAVAILABLE,
                                 "\n".join(texts.values())[-8000:],
                                 None,
                                 None,
-                                error=AdapterError(limit_code, limit_code),
+                                tool_calls=tuple(tools.values()),
+                                error=AdapterError(code, code),
                                 can_handoff=True,
                                 elapsed_seconds=time.monotonic() - started,
                                 tokens_used=tokens,
                             )
-                        if not texts and not tools:
-                            try:
-                                rejection = json.loads(turn.get("error", {}).get("message", ""))
-                            except (ValueError, AttributeError, TypeError):
-                                rejection = {}
-                            if (
-                                isinstance(rejection, dict)
-                                and rejection.get("status") == 400
-                                and rejection.get("error", {}).get("code") == "invalid_json_schema"
-                                and rejection.get("error", {}).get("param") == "text.format.schema"
-                            ):
-                                return failure(
-                                    "configuration_invalid",
-                                    ExternalOutcome.CONFIRMED_FAILURE,
-                                    safe=True,
-                                )
                         return failure("provider_result_unknown")
                     finals = [
                         text for key, text in texts.items() if phases.get(key) == "final_answer"

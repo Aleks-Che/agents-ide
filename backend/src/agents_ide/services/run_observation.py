@@ -119,6 +119,11 @@ def build_observation(session: Session, run: Run) -> RunObservation:
             .where(StepExecution.run_id == run.id)
         )
     }
+    executions = {
+        node_id: execution
+        for node_id, execution in executions.items()
+        if execution.cycle_id >= runtime.get("loop_observation_cycles", {}).get(node_id, 0)
+    }
     latest_attempt = (
         select(StepAttempt.execution_id, func.max(StepAttempt.attempt_index).label("attempt"))
         .where(StepAttempt.execution_id.in_([row.id for row in executions.values()]))
@@ -154,6 +159,13 @@ def build_observation(session: Session, run: Run) -> RunObservation:
             for value in loop_progress(graph, runtime)
         ],
     )
+    if (
+        run.current_execution_id
+        and run.current_node_id not in executions
+        and runtime.get("next_node_id")
+    ):
+        result.current_node_id = runtime["next_node_id"]
+        result.current_execution_id = None
     # Older Runs have no checkpoint; retained events can still supply the last edge.
     if result.last_transition is None:
         transition = session.scalar(

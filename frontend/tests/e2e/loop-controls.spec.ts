@@ -6,6 +6,7 @@ import { test, expect, pair, api, workspace } from './support'
 test('loop counters and live iteration buttons persist in chat and graph', async ({
   page,
 }) => {
+  test.setTimeout(60000)
   await pair(page)
   await page.setViewportSize({ width: 1450, height: 1050 })
   const project = await api(page, 'POST', '/projects', {
@@ -79,7 +80,7 @@ test('loop counters and live iteration buttons persist in chat and graph', async
     message: 'go',
     idempotency_key: randomUUID(),
   })
-  for (const mode of ['first', 'loop-counts']) {
+  const checkpoint = (mode: string) => {
     execFileSync(
       path.resolve(
         '../backend/.venv',
@@ -94,6 +95,8 @@ test('loop counters and live iteration buttons persist in chat and graph', async
       { windowsHide: true },
     )
   }
+  checkpoint('first')
+  checkpoint('loop-counts')
   await page.reload()
   await page.getByRole('option', { name: new RegExp(project.name) }).click()
   const progress = page.getByRole('region', { name: 'Выполнение шаблона' })
@@ -144,4 +147,34 @@ test('loop counters and live iteration buttons persist in chat and graph', async
   await expect(
     dialog.getByRole('group', { name: 'Edge from route to first' }),
   ).toContainText('цикл repair: пройдено 2, осталось 1')
+  await dialog.getByRole('button', { name: 'Закрыть экран Run' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(progress).toHaveCount(1)
+  checkpoint('loop-next')
+  await expect(progress).toHaveCount(1)
+  const navigation = progress.getByRole('navigation', {
+    name: 'Этапы выполнения',
+  })
+  await expect(loop).toContainText('Пройдено 3')
+  await expect(navigation.getByRole('button', { name: /start/ })).toContainText(
+    'Завершён',
+  )
+  await expect(
+    navigation.getByRole('button', { name: /Implementation/ }),
+  ).toContainText('Выполняется')
+  await expect(navigation.getByRole('button', { name: /Check/ })).toContainText(
+    'Ожидает',
+  )
+  await expect(navigation.locator('.chat-activity-spinner')).toHaveCount(1)
+  await page.reload()
+  await page.getByRole('option', { name: new RegExp(project.name) }).click()
+  await expect(navigation.getByRole('button', { name: /Check/ })).toContainText(
+    'Ожидает',
+  )
+  await expect(navigation.getByRole('button', { name: /start/ })).toContainText(
+    'Завершён',
+  )
+  await expect(
+    progress.locator('.stage-heading .chat-activity-spinner'),
+  ).toBeVisible()
 })

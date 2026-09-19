@@ -4,12 +4,85 @@ import asyncio
 import json
 
 from sqlalchemy import delete, select
-from test_stage4_review import execute, make_run
+from test_stage4_review import execute, make_run, repair_graph, verdict
 
+from agents_ide.adapters.fake import FakeAgentAdapter
 from agents_ide.engine.artifacts import ArtifactPayload, record_artifact
 from agents_ide.engine.events import append_event
 from agents_ide.engine.events_stream import MAX_BUFFER_BYTES, StreamHub
-from agents_ide.persistence.models import RunEvent
+from agents_ide.engine.runner import Runner
+from agents_ide.persistence.models import RunEvent, StepExecution
+
+
+def test_loop_resets_only_its_body_and_preserves_history(
+    authenticated, tmp_path, settings, monkeypatch
+):
+    client, _ = authenticated
+    run, factory = make_run(authenticated, tmp_path, graph=repair_graph())
+    url = f"/api/runs/{run['id']}"
+    finish_visit = Runner._finish_visit
+    call_agent = FakeAgentAdapter.run
+    resets, active_cycles = [], []
+
+    def observe_return(self, node, visit, result):
+        outcome = finish_visit(self, node, visit, result)
+        if self.runtime.get("last_transition", {}).get("backward"):
+            observation = client.get(url + "/snapshot").json()["observation"]
+            nodes = {node["id"]: node for node in observation["nodes"]}
+            assert observation["current_node_id"] == "impl"
+            assert observation["current_execution_id"] is None
+            assert nodes["s"]["status"] == "succeeded"
+            for node_id in ("impl", "check", "route"):
+                assert nodes[node_id]["status"] == "pending"
+                assert nodes[node_id]["execution_id"] is None
+                assert nodes[node_id]["attempt_count"] == 0
+                assert nodes[node_id]["result_ref"] is None
+            # Snapshot state survives reopening and event retention.
+            with factory() as session:
+                session.execute(delete(RunEvent).where(RunEvent.run_id == run["id"]))
+                session.commit()
+            assert client.get(url + "/snapshot").json()["observation"] == observation
+            resets.append(observation["cycle_id"])
+        return outcome
+
+    def observe_active(self, request):
+        observation = client.get(url + "/snapshot").json()["observation"]
+        nodes = {node["id"]: node for node in observation["nodes"]}
+        assert nodes["impl"]["status"] == "running"
+        assert nodes["check"]["status"] == "pending"
+        assert nodes["route"]["status"] == "pending"
+        assert nodes["s"]["status"] == "succeeded"
+        active_cycles.append(observation["cycle_id"])
+        return call_agent(self, request)
+
+    monkeypatch.setattr(Runner, "_finish_visit", observe_return)
+    monkeypatch.setattr(FakeAgentAdapter, "run", observe_active)
+    result, _ = execute(
+        run,
+        factory,
+        settings,
+        monkeypatch,
+        [verdict("failed", 1), verdict("failed", 2), verdict("passed", 3)],
+    )
+    assert result.final_state == "completed"
+    assert resets == [2, 3]
+    assert active_cycles == [1, 2, 3]
+    nodes = {
+        node["id"]: node for node in client.get(url + "/snapshot").json()["observation"]["nodes"]
+    }
+    assert all(
+        nodes[node]["status"] == "succeeded" for node in ("s", "impl", "check", "route", "e")
+    )
+    with factory() as session:
+        executions = list(
+            session.scalars(
+                select(StepExecution).where(
+                    StepExecution.run_id == run["id"], StepExecution.node_id == "check"
+                )
+            )
+        )
+        assert len(executions) == 3
+        assert all(row.status == "succeeded" and row.validated_result_json for row in executions)
 
 
 def test_snapshot_and_history_survive_reopen_and_retention(

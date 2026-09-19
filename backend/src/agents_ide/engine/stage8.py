@@ -100,7 +100,7 @@ def prepare_git(runner: Runner) -> None:
             if (
                 runner.snapshot["resolved_settings"].get("workspace_mode") != "worktree"
                 and expected is not None
-                and expected != baseline.fingerprint
+                and not git.git_policy_matches(baseline.fingerprint, expected)
             ):
                 raise AppError(
                     "external_change_detected", "Git policy changed after preflight", 409

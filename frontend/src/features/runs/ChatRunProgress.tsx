@@ -16,6 +16,7 @@ import {
   type RunRecord,
 } from '../../api/runs'
 import { useCsrfToken } from '../../app/session'
+import { ActivitySpinner } from '../../app/ActivityIndicators'
 import { ContextMenu } from '../../app/ContextMenu'
 import {
   contextMenuHandlers,
@@ -45,6 +46,43 @@ const stageStates: Record<string, string> = {
   retry_wait: 'Повторная попытка',
   skipped: 'Пропущен',
 }
+const activeRunStates = new Set([
+  'queued',
+  'running',
+  'pause_requested',
+  'stop_requested',
+  'retry_wait',
+  'recovering',
+])
+
+function StageStatus({
+  node,
+  run,
+  current,
+  readyToContinue,
+}: {
+  node: Stage
+  run?: RunRecord
+  current: boolean
+  readyToContinue: boolean
+}) {
+  return (
+    <span className="execution-status">
+      {current &&
+      run &&
+      activeRunStates.has(run.state) &&
+      !['succeeded', 'failed', 'skipped'].includes(node.status ?? 'pending') ? (
+        <ActivitySpinner />
+      ) : null}
+      {current && run?.state === 'waiting_input'
+        ? readyToContinue
+          ? 'Готов к продолжению'
+          : 'Нужно решение'
+        : (stageStates[node.status ?? 'pending'] ?? node.status)}
+    </span>
+  )
+}
+
 function orderStages(observation?: RunObservation | null): Stage[] {
   const nodes = observation?.nodes ?? []
   const ordered: Stage[] = []
@@ -191,7 +229,8 @@ export function ChatRunProgress({
       <header className="chat-run-header">
         <div>
           <h3>Выполнение шаблона</h3>
-          <span role="status">
+          <span role="status" className="execution-status">
+            {run && activeRunStates.has(run.state) ? <ActivitySpinner /> : null}
             {readyToContinue
               ? 'Готов к продолжению'
               : run
@@ -431,11 +470,12 @@ export function ChatRunProgress({
                 {i + 1}. {node.label}
               </span>
               <small>
-                {node.id === current && run?.state === 'waiting_input'
-                  ? readyToContinue
-                    ? 'Готов к продолжению'
-                    : 'Нужно решение'
-                  : (stageStates[node.status ?? 'pending'] ?? node.status)}
+                <StageStatus
+                  node={node}
+                  run={run}
+                  current={node.id === current}
+                  readyToContinue={readyToContinue}
+                />
               </small>
             </button>
           ))}
@@ -451,14 +491,12 @@ export function ChatRunProgress({
                 <strong>
                   {nodes.indexOf(opened) + 1}. {opened.label}
                 </strong>
-                <span>
-                  {opened.id === current && run?.state === 'waiting_input'
-                    ? readyToContinue
-                      ? 'Готов к продолжению'
-                      : 'Нужно решение'
-                    : (stageStates[opened.status ?? 'pending'] ??
-                      opened.status)}
-                </span>
+                <StageStatus
+                  node={opened}
+                  run={run}
+                  current={opened.id === current}
+                  readyToContinue={readyToContinue}
+                />
               </header>
               {run ? (
                 <StageContent

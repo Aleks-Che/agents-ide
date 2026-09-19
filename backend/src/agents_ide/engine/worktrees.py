@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from agents_ide.domain.workspace import collect_workspace, workspace_scope
-from agents_ide.engine.git_commit import RUN_BRANCH_TEMPLATE, git_fingerprint
+from agents_ide.engine.git_commit import RUN_BRANCH_TEMPLATE, git_fingerprint, git_policy_matches
 from agents_ide.engine.git_process import optional_git, run_git, using_transport
 from agents_ide.errors import AppError
 
@@ -66,7 +66,7 @@ def prepare_worktree(runner: Runner) -> None:
         raise AppError("workspace_conflict", "Параметры worktree изменились", 409)
     with using_transport(transport(runner)):
         expected = runner.snapshot.get("dependencies", {}).get("git", {}).get("fingerprint")
-        if expected is not None and git_fingerprint(root) != expected:
+        if expected is not None and not git_policy_matches(git_fingerprint(root), expected):
             raise AppError("external_change_detected", "Git policy changed after preflight", 409)
         if not target.exists():
             if optional_git(root, ["rev-parse", "--verify", f"refs/heads/{branch}"]):

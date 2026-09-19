@@ -11,7 +11,9 @@
 Preflight проверяет входы, все обязательные роли и существование ресурсов direct/group.
 Для Git он только читает репозиторий: проверяет HEAD, чистоту index, dirty policy,
 allowlist, hooks и signing. Git executable и fingerprint конфигурации входят в
-execution_hash и immutable snapshot. Чужие staged-изменения блокируют Start.
+execution_hash и immutable snapshot. Хеш всей конфигурации сохраняется только для
+диагностики и не блокирует запуск или коммит при изменении общих настроек worktree.
+Чужие staged-изменения блокируют Start.
 
 Под резервацией Runner повторяет проверку, сохраняет baseline в БД, затем создаёт
 `refs/agents-ide/run/<run_id>/baseline` и выбирает ветку. Baseline снимается до
@@ -23,7 +25,7 @@ execution_hash и immutable snapshot. Чужие staged-изменения бл�
 `allow_nonoverlap` сохраняет хэши исходных изменений вне общей области записи;
 пока нет подтверждённого ограничения записи адаптера, preflight запрещает этот режим
 для графов с AgentTask/Command. Для серверного графа без этих писателей режим доступен.
-Изменения вне общей allowlist, смена HEAD/ветки/config/hooks и правки файлов во время
+Изменения вне общей allowlist, смена HEAD/ветки/hooks/требования подписи и правки файлов во время
 паузы останавливают продолжение. Git не делает reset, amend, stash, force checkout или push.
 
 ## Коммит и восстановление
@@ -40,14 +42,14 @@ GitCommit фиксирует изменения без обязательног�
 именах и переименования обрабатываются через NUL-разделённые записи. `*` не пересекает
 каталог, `**` поддерживает вложенные каталоги. Ignored и защищённые файлы никогда не
 добавляются даже через `**`; `allow_untracked=false` исключает новые файлы.
-Git clean/EOL-преобразования работают с зафиксированной конфигурацией и контролируемыми
+Git clean/EOL-преобразования работают с текущей конфигурацией и контролируемыми
 процессами. Изменение рабочих файлов во время построения дерева блокирует коммит.
 
 До `git commit` сохраняется immutable git_intent: operation/attempt, parent, branch,
 expected tree, allowlist, message hash, trailer, baseline ref, manifest и hash index,
 необязательный verification ID и политика hooks/signing. Обычный `git commit` сохраняет действие
 hooks и настроенной подписи. После вызова проверяются SHA, parent, actual tree,
-единственный trailer `Agents-Ide-Intent`, рабочие файлы и fingerprint Git.
+единственный trailer `Agents-Ide-Intent`, рабочие файлы, hooks и требование подписи.
 Неожиданный созданный коммит остаётся в истории с диагностикой и не считается проверенным.
 
 Пользовательский index не участвует в staging кандидата. После подтверждённого

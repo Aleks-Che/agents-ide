@@ -378,13 +378,25 @@ def test_adapter_rejects_permission_and_logs_decline(codex_stream_with_options):
     assert declines
 
 
-def test_provider_error_in_turn_status_is_unknown(codex_stream_with_options):
-    stream, _, _ = codex_stream_with_options(force_provider_error=True)
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"message": "private-provider-error", "codexErrorInfo": "other"},
+        {"message": "Connection prematurely closed", "codexErrorInfo": "httpConnectionFailed"},
+        {"message": "Invalid API key", "codexErrorInfo": "unauthorized"},
+        {"message": "Context full", "codexErrorInfo": "contextWindowExceeded"},
+        {"message": "Token budget exceeded", "codexErrorInfo": "usageLimitExceeded"},
+    ],
+)
+def test_provider_error_in_turn_status_permits_handoff(codex_stream_with_options, error):
+    stream, _, _ = codex_stream_with_options(response_error=error)
     adapter = _adapter(stream)
     request = _make_request()
     result = adapter.run(request)
-    assert result.outcome == ExternalOutcome.UNKNOWN
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.can_handoff
     assert not result.no_effect
+    assert "private-provider-error" not in repr(result)
 
 
 def test_long_turn_completes_beyond_request_timeout(codex_stream_with_options):

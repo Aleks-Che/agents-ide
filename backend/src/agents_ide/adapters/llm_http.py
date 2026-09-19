@@ -328,6 +328,7 @@ class HttpLLMAdapter(LLMAdapter):
         started = time.monotonic()
         connection = _connection_dict(request.connection)
         diagnostic_text = ""
+        dispatched = False
 
         def failure(outcome: ExternalOutcome, error: AdapterError, no_effect: bool) -> LLMResult:
             return LLMResult(
@@ -339,6 +340,9 @@ class HttpLLMAdapter(LLMAdapter):
                 elapsed_seconds=time.monotonic() - started,
                 finished_at=datetime.now(tz=UTC),
                 no_effect=no_effect,
+                can_fallback=dispatched
+                and error.code != "interrupted"
+                and not (request.stop_event and request.stop_event.is_set()),
             )
 
         try:
@@ -384,6 +388,7 @@ class HttpLLMAdapter(LLMAdapter):
                 )
             )
         try:
+            dispatched = True
             response, body_bytes = asyncio.run(self._receive(request, url, body, timeout))
             if response.status_code >= 300:
                 return failure(*_classify_http_error(response, self._json_or_none(body_bytes)))
@@ -398,7 +403,15 @@ class HttpLLMAdapter(LLMAdapter):
                     retry_safety="unsafe",
                 )
             )
-        except (TimeoutError, _Interrupted):
+        except _Interrupted:
+            return failure(
+                *_error(
+                    "interrupted",
+                    "Request stopped after dispatch",
+                    outcome=ExternalOutcome.UNKNOWN,
+                )
+            )
+        except TimeoutError:
             return failure(
                 *_error(
                     "provider_response_unknown",

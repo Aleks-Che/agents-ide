@@ -283,6 +283,15 @@ def git_fingerprint(workspace: Path) -> dict[str, Any]:
     }
 
 
+def git_policy_matches(current: dict[str, Any], expected: dict[str, Any]) -> bool:
+    # The full config hash is diagnostic only: worktrees share repository config,
+    # and unrelated changes (e.g. extensions.worktreeConfig) must not block a run.
+    # Explicit fields also keep baselines saved by older versions compatible.
+    return all(
+        current.get(key) == expected.get(key) for key in ("hooks", "hooks_path", "signing_required")
+    )
+
+
 def detect_hooks(workspace: Path) -> tuple[str, ...]:
     return tuple(git_fingerprint(workspace)["hooks"])
 
@@ -359,8 +368,8 @@ def check_workspace(
 ) -> dict[str, dict[str, Any]]:
     if read_head_sha(workspace) != expected_head or read_branch(workspace) != branch:
         raise GitCommitError("external_change_detected", "Branch or HEAD changed externally")
-    if git_fingerprint(workspace) != baseline.fingerprint:
-        raise GitCommitError("external_change_detected", "Git hooks/config changed after Start")
+    if not git_policy_matches(git_fingerprint(workspace), baseline.fingerprint):
+        raise GitCommitError("external_change_detected", "Git hooks/signing changed after Start")
     for item in list_status(workspace):
         if item["code"] != "??" and item["code"][0] != ".":
             raise GitCommitError("git_index_dirty", "User staged changes after Start")
@@ -504,7 +513,7 @@ def execute(
             raise GitCommitError("external_change_detected", "Index changed during recovery")
         if manifest_hash(file_manifest(workspace)) != intent.manifest_hash:
             raise GitCommitError("external_change_detected", "Working files changed after commit")
-        if git_fingerprint(workspace) != baseline.fingerprint:
+        if not git_policy_matches(git_fingerprint(workspace), baseline.fingerprint):
             raise GitCommitError("external_change_detected", "Git policy changed during recovery")
         return CommitResult(intent, existing, intent.expected_tree, False, recovered=True)
     manifest = check_workspace(
@@ -593,9 +602,9 @@ def execute(
                 "Hook changed the committed tree or working files",
                 details={"commit_sha": sha, "actual_tree": actual, "expected_tree": tree},
             )
-        if git_fingerprint(workspace) != baseline.fingerprint:
+        if not git_policy_matches(git_fingerprint(workspace), baseline.fingerprint):
             raise GitCommitError(
-                "external_change_detected", "Git hooks/config changed during commit"
+                "external_change_detected", "Git hooks/signing changed during commit"
             )
         _sync_clean_index(workspace, intent, sha)
         return CommitResult(intent, sha, actual, False, stdout=output.decode("utf-8", "replace"))

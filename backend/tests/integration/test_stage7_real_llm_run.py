@@ -271,7 +271,7 @@ def test_real_llm_run_completes_via_worker(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="DPAPI secrets are Windows-only")
-@pytest.mark.parametrize("status", [404, 503, 429])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 503, 429])
 def test_llm_group_fallback_across_connections_isolates_credentials(
     fake_worker, authenticated, provider_server, tmp_path, status
 ):
@@ -360,16 +360,11 @@ def test_llm_group_fallback_across_connections_isolates_credentials(
         },
     ).json()
     final = _wait_for_terminal(client, headers, run["id"])
-    if status == 503:
-        assert final["state"] == "waiting_input", final
-        assert Handler.authorizations == ["Bearer sk-first"]
-        return
     assert final["state"] == "completed", final
     events = client.get(f"/api/runs/{run['id']}/events", headers=headers).json()
     switched = [e for e in events["events"] if e["type"] == "model_group.candidate_switched"]
     assert switched
-    if status == 429:
-        assert Handler.authorizations == ["Bearer sk-first", "Bearer sk-second"]
+    assert Handler.authorizations == ["Bearer sk-first", "Bearer sk-second"]
     assert any("sk-first" in (auth or "") for auth in Handler.authorizations)
     assert any("sk-second" in (auth or "") for auth in Handler.authorizations)
     assert any("sk-first" in (auth or "") for auth in Handler.authorizations) and any(

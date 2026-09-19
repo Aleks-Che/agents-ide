@@ -54,8 +54,9 @@ class AgentResult:
     tokens_used: int | None = None
     cost_estimated: float | None = None
     budget_quality: str | None = None
-    # A terminal provider rejection allows another agent to continue existing
-    # work. This does not mean the entire attempt had no effects or can be replayed.
+    # A provider/transport failure allows another agent to continue existing
+    # work once the runner confirms process termination. This does not mean the
+    # entire attempt had no effects or can be replayed.
     can_handoff: bool = False
 
     @property
@@ -79,6 +80,9 @@ class LLMResult:
     finished_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
     no_effect: bool = False
     result_schema: str | None = None
+    # A finished text-only provider request can move to another candidate even
+    # when its token usage is unknown. This is not permission to replay tools.
+    can_fallback: bool = False
 
     @property
     def succeeded(self) -> bool:

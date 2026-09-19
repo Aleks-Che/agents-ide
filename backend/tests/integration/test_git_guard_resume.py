@@ -17,7 +17,9 @@ from agents_ide.persistence.models import ArtifactManifest, Run, StepAttempt
 repository = repository_fixture
 
 
-@pytest.mark.parametrize("cause", ["new_ignored", "outside_allowlist", "committed_hook_change"])
+@pytest.mark.parametrize(
+    "cause", ["new_ignored", "config_changed", "outside_allowlist", "committed_hook_change"]
+)
 def test_resume_rechecks_git_guards_before_intent_only(
     authenticated, repository, settings, monkeypatch, cause
 ):
@@ -43,6 +45,8 @@ def test_resume_rechecks_git_guards_before_intent_only(
                     (cache / "README.md").write_text("test cache\n")
                 elif cause == "outside_allowlist":
                     (root / "outside.txt").write_text("unrelated file\n")
+                elif cause == "config_changed":
+                    command(root, "config", "extensions.worktreeConfig", "true")
             return result
 
     project, binding = binding_for(authenticated, repository)
@@ -55,6 +59,12 @@ def test_resume_rechecks_git_guards_before_intent_only(
 
     def legacy_check(workspace, baseline, allowlist, **kwargs):
         manifest = current_check(workspace, baseline, allowlist, **kwargs)
+        if cause == "config_changed":
+            if git.git_fingerprint(workspace) != baseline.fingerprint:
+                raise git.GitCommitError(
+                    "external_change_detected", "Git hooks/config changed after Start"
+                )
+            return manifest
         protected = {
             path: item
             for path, item in manifest.items()
@@ -67,7 +77,7 @@ def test_resume_rechecks_git_guards_before_intent_only(
         return manifest
 
     with monkeypatch.context() as old:
-        if cause == "new_ignored":
+        if cause in {"new_ignored", "config_changed"}:
             old.setattr(git, "check_workspace", legacy_check)
         result = runner.execute(run["id"])
     assert result.final_state == "waiting_input", result
@@ -94,11 +104,12 @@ def test_resume_rechecks_git_guards_before_intent_only(
         assert response.status_code == 200, response.text
         assert before_resume == source_head
         resumed = claim(factory, settings, run).execute(run["id"])
-        if cause == "new_ignored":
+        if cause in {"new_ignored", "config_changed"}:
             assert resumed.final_state == "completed", resumed
             assert command(root, "rev-list", "--count", f"{source_head}..HEAD") == "1"
             assert command(root, "status", "--porcelain") == ""
-            assert (root / ".env").read_text() == "LOCAL_SETTING=test\n"
+            if cause == "new_ignored":
+                assert (root / ".env").read_text() == "LOCAL_SETTING=test\n"
         else:
             assert resumed.final_state == "waiting_input", resumed
             assert resumed.waiting_reason.code == "external_change_detected"

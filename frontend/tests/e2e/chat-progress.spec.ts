@@ -22,7 +22,7 @@ function checkpoint(runId: string, mode: string) {
 test('chat streams stages, sends attempt-scoped replies and controls STOP and START', async ({
   page,
 }) => {
-  test.setTimeout(60000)
+  test.setTimeout(120000)
   await pair(page)
   await page.setViewportSize({ width: 1560, height: 1100 })
   const project = await api(page, 'POST', '/projects', {
@@ -133,6 +133,15 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     'chat-activity-spin',
   )
   await expect(progress.locator('.stage-card')).toHaveCount(1)
+  for (const selector of [
+    '.chat-run-header',
+    '.stage-heading',
+    '.stage-navigation',
+  ]) {
+    await expect(
+      progress.locator(`${selector} .chat-activity-spinner`),
+    ).toHaveCSS('animation-name', 'chat-activity-spin')
+  }
   await expect(progress.locator('.stage-heading')).toHaveText(
     '2. ImplementationВыполняется',
   )
@@ -285,6 +294,7 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     progress.getByRole('button', { name: 'Приостановить выполнение' }),
   ).toBeDisabled()
   checkpoint(run.id, 'paused')
+  await expect(progress.locator('.chat-activity-spinner')).toHaveCount(0)
   await expect(progress).toContainText('На паузе')
   await expect(activity).toHaveCount(0)
   await expect(
@@ -314,6 +324,7 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     'Please also check README',
   )
   checkpoint(run.id, 'waiting-recovery')
+  await expect(progress.locator('.chat-activity-spinner')).toHaveCount(0)
   const warning = progress.locator('.stage-waiting')
   await expect(warning).toBeVisible()
   await expect(projectAttention).toBeVisible()

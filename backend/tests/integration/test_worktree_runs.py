@@ -176,6 +176,22 @@ def claim(factory, settings, run):
     )
 
 
+@pytest.mark.parametrize("mode", ["project", "worktree"])
+def test_shared_config_change_after_start_does_not_block_run(
+    authenticated, repository, settings, monkeypatch, mode
+):
+    project, binding = binding_for(authenticated, repository, mode=mode)
+    run = start(authenticated, project, binding)
+    command(repository, "config", "extensions.worktreeConfig", "true")
+    agent = WritingAgent()
+    monkeypatch.setattr(Runner, "_build_adapters", lambda *_: (agent, None))
+    factory = authenticated[0].app.state.session_factory
+    result = claim(factory, settings, run).execute(run["id"])
+    assert result.final_state == "completed", result
+    assert command(agent.paths[0], "rev-list", "--count", "HEAD") == "2"
+    assert command(agent.paths[0], "status", "--porcelain") == ""
+
+
 def test_four_dialogs_run_and_commit_concurrently_without_touching_source(
     authenticated,
     repository,

@@ -491,7 +491,13 @@ footer span {
   color: #efbc68;
 }
 .chat-activity-spinner {
+  flex-shrink: 0;
   animation: chat-activity-spin 1s linear infinite;
+}
+.execution-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 @keyframes chat-activity-spin {
   to {

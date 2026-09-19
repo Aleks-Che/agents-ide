@@ -1,6 +1,7 @@
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pytest
 from council_support import create, dispatch, document, setup
@@ -176,6 +177,39 @@ def test_group_snapshot_fallback_and_independence(authenticated, tmp_path):
     )
     assert result["state"] == "ready_for_confirmation"
     assert [m["selected_model_id"] for m in result["members"][:2]] == ["b", "a"]
+    assert result["usage"]["external_calls"] == 4
+
+
+def test_group_advances_after_provider_error_with_unknown_usage(
+    authenticated, tmp_path, monkeypatch
+):
+    client, headers = authenticated
+    *_, connection, payload = setup(client, headers, tmp_path)
+    group = client.post(
+        "/api/model_groups/llm",
+        headers=headers,
+        json={
+            "name": "provider failures",
+            "members": [
+                {"provider_connection_id": connection["id"], "model_id": model}
+                for model in ("alpha", "beta")
+            ],
+        },
+    ).json()
+    payload["participants"][0]["selection"] = {"kind": "group", "group_id": group["id"]}
+    job = create(client, headers, payload)
+    original = FakeLLMAdapter.run
+
+    def call(self, request):
+        result = original(self, replace(request, attempt_index=1))
+        if request.model_id == "alpha":
+            return replace(result, outcome=ExternalOutcome.UNKNOWN, can_fallback=True)
+        return result
+
+    monkeypatch.setattr(FakeLLMAdapter, "run", call)
+    result = dispatch(client, job)
+    assert result["state"] == "ready_for_confirmation"
+    assert result["members"][0]["selected_model_id"] == "beta"
     assert result["usage"]["external_calls"] == 4
 
 

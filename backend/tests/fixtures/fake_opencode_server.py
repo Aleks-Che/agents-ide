@@ -195,8 +195,9 @@ class Handler(BaseHTTPRequestHandler):
             model["modelID"] == "recoverable-quota" and not self.sessions[sid].get("prompts")
         )
         connection_error = model["modelID"] in {"connection-failed", "connection-empty"}
-        provider_error = quota_error or connection_error
-        empty_error = model["modelID"] in {"quota-empty", "connection-empty"}
+        bad_request = model["modelID"] in {"bad-request", "bad-request-empty"}
+        provider_error = quota_error or connection_error or bad_request
+        empty_error = model["modelID"] in {"quota-empty", "connection-empty", "bad-request-empty"}
         if provider_error and not empty_error:
             (Path(self.directory) / "partial-work.txt").write_text(
                 "preserve this work", encoding="utf-8"
@@ -354,6 +355,18 @@ class Handler(BaseHTTPRequestHandler):
                     "statusCode": 429,
                     "isRetryable": True,
                     "message": "The Token Plan usage limit has been reached. (2067)",
+                },
+            }
+        elif bad_request:
+            info["error"] = {
+                "name": "APIError",
+                "data": {
+                    "statusCode": 400,
+                    "isRetryable": False,
+                    "message": "Request failed",
+                    "responseBody": json.dumps(
+                        {"error": {"param": "Connection prematurely closed BEFORE response"}}
+                    ),
                 },
             }
         elif connection_error:

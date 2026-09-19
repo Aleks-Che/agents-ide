@@ -142,23 +142,26 @@ def test_request_loaded_before_pause_update_remains_compatible(server):
     assert adapter.run(legacy_request).succeeded
 
 
-@pytest.mark.parametrize("status", [404, 429, 500])
-def test_post_dispatch_http_error_never_permits_fallback(server, status):
+@pytest.mark.parametrize("status", [400, 404, 408, 429, 500])
+def test_post_dispatch_http_error_permits_handoff_after_process_stop(server, status):
     handler, adapter, request = server
     handler.response_status = status
     result = adapter.run(request)
-    assert result.outcome == ExternalOutcome.UNKNOWN
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.can_handoff
     assert not result.no_effect
     assert len([r for r in handler.requests if r["path"].endswith("/message")]) == 1
 
 
-def test_provider_error_in_successful_http_is_not_success(server):
+@pytest.mark.parametrize("name", ["APIError", "ProviderAuthError", "UnknownError", "FutureError"])
+def test_provider_error_in_successful_http_permits_handoff(server, name):
     handler, adapter, request = server
-    handler.response_error = {"name": "APIError", "data": {"message": "private-provider-error"}}
+    handler.response_error = {"name": name, "data": {"message": "private-provider-error"}}
     result = adapter.run(request)
-    assert result.outcome == ExternalOutcome.UNKNOWN
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
     assert "private-provider-error" not in repr(result)
-    assert not result.can_handoff
+    assert result.can_handoff
+    assert not result.no_effect
 
 
 @pytest.mark.parametrize("prior_output", [False, True])
@@ -173,6 +176,11 @@ def test_provider_error_in_successful_http_is_not_success(server):
         ),
         (429, "Too many requests", True, "provider_rate_limited"),
         (402, "Payment required", True, "provider_quota_exhausted"),
+        (400, "Connection prematurely closed BEFORE response", False, "provider_unavailable"),
+        (403, "Forbidden", False, "provider_unauthorized"),
+        (404, "Model does not exist", False, "provider_unavailable"),
+        (422, "Invalid parameter", False, "provider_unavailable"),
+        (None, "Unknown provider failure", False, "provider_unavailable"),
         (
             None,
             "Cannot connect to API: Unable to connect. Is the computer able to access the url?",
@@ -210,7 +218,8 @@ def test_native_provider_401_is_safe_only_without_prior_output(server, prior_out
     }
     result = adapter.run(request)
     if prior_output:
-        assert result.outcome == ExternalOutcome.UNKNOWN
+        assert result.outcome == ExternalOutcome.UNAVAILABLE
+        assert result.can_handoff
         assert not result.no_effect
     else:
         assert result.outcome == ExternalOutcome.UNAVAILABLE
@@ -231,7 +240,8 @@ def test_response_limit_is_enforced_while_streaming_and_aborts(server):
     handler.response_size = 10000
     adapter.max_response_bytes = 1024
     result = adapter.run(request)
-    assert result.outcome == ExternalOutcome.UNKNOWN
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.can_handoff
     assert any(r["path"].endswith("/abort") for r in handler.requests)
 
 
@@ -251,7 +261,8 @@ def test_stream_loss_aborts_and_never_succeeds(server):
     handler.close_stream = True
     handler.delay = 0.4
     result = adapter.run(request)
-    assert result.outcome == ExternalOutcome.UNKNOWN
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.can_handoff
     assert any(r["path"].endswith("/abort") for r in handler.requests)
 
 
@@ -468,7 +479,8 @@ def test_broken_tool_stream_is_aborted_not_returned_as_success(server):
             request, prompt="broken tool stream slow", emit_event=lambda t, p: events.append((t, p))
         )
     )
-    assert result.outcome == ExternalOutcome.INVALID_FORMAT
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.can_handoff
     assert result.error.code == "provider_tool_protocol_invalid"
     assert not result.no_effect
     assert handler.aborts
@@ -709,6 +721,7 @@ def test_group_auth_fallback_uses_new_native_session(
     [
         ("quota-exhausted", "provider_quota_exhausted"),
         ("connection-failed", "provider_unavailable"),
+        ("bad-request", "provider_unavailable"),
     ],
 )
 def test_group_provider_handoff_preserves_partial_work_and_survives_recovery(
@@ -789,6 +802,7 @@ def test_group_provider_handoff_preserves_partial_work_and_survives_recovery(
     [
         ("quota-exhausted", "quota-empty", "provider_quota_exhausted"),
         ("connection-failed", "connection-empty", "provider_unavailable"),
+        ("bad-request", "bad-request-empty", "provider_unavailable"),
     ],
 )
 def test_group_waits_only_after_all_candidates_are_unavailable(
@@ -814,7 +828,7 @@ def test_group_waits_only_after_all_candidates_are_unavailable(
         assert runtime["agent_handoff"]["tool_calls"][0]["summary"] == "partial-work.txt"
 
 
-@pytest.mark.parametrize("model", ["quota-exhausted", "connection-failed"])
+@pytest.mark.parametrize("model", ["quota-exhausted", "connection-failed", "bad-request"])
 def test_provider_handoff_waits_if_old_process_stop_is_unconfirmed(
     authenticated, settings, tmp_path, launch_fixture, monkeypatch, model
 ):

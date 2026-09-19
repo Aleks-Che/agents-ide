@@ -267,7 +267,7 @@ export function ChatView({
       />
       {selectedRun ? (
         <ChatRunProgress
-          key={selectedRun.id}
+          key={`progress:${selectedRun.id}`}
           runId={selectedRun.id}
           onDetails={() => setOpenRunId(selectedRun.id)}
           onNewRun={() => setLaunchOpen(true)}
@@ -407,7 +407,7 @@ export function ChatView({
       ) : null}
       {openRunId ? (
         <RunScreen
-          key={openRunId}
+          key={`details:${openRunId}`}
           runId={openRunId}
           onClose={() => setOpenRunId(null)}
         />

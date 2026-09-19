@@ -225,6 +225,12 @@ class OpenCodeAdapter(AgentAdapter):
             safe: bool = False,
             interruption_confirmed: bool = False,
         ) -> AgentResult:
+            can_handoff = sent and code not in {
+                "interrupted",
+                "permission_denied",
+                "configuration_invalid",
+                "session_resume_unavailable",
+            }
             details: dict[str, Any] = (
                 {"interruption_confirmed": True} if interruption_confirmed else {}
             )
@@ -239,12 +245,14 @@ class OpenCodeAdapter(AgentAdapter):
                     "exception_type": type(error).__name__,
                 }
             return AgentResult(
-                outcome,
-                "",
+                ExternalOutcome.UNAVAILABLE if can_handoff else outcome,
+                text_tail,
                 None,
                 None,
+                tool_calls=tuple(tool_progress.values())[-20:],
                 error=AdapterError(code, code, "safe" if safe else "unknown", details),
                 no_effect=safe,
+                can_handoff=can_handoff,
                 elapsed_seconds=time.monotonic() - started,
             )
 
@@ -694,6 +702,10 @@ class OpenCodeAdapter(AgentAdapter):
                     limit=self.max_response_bytes,
                 )
             if response.status_code != 200:
+                if response.status_code not in {401, 403}:
+                    # The local harness may have dispatched tools before its HTTP
+                    # request failed. Stop it and hand off the existing workspace.
+                    return fail("server_unavailable", ExternalOutcome.UNAVAILABLE)
                 return self._http_failure(response.status_code, dispatched=True)
             if permission.is_set():
                 return fail("permission_denied", ExternalOutcome.PERMISSION_DENIED)
@@ -747,41 +759,6 @@ class OpenCodeAdapter(AgentAdapter):
                 data = native_error.get("data", {}) if isinstance(native_error, dict) else {}
                 from agents_ide.adapters.provider_limits import limit_error_code
 
-                handoff_code = None
-                if (
-                    isinstance(native_error, dict)
-                    and native_error.get("name") == "APIError"
-                    and isinstance(data, dict)
-                ):
-                    status = data.get("statusCode")
-                    handoff_code = limit_error_code(data, status)
-                    if handoff_code is None and (
-                        data.get("isRetryable") is True
-                        or (type(status) is int and (status == 408 or 500 <= status < 600))
-                    ):
-                        # OpenCode has finished this turn after exhausting its
-                        # provider retries. Connection failures often have no HTTP
-                        # status at all; isRetryable is the native classification.
-                        handoff_code = "provider_unavailable"
-                if handoff_code:
-                    # The native message completed with a definite rejection.
-                    # Earlier tool effects remain in the workspace: transfer the
-                    # task, never claim that replaying the whole attempt is safe.
-                    return AgentResult(
-                        ExternalOutcome.UNAVAILABLE,
-                        text_tail,
-                        None,
-                        None,
-                        tool_calls=tuple(tool_progress.values())[-20:],
-                        error=AdapterError(
-                            handoff_code,
-                            handoff_code,
-                            "unknown",
-                            {"status": data.get("statusCode"), "native_error": "APIError"},
-                        ),
-                        can_handoff=True,
-                        elapsed_seconds=time.monotonic() - started,
-                    )
                 if (
                     isinstance(native_error, dict)
                     and native_error.get("name") == "APIError"
@@ -794,8 +771,30 @@ class OpenCodeAdapter(AgentAdapter):
                     and all(message_roles.get(mid) == "user" for mid in tuple(activity_message_ids))
                 ):
                     return fail("provider_unauthorized", ExternalOutcome.UNAVAILABLE, safe=True)
-                # Provider errors can follow useful tools/text; do not guess no_effect.
-                return fail("provider_result_unknown", ExternalOutcome.UNKNOWN)
+                # Every completed native error permits a handoff, even HTTP 400
+                # or an unfamiliar provider error marked isRetryable=false. That
+                # flag controls retrying this provider, not trying another one.
+                # The runner stops the process tree before transferring work.
+                data = data if isinstance(data, dict) else {}
+                status = data.get("statusCode")
+                handoff_code = limit_error_code(data, status) or (
+                    "provider_unauthorized" if status in (401, 403) else "provider_unavailable"
+                )
+                return AgentResult(
+                    ExternalOutcome.UNAVAILABLE,
+                    text_tail,
+                    None,
+                    None,
+                    tool_calls=tuple(tool_progress.values())[-20:],
+                    error=AdapterError(
+                        handoff_code,
+                        handoff_code,
+                        "unknown",
+                        {"status": status if type(status) is int else None},
+                    ),
+                    can_handoff=True,
+                    elapsed_seconds=time.monotonic() - started,
+                )
             if info.get("finish") not in {"stop", "end_turn", "length"}:
                 return fail("provider_result_incomplete", ExternalOutcome.UNKNOWN)
             text = "".join(

@@ -575,6 +575,8 @@ class Runner:
         details = json.loads(attempt.error_details_json or "{}")
         if attempt.external_outcome == "unavailable" and details.get("can_handoff"):
             return None  # Terminal agent rejection; durable cursor continues existing work.
+        if attempt.external_outcome == "unavailable" and details.get("can_fallback"):
+            return None  # Finished LLM call; the next candidate was saved atomically.
         if (
             attempt.external_outcome in {"retryable_failure", "unavailable"}
             and attempt.retry_safety == "safe"
@@ -2497,7 +2499,13 @@ class Runner:
         previous: dict[str, Any] | None = None
         diagnostics: list[dict[str, Any]] = list(self.runtime.get("candidate_history", []))
         saved_handoff = self.runtime.get("agent_handoff") or {}
-        if saved_handoff.get("execution_id") == visit.execution_id and diagnostics:
+        if diagnostics and (
+            saved_handoff.get("execution_id") == visit.execution_id
+            or (
+                node["type"] == "LLMRequest"
+                and diagnostics[-1]["member_index"] < self.runtime.get("next_candidate_index", 0)
+            )
+        ):
             previous = diagnostics[-1]
         if self.runtime.get("retry_at") and (
             waiting := self._wait_retry(visit, self.runtime["retry_at"])
@@ -2947,6 +2955,13 @@ class Runner:
                     stop_event=cast(threading.Event, request.stop_event),
                     allow_pause=node["type"] == "AgentTask",
                 )
+                can_fallback = (
+                    isinstance(result, LLMResult)
+                    and result.can_fallback
+                    and bool(config.get("model_group_id"))
+                )
+                if can_fallback:
+                    result = replace(result, outcome=ExternalOutcome.UNAVAILABLE)
                 can_handoff = (
                     isinstance(result, AgentResult)
                     and result.outcome == ExternalOutcome.UNAVAILABLE
@@ -3002,7 +3017,9 @@ class Runner:
                             return wait
                         continue
                     reason = "retries_exhausted"
-                elif result.outcome == ExternalOutcome.UNAVAILABLE and (safe or can_handoff):
+                elif result.outcome == ExternalOutcome.UNAVAILABLE and (
+                    safe or can_handoff or can_fallback
+                ):
                     reason = result.error.code if result.error else "unavailable"
                     if can_handoff:
                         continuation = {}
@@ -3054,7 +3071,7 @@ class Runner:
                 previous = {**metadata, "reason": reason}
                 diagnostics.append(previous)
                 with self._write() as (session, run):
-                    if not can_handoff:
+                    if not can_handoff and not can_fallback:
                         self.runtime["candidate_history"].append(previous)
                     self.runtime["next_candidate_index"] = candidate["member_index"] + 1
                     self._persist(run)
@@ -3335,6 +3352,12 @@ class Runner:
                 and result.outcome == ExternalOutcome.UNAVAILABLE
                 and result.can_handoff
             )
+            can_fallback = (
+                isinstance(result, LLMResult)
+                and result.can_fallback
+                and result.outcome == ExternalOutcome.UNAVAILABLE
+                and bool(json.loads(attempt.selection_json).get("group_id"))
+            )
             unknown = result.outcome in {
                 ExternalOutcome.UNKNOWN,
                 ExternalOutcome.TRANSPORT_DROPPED,
@@ -3343,6 +3366,7 @@ class Runner:
                 result.outcome != ExternalOutcome.SUCCEEDED
                 and not result.no_effect
                 and not can_handoff
+                and not can_fallback
                 and result.outcome
                 not in {ExternalOutcome.PERMISSION_DENIED, ExternalOutcome.INVALID_FORMAT}
             )
@@ -3381,6 +3405,14 @@ class Runner:
                         "server_version": native.get("server_version"),
                     }
             selection = json.loads(attempt.selection_json)
+            if can_fallback:
+                self.runtime["next_candidate_index"] = selection["member_index"] + 1
+                self.runtime["candidate_history"].append(
+                    {
+                        **selection,
+                        "reason": result.error.code if result.error else "provider_unavailable",
+                    }
+                )
             if can_handoff:
                 assert isinstance(result, AgentResult)
                 prior_handoff = self.runtime.get("agent_handoff") or self.runtime.get(
@@ -3469,6 +3501,7 @@ class Runner:
                             "details": result.error.details,
                             "no_effect": result.no_effect,
                             "can_handoff": can_handoff,
+                            "can_fallback": can_fallback,
                         }
                     )
                 )
@@ -3762,6 +3795,15 @@ class Runner:
                 self.runtime["backward_transitions"] += 1
                 self.runtime["cycle_id"] += 1
                 self.runtime["work"]["cycle_id"] = self.runtime["cycle_id"]
+                from agents_ide.engine.loops import loop_body_nodes
+
+                # Reset the visible iteration without invalidating results used
+                # by expressions or removing earlier attempts from history.
+                self.runtime.setdefault("loop_observation_cycles", {}).update(
+                    dict.fromkeys(
+                        loop_body_nodes(self.snapshot["graph"], edge), self.runtime["cycle_id"]
+                    )
+                )
             self.runtime["next_node_id"] = target
             self.runtime["last_transition"] = {
                 "edge_id": edge.get("id") or edge.get("edge_id"),

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from agents_ide.config import Settings
 from agents_ide.domain.common import new_id, to_json, utc_now
 from agents_ide.engine.events import append_event
+from agents_ide.engine.loops import loop_body_nodes
 from agents_ide.persistence.database import create_database
 from agents_ide.persistence.models import AgentSession, Run, StepAttempt, StepExecution
 from agents_ide.services.run_messages import claim_message, finish_message
@@ -201,7 +202,7 @@ with Session(engine) as session:
             {"action": "retry_attempt", "node_id": run.current_node_id, "blockers": []}
         )
     else:
-        node_id = "first" if mode == "first" else "second"
+        node_id = "first" if mode in {"first", "loop-next"} else "second"
         for attempt in session.scalars(
             select(StepAttempt).join(StepExecution).where(StepExecution.run_id == run_id)
         ):
@@ -211,13 +212,34 @@ with Session(engine) as session:
         ):
             execution.status = "succeeded"
         execution_id, attempt_id = run_id[:20] + node_id, run_id[:20] + node_id + "a"
+        runtime = json.loads(run.runtime_json or "{}")
+        cycle = 1
+        if mode == "loop-next":
+            cycle = runtime["cycle_id"] + 1
+            execution_id, attempt_id = new_id(), new_id()
+            for completed in ("start", "route"):
+                session.add(
+                    StepExecution(
+                        id=new_id(),
+                        run_id=run_id,
+                        node_id=completed,
+                        visit_index=1,
+                        cycle_id=cycle - 1,
+                        scope="main",
+                        status="succeeded",
+                    )
+                )
+            graph = json.loads(run.snapshot_json)["graph"]
+            edge = next(edge for edge in graph["edges"] if edge.get("loop"))
+            runtime["loop_observation_cycles"] = dict.fromkeys(loop_body_nodes(graph, edge), cycle)
+            runtime["loop_counts"]["repair"] += 1
         session.add(
             StepExecution(
                 id=execution_id,
                 run_id=run_id,
                 node_id=node_id,
-                visit_index=1,
-                cycle_id=1,
+                visit_index=2 if mode == "loop-next" else 1,
+                cycle_id=cycle,
                 scope="main",
                 status="running",
                 attempt_count=1,
@@ -234,8 +256,7 @@ with Session(engine) as session:
         )
         session.flush()
         run.state = "running"
-        runtime = json.loads(run.runtime_json or "{}")
-        runtime.update(cycle_id=1, next_node_id=node_id, work={"scope": "main"})
+        runtime.update(cycle_id=cycle, next_node_id=node_id, work={"scope": "main"})
         run.runtime_json = to_json(runtime)
         run.state_version += 1
         run.current_node_id, run.current_execution_id, run.current_attempt_id = (

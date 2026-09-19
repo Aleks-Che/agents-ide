@@ -252,6 +252,32 @@ def test_commit_intent_is_saved_before_effect_and_recovers_without_duplicate(rep
     assert again.sha == sha and command(repository, "rev-list", "--count", "master..HEAD") == "1"
 
 
+@pytest.mark.parametrize("when", ["before_commit", "during_commit", "before_recovery"])
+def test_shared_config_changes_do_not_block_commit_or_recovery(repository, when):
+    value = baseline(repository)
+    (repository / "src" / "a.txt").write_text("change\n")
+    saved = intent(value)
+
+    def change_config():
+        command(repository, "config", "extensions.worktreeConfig", "true")
+        assert git.git_fingerprint(repository)["config_hash"] != value.fingerprint["config_hash"]
+
+    def on_event(type_, body):
+        if when == "during_commit" and type_ == "git.commit_created":
+            change_config()
+
+    if when == "before_commit":
+        change_config()
+    result = git.execute(repository, value, saved, on_event=on_event)
+    if when == "before_recovery":
+        change_config()
+    recovered = git.execute(repository, value, saved, recover_only=True)
+    assert recovered.recovered and recovered.sha == result.sha
+    assert command(repository, "rev-list", "--count", "master..HEAD") == "1"
+    assert command(repository, "show", "HEAD:src/a.txt") == "change"
+    assert command(repository, "status", "--porcelain") == ""
+
+
 def test_recovery_without_commit_never_executes_git_commit(repository):
     value = baseline(repository)
     (repository / "src" / "a.txt").write_text("change\n")

@@ -1,6 +1,16 @@
 import { CircleAlert, LoaderCircle } from 'lucide-react'
 import type { ActivityStatus } from '../api/activity'
 
+export function ActivitySpinner() {
+  return (
+    <LoaderCircle
+      className="chat-activity-spinner"
+      size={14}
+      aria-hidden="true"
+    />
+  )
+}
+
 export function ActivityIndicators({
   activity,
   scope,
@@ -16,11 +26,7 @@ export function ActivityIndicators({
     <span className="activity-indicators">
       {activity.running ? (
         <span role="status" aria-label={runningLabel} title={runningLabel}>
-          <LoaderCircle
-            className="chat-activity-spinner"
-            size={14}
-            aria-hidden="true"
-          />
+          <ActivitySpinner />
         </span>
       ) : null}
       {activity.attention ? (
