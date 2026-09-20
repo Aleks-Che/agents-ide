@@ -26,6 +26,7 @@ from agents_ide.adapters.base import (
     AgentResult,
     ExternalOutcome,
 )
+from agents_ide.adapters.history import OMITTED_HISTORY_EVENTS, tool_summaries
 from agents_ide.adapters.model_catalog import CatalogModels, codex_metadata, parameters_for
 from agents_ide.adapters.native_events import archive_native
 from agents_ide.errors import AppError
@@ -389,6 +390,7 @@ class CodexAdapter(AgentAdapter):
             return self._run(request)
 
     def _run(self, request: AgentAdapterRequest) -> AgentResult:
+        record_tool_history = getattr(request, "record_tool_history", False)
         started = time.monotonic()
         deadline = request.deadline_at or (
             time.time() + self.turn_timeout if self.turn_timeout is not None else float("inf")
@@ -422,6 +424,8 @@ class CodexAdapter(AgentAdapter):
                 raise InterruptedError
 
         def emit(event_type: str, **payload: Any) -> None:
+            if not record_tool_history and event_type in OMITTED_HISTORY_EVENTS:
+                return
             if request.emit_event:
                 request.emit_event(event_type, {"session_id": self.external_session_id, **payload})
 
@@ -564,7 +568,7 @@ class CodexAdapter(AgentAdapter):
             )
             phase = "record_session"
             archive_native(
-                request.emit_event,
+                request.emit_event if record_tool_history else None,
                 "codex",
                 "thread/resumed" if resumed else "thread/started",
                 thread,
@@ -742,7 +746,13 @@ class CodexAdapter(AgentAdapter):
                 native_turn = params.get("turnId", (params.get("turn") or {}).get("id"))
                 matching = params.get("threadId") == returned_id and native_turn == self._turn_id
                 if matching or (params.get("threadId") == returned_id and native_turn is None):
-                    archive_native(request.emit_event, "codex", method, message, returned_id)
+                    archive_native(
+                        request.emit_event if record_tool_history else None,
+                        "codex",
+                        method,
+                        message,
+                        returned_id,
+                    )
                 if "id" in message:
                     if (
                         matching
@@ -823,7 +833,9 @@ class CodexAdapter(AgentAdapter):
                         texts[key] = item["text"]  # authoritative; never duplicate deltas
                         phases[key] = str(item.get("phase") or "")
                     elif item.get("type") not in {"userMessage", "reasoning", "plan"}:
-                        tools[key] = item
+                        tools[key] = item if record_tool_history else tool_summaries([item])[0]
+                        if not record_tool_history and len(tools) > 20:
+                            tools.pop(next(iter(tools)))
                         emit("agent.tool_call", item=item)
                 elif method == "thread/tokenUsage/updated":
                     value = params.get("tokenUsage", {}).get("last", {}).get("totalTokens")
@@ -922,7 +934,7 @@ class CodexAdapter(AgentAdapter):
                         and (params.get("turn") or {}).get("id") == self._turn_id
                     ):
                         archive_native(
-                            request.emit_event,
+                            request.emit_event if record_tool_history else None,
                             "codex",
                             "turn/completed",
                             event,

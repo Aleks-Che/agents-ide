@@ -3,12 +3,13 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
 from sqlalchemy import select
 from test_stage4_review import make_run
 from test_stage5_review import command, run_now, wait_for
 
 from agents_ide.adapters.base import ExternalOutcome, LLMResult
-from agents_ide.domain.common import to_json
+from agents_ide.domain.common import to_json, utc_now
 from agents_ide.engine.runner import Runner
 from agents_ide.engine.visits import load_latest_results
 from agents_ide.persistence.models import CommandJournal, Run, StepAttempt, StepExecution
@@ -22,6 +23,57 @@ def stage_payload(factory, run, node_id="check"):
             .order_by(StepExecution.visit_index.desc())
         )
         return {"node_id": node_id, "execution_id": execution.id}
+
+
+@pytest.mark.parametrize("state", ["waiting_input", "paused", "stopped", "failed"])
+@pytest.mark.parametrize("hidden_by_old_restart", [False, True])
+def test_stopped_stage_can_restart_with_old_configuration_blocker(
+    authenticated, tmp_path, settings, monkeypatch, state, hidden_by_old_restart
+):
+    run, factory = make_run(authenticated, tmp_path)
+    with monkeypatch.context() as failing:
+        failing.setattr(
+            Runner,
+            "_external",
+            lambda self, node, visit, adapter: self._waiting(
+                "configuration_invalid", {"reason": "test_configuration_failure"}, visit
+            ),
+        )
+        assert run_now(run, factory, settings).final_state == "waiting_input"
+    payload = stage_payload(factory, run)
+    with factory() as session:
+        row = session.get(Run, run["id"])
+        row.state = state
+        if state == "failed":
+            row.finished_at = utc_now()
+        if hidden_by_old_restart:
+            runtime = json.loads(row.runtime_json)
+            runtime["invalidated_executions"] = [payload["execution_id"]]
+            row.runtime_json = to_json(runtime)
+            row.current_execution_id = row.current_attempt_id = None
+            target = json.loads(row.resume_target_json)
+            target.update(action="dispatch_next", execution_id=None)
+            row.resume_target_json = to_json(target)
+            session.get(StepExecution, payload["execution_id"]).status = "interrupted"
+        session.commit()
+    client, headers = authenticated
+    snapshot = client.get(f"/api/runs/{run['id']}/snapshot", headers=headers).json()
+    node = next(node for node in snapshot["observation"]["nodes"] if node["id"] == "check")
+    assert node["execution_id"] == payload["execution_id"]
+    assert node["restart_blocked_reason"] is None
+    response = command(authenticated, run, "restart_stage", payload)
+    assert response.status_code == 200, response.text
+    with factory() as session:
+        row = session.get(Run, run["id"])
+        assert row.finished_at is None
+        assert json.loads(row.resume_target_json)["blockers"] == []
+    assert run_now(run, factory, settings).final_state == "completed"
+    with factory() as session:
+        assert session.get(StepExecution, payload["execution_id"]).status == "interrupted"
+        visits = list(
+            session.scalars(select(StepExecution).where(StepExecution.node_id == "check"))
+        )
+        assert len(visits) == 2
 
 
 def test_unknown_attempt_restarts_once_without_erasing_history(
@@ -61,6 +113,44 @@ def test_unknown_attempt_restarts_once_without_erasing_history(
         assert attempts[0].execution_id != attempts[1].execution_id
         assert all(a.result_artifact_id for a in attempts)
         assert len(list(session.scalars(select(CommandJournal)))) == 1
+
+
+@pytest.mark.parametrize("stopped_node", ["s", "condition", "e"])
+def test_stopped_service_stage_can_restart(
+    authenticated, tmp_path, settings, monkeypatch, stopped_node
+):
+    graph = {
+        "nodes": [
+            {"id": "s", "type": "Start"},
+            {"id": "condition", "type": "Condition", "expression": {"const": True}},
+            {"id": "e", "type": "End"},
+        ],
+        "edges": [
+            {"from": "s", "to": "condition"},
+            {"from": "condition", "to": "e", "when": "true"},
+            {"from": "condition", "to": "e", "when": "false"},
+            {"from": "condition", "to": "e", "when": "unknown"},
+        ],
+    }
+    run, factory = make_run(authenticated, tmp_path, graph=graph)
+    original = Runner._finish_visit
+
+    def stop_at_stage(self, node, visit, result):
+        if node["id"] == stopped_node:
+            return self._waiting("missing_data", {"reason": "test_stop"}, visit)
+        return original(self, node, visit, result)
+
+    with monkeypatch.context() as stopped:
+        stopped.setattr(Runner, "_finish_visit", stop_at_stage)
+        assert run_now(run, factory, settings).final_state == "waiting_input"
+    payload = stage_payload(factory, run, stopped_node)
+    client, headers = authenticated
+    snapshot = client.get(f"/api/runs/{run['id']}/snapshot", headers=headers).json()
+    node = next(n for n in snapshot["observation"]["nodes"] if n["id"] == stopped_node)
+    assert node["restart_blocked_reason"] is None
+    response = command(authenticated, run, "restart_stage", payload)
+    assert response.status_code == 200, response.text
+    assert run_now(run, factory, settings).final_state == "completed"
 
 
 def test_running_stage_stops_before_fresh_visit(authenticated, tmp_path, settings):

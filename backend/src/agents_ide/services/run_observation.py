@@ -94,6 +94,7 @@ class HistoryPage(BaseModel):
 
 def build_observation(session: Session, run: Run) -> RunObservation:
     from agents_ide.services.run_loops import ADJUSTABLE_STATES
+    from agents_ide.services.stage_restart import recoverable_restart_execution
 
     graph = effective_snapshot(run).get("graph", {})
     runtime = json.loads(run.runtime_json or "{}")
@@ -124,6 +125,8 @@ def build_observation(session: Session, run: Run) -> RunObservation:
         for node_id, execution in executions.items()
         if execution.cycle_id >= runtime.get("loop_observation_cycles", {}).get(node_id, 0)
     }
+    if recovered := recoverable_restart_execution(session, run, runtime):
+        executions[recovered.node_id] = recovered
     latest_attempt = (
         select(StepAttempt.execution_id, func.max(StepAttempt.attempt_index).label("attempt"))
         .where(StepAttempt.execution_id.in_([row.id for row in executions.values()]))
@@ -257,15 +260,17 @@ def read_history(
     execution_id: str | None,
 ) -> HistoryPage:
     from sqlalchemy import or_
+    from sqlalchemy.orm import load_only
 
     from agents_ide.engine.events_stream import MAX_BUFFER_BYTES, _serialize_event
 
     session.connection().exec_driver_sql("BEGIN")
-    if session.get(Run, run_id) is None:
+    if session.get(Run, run_id, options=[load_only(Run.id)]) is None:
         raise AppError("run_not_found", "Run не найден", 404)
     minimum, maximum = session.execute(
-        select(func.min(RunEvent.sequence), func.max(RunEvent.sequence)).where(
-            RunEvent.run_id == run_id
+        select(
+            select(func.min(RunEvent.sequence)).where(RunEvent.run_id == run_id).scalar_subquery(),
+            select(func.max(RunEvent.sequence)).where(RunEvent.run_id == run_id).scalar_subquery(),
         )
     ).one()
     query = select(RunEvent).where(RunEvent.run_id == run_id)

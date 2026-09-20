@@ -10,7 +10,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import URL, Engine, create_engine, event
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import QueuePool
 
 from agents_ide.config import Settings
 
@@ -34,7 +34,13 @@ def create_database(settings: Settings) -> Engine:
         URL.create("sqlite", database=str(settings.database_path)),
         # Short SQLite waits are polling intervals, never an execution deadline.
         connect_args={"check_same_thread": False, "timeout": 0.1},
-        poolclass=NullPool,
+        # Keep page caches and WAL handles across short polls. NullPool reopened
+        # the file for every query and checkpointed when the last connection closed.
+        poolclass=QueuePool,
+        pool_size=5,
+        # Keep only five idle connections, without capping concurrent dispatches
+        # or making nested sessions wait for another session's connection.
+        max_overflow=-1,
     )
 
     @event.listens_for(engine, "connect")

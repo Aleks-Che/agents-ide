@@ -35,6 +35,7 @@ from agents_ide.adapters.base import (
     LLMResult,
 )
 from agents_ide.adapters.fake import FakeAgentAdapter, FakeLLMAdapter, parse_fake_scenario
+from agents_ide.adapters.history import tool_summaries
 from agents_ide.domain.common import new_id, to_json, utc_now
 from agents_ide.domain.contracts import RunState
 from agents_ide.domain.graph_ast import (
@@ -54,6 +55,7 @@ from agents_ide.engine import artifacts, context_sources, events, visits
 from agents_ide.engine import commands as command_engine
 from agents_ide.engine.queue import owned_job
 from agents_ide.engine.run_configuration import effective_snapshot, harness_configuration_matches
+from agents_ide.engine.stream_buffer import ProgressBatch, StreamEventBuffer
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import (
     AgentSession,
@@ -1425,6 +1427,7 @@ class Runner:
         deadline_at: float | None,
         stop_event: threading.Event,
         allow_pause: bool = False,
+        progress: StreamEventBuffer | None = None,
     ) -> AgentResult | LLMResult:
         import time
 
@@ -1436,7 +1439,12 @@ class Runner:
 
         def invoke() -> None:
             try:
-                results.append(fn())
+                try:
+                    result = fn()
+                finally:
+                    if progress:
+                        progress.flush()
+                results.append(result)
             except AppError as exc:
                 results.append(
                     LLMResult(
@@ -1467,19 +1475,30 @@ class Runner:
         thread = threading.Thread(target=invoke, name="adapter-call", daemon=True)
         thread.start()
         stop_started: float | None = None
+        last_control_poll = 0.0
         last_heartbeat = 0.0
         try:
             while not done.wait(0.05):
-                self._check_owned()
+                if self.abort.is_set():
+                    self._check_owned()
+                if progress:
+                    progress.flush_due()
                 now = time.monotonic()
-                if now - last_heartbeat >= 0.25:
+                # STOP/PAUSE need prompt reads, not a durable write and process
+                # tree inspection every 250 ms. Keep those on a separate clock.
+                if now - last_control_poll >= 0.25:
+                    with self.session_factory() as session:
+                        owned_job(session, self.run_id, self.worker_id, self.generation)
+                        state = session.scalar(select(Run.state).where(Run.id == self.run_id))
+                    last_control_poll = now
+                    if state == "stop_requested" or (allow_pause and state == "pause_requested"):
+                        stop.set()
+                        stop_started = stop_started or now
+                if now - last_heartbeat >= 1.0:
                     with self._write() as (session, run):
                         attempt = session.get(StepAttempt, attempt_id)
                         assert attempt is not None
                         attempt.heartbeat_at = utc_now()
-                        requested = run.state == "stop_requested" or (
-                            allow_pause and run.state == "pause_requested"
-                        )
                     if self.registry:
                         ProcessSupervisor(
                             self.session_factory,
@@ -1489,9 +1508,6 @@ class Runner:
                             self.generation,
                         ).refresh_health()
                     last_heartbeat = now
-                    if requested:
-                        stop.set()
-                        stop_started = stop_started or now
                 if stop_started is not None and now - stop_started >= INTERRUPT_SECONDS:
                     stop_deadline = stop_started + INTERRUPT_SECONDS + KILL_SECONDS
                     if self.registry:
@@ -2716,9 +2732,8 @@ class Runner:
                 self._attempt_id = attempt_id
                 request: AgentAdapterRequest | LLMAdapterRequest
 
-                def emit_progress(
-                    type_: str,
-                    payload: dict[str, Any],
+                def persist_progress(
+                    batch: ProgressBatch,
                     _attempt_id: str = attempt_id,
                     _candidate: dict[str, Any] = candidate,
                 ) -> None:
@@ -2741,14 +2756,9 @@ class Runner:
                         "agent.plan_updated",
                         "budget.updated",
                     }
-                    if type_ not in allowed:
+                    if any(type_ not in allowed for type_, _ in batch):
                         raise ValueError("Adapter cannot emit state transitions")
                     with self._write() as (progress_session, progress_run):
-                        if type_ == "agent.user_message_status":
-                            from agents_ide.services.run_messages import finish_message
-
-                            finish_message(progress_session, progress_run, _attempt_id, payload)
-                            return
                         attempt_row = progress_session.get(StepAttempt, _attempt_id)
                         late = (
                             progress_run.current_attempt_id != _attempt_id
@@ -2756,76 +2766,87 @@ class Runner:
                             or attempt_row.status != "running"
                             or progress_run.state == "stop_requested"
                         )
-                        for agent_session in progress_session.scalars(
-                            select(AgentSession).where(AgentSession.attempt_id == _attempt_id)
-                        ):
-                            agent_session.last_external_event_at = utc_now()
-                            if payload.get("session_id") and not late:
-                                agent_session.external_session_id = payload["session_id"]
-                            if (
-                                type_ == "agent.turn_started"
-                                and payload.get("turn_id")
-                                and not late
-                            ):
-                                agent_session.external_turn_id = payload["turn_id"]
-                            if (
-                                payload.get("message_id")
-                                and payload.get("role") == "assistant"
-                                and not late
-                            ):
-                                agent_session.external_turn_id = payload["message_id"]
-                            if (
-                                type_ in {"agent.session_created", "agent.session_resumed"}
-                                and not late
-                            ):
-                                agent_session.resume_count = payload.get("resume_count", 0)
-                                caps = json.loads(agent_session.capabilities_json)
-                                caps.update(
-                                    server_version=payload.get("server_version"),
-                                    permission_mode=payload.get("permission_mode", "no_tools"),
-                                )
-                                agent_session.capabilities_json = to_json(caps)
-                                key = self._agent_session_key(
-                                    _candidate, str(config.get("role", ""))
-                                )
-                                previous_session = self.runtime.setdefault(
-                                    "native_sessions", {}
-                                ).get(key, {})
-                                self.runtime["native_sessions"][key] = {
-                                    "session_id": payload["session_id"],
-                                    "server_version": payload.get("server_version"),
-                                    "resume_count": previous_session.get("resume_count", 0) + 1
-                                    if type_ == "agent.session_resumed"
-                                    else 0,
-                                }
-                                agent_session.resume_count = self.runtime["native_sessions"][key][
-                                    "resume_count"
-                                ]
-                                agent_session.cwd_identity_dev = self.snapshot["workspace"][
-                                    "identity_dev"
-                                ]
-                                agent_session.cwd_identity_ino = self.snapshot["workspace"][
-                                    "identity_ino"
-                                ]
-                            if type_ == "agent.session_invalidated" and not late:
-                                key = self._agent_session_key(
-                                    _candidate, str(config.get("role", ""))
-                                )
-                                self.runtime.setdefault("native_sessions", {}).pop(key, None)
+                        agent_sessions = list(
+                            progress_session.scalars(
+                                select(AgentSession).where(AgentSession.attempt_id == _attempt_id)
+                            )
+                        )
+                        for type_, payload in batch:
+                            if type_ == "agent.user_message_status":
+                                from agents_ide.services.run_messages import finish_message
+
+                                finish_message(progress_session, progress_run, _attempt_id, payload)
+                                continue
+                            for agent_session in agent_sessions:
+                                agent_session.last_external_event_at = utc_now()
+                                if payload.get("session_id") and not late:
+                                    agent_session.external_session_id = payload["session_id"]
+                                if (
+                                    type_ == "agent.turn_started"
+                                    and payload.get("turn_id")
+                                    and not late
+                                ):
+                                    agent_session.external_turn_id = payload["turn_id"]
+                                if (
+                                    payload.get("message_id")
+                                    and payload.get("role") == "assistant"
+                                    and not late
+                                ):
+                                    agent_session.external_turn_id = payload["message_id"]
+                                if (
+                                    type_ in {"agent.session_created", "agent.session_resumed"}
+                                    and not late
+                                ):
+                                    agent_session.resume_count = payload.get("resume_count", 0)
+                                    caps = json.loads(agent_session.capabilities_json)
+                                    caps.update(
+                                        server_version=payload.get("server_version"),
+                                        permission_mode=payload.get("permission_mode", "no_tools"),
+                                    )
+                                    agent_session.capabilities_json = to_json(caps)
+                                    key = self._agent_session_key(
+                                        _candidate, str(config.get("role", ""))
+                                    )
+                                    previous_session = self.runtime.setdefault(
+                                        "native_sessions", {}
+                                    ).get(key, {})
+                                    self.runtime["native_sessions"][key] = {
+                                        "session_id": payload["session_id"],
+                                        "server_version": payload.get("server_version"),
+                                        "resume_count": previous_session.get("resume_count", 0) + 1
+                                        if type_ == "agent.session_resumed"
+                                        else 0,
+                                    }
+                                    agent_session.resume_count = self.runtime["native_sessions"][
+                                        key
+                                    ]["resume_count"]
+                                    agent_session.cwd_identity_dev = self.snapshot["workspace"][
+                                        "identity_dev"
+                                    ]
+                                    agent_session.cwd_identity_ino = self.snapshot["workspace"][
+                                        "identity_ino"
+                                    ]
+                                if type_ == "agent.session_invalidated" and not late:
+                                    key = self._agent_session_key(
+                                        _candidate, str(config.get("role", ""))
+                                    )
+                                    self.runtime.setdefault("native_sessions", {}).pop(key, None)
+                            self._event(
+                                progress_session,
+                                type_,
+                                {**payload, "late": late},
+                                visit,
+                                _attempt_id,
+                            )
                         for process in progress_session.scalars(
                             select(ProcessSupervision).where(
                                 ProcessSupervision.step_attempt_id == _attempt_id
                             )
                         ):
                             process.last_external_event_at = utc_now()
-                        self._event(
-                            progress_session,
-                            type_,
-                            {**payload, "late": late},
-                            visit,
-                            _attempt_id,
-                        )
                         self._persist(progress_run)
+
+                progress = StreamEventBuffer(persist_progress, record_tool_history=False)
 
                 common = {
                     "role": str(config.get("role", "")),
@@ -2835,7 +2856,7 @@ class Runner:
                     "params": candidate.get("params", {}),
                     "attempt_index": visit.attempt_index,
                     "visit_index": visit.visit_index,
-                    "emit_event": emit_progress,
+                    "emit_event": progress.emit,
                     "stop_event": threading.Event(),
                     "check_owned": self._check_owned,
                     "deadline_at": None,
@@ -2852,6 +2873,7 @@ class Runner:
                     request = AgentAdapterRequest(
                         **common,
                         receive_message=receive_message,
+                        record_tool_history=False,
                         workspace_path=str(self.data_dir / "simulated" / self.run_id)
                         if self.simulated
                         else self.snapshot["workspace"]["workspace_path"],
@@ -2955,13 +2977,17 @@ class Runner:
                             )
                     return call_adapter(_adapter, _request)
 
-                result = self._call_monitored(
-                    invoke_adapter,
-                    attempt_id,
-                    deadline_at=request.deadline_at,
-                    stop_event=cast(threading.Event, request.stop_event),
-                    allow_pause=node["type"] == "AgentTask",
-                )
+                try:
+                    result = self._call_monitored(
+                        invoke_adapter,
+                        attempt_id,
+                        deadline_at=request.deadline_at,
+                        stop_event=cast(threading.Event, request.stop_event),
+                        allow_pause=node["type"] == "AgentTask",
+                        progress=progress,
+                    )
+                finally:
+                    progress.close()
                 can_fallback = (
                     isinstance(result, LLMResult)
                     and result.can_fallback
@@ -3397,6 +3423,13 @@ class Runner:
             )
             if confirmed_interrupt:
                 attempt.status = "interrupted"
+                if isinstance(result, AgentResult):
+                    # The interrupted agent may have edited files. Compare the next
+                    # dispatch against its stopped workspace, not its original input.
+                    self.runtime["logical_evidence_hash"] = artifacts.compute_hash(
+                        artifacts.encode(self._evidence_package(session))
+                    )
+                    self.runtime["interrupted_evidence_attempt_id"] = attempt_id
                 current = self.runtime.get("current_agent_session", {})
                 native = self.runtime.get("native_sessions", {}).get(current.get("session_key"), {})
                 if (
@@ -3435,9 +3468,9 @@ class Runner:
                     "model_id": selection.get("model_id"),
                     "reason": result.error.code if result.error else "provider_unavailable",
                     "last_output": result.raw_text[-8000:] or prior_handoff.get("last_output", ""),
-                    "tool_calls": (
+                    "tool_calls": tool_summaries(
                         prior_handoff.get("tool_calls", []) + list(result.tool_calls[-20:])
-                    )[-20:],
+                    ),
                     "workspace_changes_preserved": True,
                 }
                 if prior_handoff.get("original_prompt"):
@@ -3509,6 +3542,11 @@ class Runner:
                             "no_effect": result.no_effect,
                             "can_handoff": can_handoff,
                             "can_fallback": can_fallback,
+                            **(
+                                {"tool_summary": tool_summaries(result.tool_calls)}
+                                if isinstance(result, AgentResult)
+                                else {}
+                            ),
                         }
                     )
                 )

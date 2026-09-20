@@ -27,6 +27,7 @@ from agents_ide.domain.common import to_json
 from agents_ide.engine.artifacts import sanitize
 from agents_ide.engine.codex_runtime import CodexRuntime
 from agents_ide.engine.opencode_runtime import OpenCodeRuntime
+from agents_ide.engine.stream_buffer import ProgressBatch, StreamEventBuffer
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import PlanningAttempt, PlanningJob
 from agents_ide.services.transactions import begin_write
@@ -162,41 +163,45 @@ class PlanningSupervisor(ProcessSupervisor):
         return stopped
 
     def emit(self, attempt_id: str, kind: str, payload: dict[str, Any]) -> None:
+        self.emit_batch(attempt_id, [(kind, payload)])
+
+    def emit_batch(self, attempt_id: str, batch: ProgressBatch) -> None:
         from agents_ide.operations.storage import check_capacity
         from agents_ide.services.planning import _record_event
 
-        body = sanitize(payload)
-        encoded = to_json(body)
         with self.factory() as session:
             begin_write(session)
             attempt = self._attempt(session, attempt_id)
             runtime = json.loads(attempt.runtime_json or "{}")
-            if kind in {"agent.session_created", "agent.session_resumed", "agent.turn_started"}:
-                runtime.update({k: body[k] for k in ("session_id", "turn_id") if body.get(k)})
-            size = len(encoded.encode("utf-8"))
-            if (
-                runtime.get("event_bytes", 0) + size <= 4 * 1024 * 1024
-                and runtime.get("event_count", 0) < 2000
-            ):
-                check_capacity(session, extra=size)
-                _record_event(
-                    session,
-                    self.run_id,
-                    member_id=attempt.member_id,
-                    event_type="planning." + kind,
-                    payload={"attempt_id": attempt_id, **body},
-                )
-                runtime["event_bytes"] = runtime.get("event_bytes", 0) + size
-                runtime["event_count"] = runtime.get("event_count", 0) + 1
-            elif not runtime.get("events_truncated"):
-                runtime["events_truncated"] = True
-                _record_event(
-                    session,
-                    self.run_id,
-                    member_id=attempt.member_id,
-                    event_type="planning.native_events_truncated",
-                    payload={"attempt_id": attempt_id},
-                )
+            for kind, payload in batch:
+                body = sanitize(payload)
+                encoded = to_json(body)
+                if kind in {"agent.session_created", "agent.session_resumed", "agent.turn_started"}:
+                    runtime.update({k: body[k] for k in ("session_id", "turn_id") if body.get(k)})
+                size = len(encoded.encode("utf-8"))
+                if (
+                    runtime.get("event_bytes", 0) + size <= 4 * 1024 * 1024
+                    and runtime.get("event_count", 0) < 2000
+                ):
+                    check_capacity(session, extra=size)
+                    _record_event(
+                        session,
+                        self.run_id,
+                        member_id=attempt.member_id,
+                        event_type="planning." + kind,
+                        payload={"attempt_id": attempt_id, **body},
+                    )
+                    runtime["event_bytes"] = runtime.get("event_bytes", 0) + size
+                    runtime["event_count"] = runtime.get("event_count", 0) + 1
+                elif not runtime.get("events_truncated"):
+                    runtime["events_truncated"] = True
+                    _record_event(
+                        session,
+                        self.run_id,
+                        member_id=attempt.member_id,
+                        event_type="planning.native_events_truncated",
+                        payload={"attempt_id": attempt_id},
+                    )
             attempt.runtime_json = to_json(runtime)
             session.commit()
 
@@ -252,6 +257,15 @@ def run_native(
         )
         runtime: CodexRuntime | OpenCodeRuntime | None = None
         adapter: AgentAdapter
+        progress = StreamEventBuffer(
+            lambda batch: supervisor.emit_batch(attempt_id, batch), record_tool_history=False
+        )
+
+        def check_progress() -> None:
+            if request.check_owned:
+                request.check_owned()
+            progress.flush_due()
+
         try:
             if kind == "codex":
                 runtime = CodexRuntime.start(**kwargs, isolated_read=True)
@@ -279,15 +293,22 @@ def run_native(
                         if key not in {"context", "drafts"}
                     },
                     workspace_path=str(root),
-                    emit_event=lambda event, body: supervisor.emit(attempt_id, event, body),
+                    emit_event=progress.emit,
+                    record_tool_history=False,
+                    check_owned=check_progress,
                 )
             )
         finally:
             try:
-                if runtime:
-                    runtime.close()
+                progress.close()
             finally:
-                if not supervisor.stop():
-                    raise AppError(
-                        "process_not_responding", "Planning process termination unconfirmed", 409
-                    )
+                try:
+                    if runtime:
+                        runtime.close()
+                finally:
+                    if not supervisor.stop():
+                        raise AppError(
+                            "process_not_responding",
+                            "Planning process termination unconfirmed",
+                            409,
+                        )

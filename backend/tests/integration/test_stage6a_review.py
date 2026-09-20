@@ -408,6 +408,46 @@ def test_large_tool_events_and_long_stream_do_not_abort(server):
     assert sum(len(json.dumps(p)) for p in archived) > 10 * 1024 * 1024
 
 
+def test_tool_history_disabled_still_runs_tools_without_serializing_the_archive(
+    server, monkeypatch
+):
+    from agents_ide.adapters import native_events
+    from agents_ide.adapters.history import OMITTED_HISTORY_EVENTS
+
+    handler, adapter, request = server
+    events = []
+    tool_states = []
+    publish = handler.publish
+
+    def observe_tools(self, event):
+        part = event.get("properties", {}).get("part", {})
+        if part.get("type") == "tool":
+            tool_states.append(part.get("state", {}).get("status"))
+        publish(self, event)
+
+    def forbidden(_):
+        raise AssertionError("Discarded vendor bodies must not be serialized or sanitized")
+
+    monkeypatch.setattr(native_events, "sanitize", forbidden)
+    monkeypatch.setattr(handler, "publish", observe_tools)
+    result = adapter.run(
+        replace(
+            request,
+            prompt="tool output burst slow",
+            record_tool_history=False,
+            emit_event=lambda kind, body: events.append((kind, body)),
+        )
+    )
+    assert result.succeeded, result
+    assert {"pending", "running", "completed"} <= set(tool_states)
+    assert all(
+        set(call) <= {"session_id", "call_id", "tool", "status", "summary"}
+        for call in result.tool_calls
+    )
+    assert not any(kind in OMITTED_HISTORY_EVENTS for kind, _ in events)
+    assert any(kind == "attempt.text_delta" for kind, _ in events)
+
+
 def test_tool_output_burst_keeps_progress_current_with_slow_event_storage(server):
     handler, adapter, request = server
     events = []
@@ -443,6 +483,67 @@ def test_sse_accepts_single_frame_above_old_response_limit():
     event = {"type": "message.part.updated", "properties": {"output": "x" * (11 * 1024 * 1024)}}
     body = b"data: " + json.dumps(event).encode() + b"\n\n"
     assert list(sse_events(body[i : i + 65536] for i in range(0, len(body), 65536))) == [event]
+
+
+def test_large_growing_text_snapshots_are_sampled_without_losing_deltas(server, monkeypatch):
+    handler, adapter, request = server
+    handler.delay = 1
+    original = handler.publish
+    events = []
+
+    def publish(self, event):
+        if event["type"] == "message.part.delta":
+            sid = event["properties"]["sessionID"]
+            for index in range(100):
+                original(
+                    self,
+                    {
+                        "type": "message.part.updated",
+                        "properties": {
+                            "delta": "x",
+                            "part": {
+                                "id": "large-text",
+                                "messageID": "message",
+                                "sessionID": sid,
+                                "type": "text",
+                                "text": "x" * (10_000 + index),
+                            },
+                        },
+                    },
+                )
+            original(
+                self,
+                {
+                    "type": "message.part.updated",
+                    "properties": {
+                        "part": {
+                            "id": "large-text",
+                            "messageID": "message",
+                            "sessionID": sid,
+                            "type": "text",
+                            "text": "x" * 10_100,
+                            "time": {"end": 123},
+                        }
+                    },
+                },
+            )
+        original(self, event)
+
+    monkeypatch.setattr(handler, "publish", publish)
+    result = adapter.run(replace(request, emit_event=lambda t, p: events.append((t, p))))
+    assert result.succeeded, result
+    snapshots = [
+        p["payload"]["properties"]["part"]
+        for kind, p in events
+        if kind == "agent.native_event"
+        and p["native_type"] == "message.part.updated"
+        and p["payload"]["properties"]["part"].get("id") == "large-text"
+    ]
+    assert 2 <= len(snapshots) <= 3
+    assert snapshots[-1]["text"] == "x" * 10_100 and snapshots[-1]["time"]["end"] == 123
+    assert "".join(p["text"] for kind, p in events if kind == "attempt.text_delta") == (
+        "x" * 100 + "hello"
+    )
 
 
 def test_explicit_node_deadline_is_not_replaced_by_adapter_default(server):

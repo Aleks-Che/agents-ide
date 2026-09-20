@@ -141,6 +141,33 @@ describe('Run event transport', () => {
     FakeSource.instances[1].emit('run.event', event(43))
     expect(onEvent).toHaveBeenCalledOnce()
   })
+  it('replaces cached history after compaction and resumes at the snapshot cursor', async () => {
+    const snapshot = { last_sequence: 1001 }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(snapshot)))
+    const onEvent = vi.fn(),
+      onSnapshot = vi.fn(),
+      onReset = vi.fn()
+    dispose = connectRunStream({
+      runId: 'r1',
+      after: 1000,
+      onEvent,
+      onSnapshot,
+      onReset,
+    })
+    const source = FakeSource.instances[0]
+    source.emit('run.event', {
+      ...event(1001),
+      type: 'run.history_compacted',
+      run_id: 'foreign',
+    })
+    expect(onReset).not.toHaveBeenCalled()
+    source.emit('run.event', { ...event(1001), type: 'run.history_compacted' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onReset).toHaveBeenCalledWith('history_compacted')
+    expect(onSnapshot).toHaveBeenCalledWith(snapshot)
+    expect(onEvent).not.toHaveBeenCalled()
+    expect(FakeSource.instances[1].url).toMatch(/after=1001$/)
+  })
   it('does not revive a disposed connection after an in-flight reset', async () => {
     let resolve!: (value: Response) => void
     vi.stubGlobal(

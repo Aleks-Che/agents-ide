@@ -15,13 +15,54 @@ from agents_ide.persistence.models import (
     CommandJournal,
     QueueJob,
     Run,
-    StepAttempt,
     StepExecution,
 )
 
-RESTART_STATES = {"queued", "running", "retry_wait", "paused", "stopped", "waiting_input"}
-RESTART_TYPES = {"AgentTask", "LLMRequest", "Command", "CollectContext", "GitCommit"}
-COMMIT_MESSAGE_ERRORS = {"commit_message_generation_failed", "commit_message_invalid"}
+STOPPED_STATES = {"paused", "stopped", "waiting_input", "failed"}
+RESTART_STATES = {"queued", "running", "retry_wait", *STOPPED_STATES}
+RESTART_TYPES = {
+    "Start",
+    "End",
+    "AgentTask",
+    "LLMRequest",
+    "Command",
+    "CollectContext",
+    "GitCommit",
+    "Condition",
+    "PlanControl",
+}
+
+
+def recoverable_restart_execution(
+    session: Session, run: Run, runtime: dict[str, Any]
+) -> StepExecution | None:
+    """Keep a stopped restart target visible until a new visit actually begins."""
+    target = json.loads(run.resume_target_json or "{}")
+    if (
+        run.state not in STOPPED_STATES
+        or run.current_execution_id is not None
+        or run.current_attempt_id is not None
+        or target.get("action") != "dispatch_next"
+        or target.get("node_id") != run.current_node_id
+        or runtime.get("next_node_id") != run.current_node_id
+    ):
+        return None
+    execution = session.scalar(
+        select(StepExecution)
+        .where(StepExecution.run_id == run.id, StepExecution.node_id == run.current_node_id)
+        .order_by(StepExecution.started_at.desc())
+        .limit(1)
+    )
+    if (
+        not execution
+        or execution.node_id != run.current_node_id
+        or execution.id not in runtime.get("invalidated_executions", [])
+        or execution.status not in {"interrupted", "failed", "waiting_input", "succeeded"}
+        or execution.cycle_id != runtime.get("cycle_id")
+        or execution.scope != runtime.get("work", {}).get("scope")
+    ):
+        return None
+    return execution
 
 
 def restart_blocked_reason(
@@ -35,7 +76,15 @@ def restart_blocked_reason(
         return "Дождитесь остановки или завершения текущей команды"
     if node_type not in RESTART_TYPES:
         return "Этот служебный этап нельзя перезапустить отдельно"
-    if not execution or execution.id in runtime.get("invalidated_executions", []):
+    recovered = (
+        recoverable_restart_execution(session, run, runtime)
+        if execution and execution.id in runtime.get("invalidated_executions", [])
+        else None
+    )
+    can_recover = bool(recovered and execution and recovered.id == execution.id)
+    if not execution or (
+        execution.id in runtime.get("invalidated_executions", []) and not can_recover
+    ):
         return "Этап ещё не выполнялся"
     if execution.cycle_id != runtime.get("cycle_id") or execution.scope != runtime.get(
         "work", {}
@@ -43,8 +92,8 @@ def restart_blocked_reason(
         return "Можно перезапустить этап текущего цикла и пункта плана"
     if node_type == "GitCommit":
         if (
-            run.state not in {"waiting_input", "paused", "stopped"}
-            or run.current_execution_id != execution.id
+            run.state not in STOPPED_STATES
+            or (run.current_execution_id != execution.id and not can_recover)
             or execution.status == "succeeded"
         ):
             return "Можно перезапустить только остановившийся Git-этап до создания коммита"
@@ -57,6 +106,12 @@ def restart_blocked_reason(
             .limit(1)
         ):
             return "Создание коммита уже началось; сначала требуется сверка результата"
+    if node_type in {"Start", "End", "Condition", "PlanControl"} and (
+        run.state not in STOPPED_STATES
+        or (run.current_execution_id != execution.id and not can_recover)
+        or execution.status == "succeeded"
+    ):
+        return "Можно перезапустить только остановившийся служебный этап"
     return None
 
 
@@ -215,45 +270,18 @@ def apply_restart(session: Session, run: Run, payload: dict[str, Any], command_i
         selection_round=0,
         active_since=None,
     )
-    target = json.loads(run.resume_target_json or "{}")
-    # Execution errors can be retried; workspace/configuration blockers still require repair.
-    retryable = {
-        "unknown_external_result",
-        "invalid_response_format",
-        "session_resume_unavailable",
-        "model_unavailable",
-        "model_group_exhausted",
-        "permission_required",
-        "process_not_responding",
-        "owner_expired",
-        "reconciliation_required",
-    }
-    # Message generation fails before git_intent is saved. It was historically
-    # reported as configuration_invalid, including in already waiting runs.
-    failed_attempt = (
-        session.get(StepAttempt, run.current_attempt_id) if run.current_attempt_id else None
-    )
-    if (
-        failed_attempt
-        and failed_attempt.execution_id == execution.id
-        and failed_attempt.status == "failed"
-        and failed_attempt.retry_safety == "safe"
-        and failed_attempt.error_code in COMMIT_MESSAGE_ERRORS
-        and any(
-            node["id"] == execution.node_id and node["type"] == "GitCommit"
-            for node in effective_snapshot(run)["graph"]["nodes"]
-        )
-    ):
-        retryable.add("configuration_invalid")
+    # Manual restart requests a fresh visit. Recheck configuration, workspace,
+    # limits and operation guards in the runner instead of replaying old blockers.
     run.resume_target_json = to_json(
         {
             "action": "dispatch_next",
             "node_id": execution.node_id,
-            "blockers": [code for code in target.get("blockers", []) if code not in retryable],
+            "blockers": [],
         }
     )
     run.runtime_json = to_json(runtime)
     run.current_node_id = execution.node_id
     run.current_cycle_id = execution.cycle_id
     run.current_execution_id = run.current_attempt_id = None
+    run.finished_at = None
     run.state, run.stop_goal, run.waiting_reason_json = "queued", None, None

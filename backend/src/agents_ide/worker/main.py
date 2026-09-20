@@ -262,6 +262,7 @@ def dispatch_once(
         )
 
         def renew() -> None:
+            last_renewal = time.monotonic()
             while not stop_renewal.wait(min(settings.heartbeat_seconds, 1)):
                 if stopping is not None and stopping.is_set():
                     abort.set()
@@ -270,6 +271,8 @@ def dispatch_once(
                             factory, runner.registry, job.run_id, worker_id, job.generation
                         ).stop(cooperative_seconds=0)
                     return
+                if time.monotonic() - last_renewal < settings.heartbeat_seconds:
+                    continue
                 try:
                     refresh_lease(
                         factory,
@@ -279,6 +282,7 @@ def dispatch_once(
                         lease_seconds=30,
                         cancel=stop_renewal,
                     )
+                    last_renewal = time.monotonic()
                 except Exception:
                     if stop_renewal.is_set():
                         return

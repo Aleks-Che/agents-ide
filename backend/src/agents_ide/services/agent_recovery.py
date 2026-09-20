@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, object_session
 
+from agents_ide.adapters.history import tool_summaries
 from agents_ide.domain.common import to_json
 from agents_ide.domain.schemas import RunCommand
 from agents_ide.engine import artifacts
@@ -134,7 +135,11 @@ def _handoff_context(session: Session, run: Run, attempt: StepAttempt) -> dict[s
         "execution_id": attempt.execution_id,
         "attempt_id": attempt.id,
         "last_output": str(result.get("raw_text") or text or prior.get("last_output", ""))[-8000:],
-        "tool_calls": (prior.get("tool_calls", []) + list(tools.values()))[-20:],
+        "tool_calls": tool_summaries(
+            prior.get("tool_calls", [])
+            + list(tools.values())
+            + json.loads(attempt.error_details_json or "{}").get("tool_summary", [])
+        ),
         "source_request_artifact_id": attempt.request_artifact_id,
         "source_result_artifact_id": attempt.result_artifact_id,
         "original_prompt": prior.get("original_prompt") or request.get("prompt", ""),

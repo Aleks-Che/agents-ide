@@ -102,7 +102,21 @@ export function connectRunStream(
     current.addEventListener('run.event', (message) => {
       if (!active()) return
       try {
-        accept(JSON.parse((message as MessageEvent).data) as EventEnvelope)
+        const event = JSON.parse(
+          (message as MessageEvent).data,
+        ) as EventEnvelope
+        if (
+          event.type === 'run.history_compacted' &&
+          event.run_id === options.runId &&
+          Number.isSafeInteger(event.sequence) &&
+          event.sequence > sequence
+        ) {
+          current.close()
+          source = undefined
+          void reset('history_compacted')
+          return
+        }
+        accept(event)
         status('open')
       } catch {
         current.close()

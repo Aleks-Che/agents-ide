@@ -30,13 +30,15 @@ from sqlalchemy.orm import Session
 from agents_ide.domain.common import new_id, utc_now
 from agents_ide.persistence.models import RunEvent
 
-MAX_PAYLOAD_BYTES: Final = 16 * 1024
+# A full 64 KiB stream block also receives source/late metadata at persistence.
+MAX_PAYLOAD_BYTES: Final = 65 * 1024
 
 # Order here mirrors the typical lifecycle for documentation; the runner does
 # not rely on order.
 EVENT_TYPES: Final[frozenset[str]] = frozenset(
     {
         "run.created",
+        "run.history_compacted",
         "run.started",
         "run.paused",
         "run.stopped",

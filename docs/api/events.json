@@ -148,6 +148,7 @@
           "run.completed",
           "run.created",
           "run.failed",
+          "run.history_compacted",
           "run.paused",
           "run.reconciling",
           "run.resumed",
@@ -253,6 +254,7 @@
     "run.completed",
     "run.created",
     "run.failed",
+    "run.history_compacted",
     "run.paused",
     "run.reconciling",
     "run.resumed",
@@ -267,7 +269,7 @@
     "workspace.worktree_planned",
     "workspace.worktree_reused"
   ],
-  "max_payload_bytes": 16384,
+  "max_payload_bytes": 66560,
   "schema_version": "1.0.0",
   "types": [
     "agent.input_closed",
@@ -329,6 +331,7 @@
     "run.completed",
     "run.created",
     "run.failed",
+    "run.history_compacted",
     "run.paused",
     "run.reconciling",
     "run.resumed",

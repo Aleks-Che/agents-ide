@@ -86,15 +86,23 @@ def read_workspace_file(root: Path, relative: str, cap: int) -> bytes:
             raise ValueError("outside_workspace")
         if before.st_size > cap:
             raise ValueError("too_large")
-        raw = stream.read(cap + 1)
+        # BufferedReader reserves the requested size even for tiny files. The
+        # manifest cap can be 64 MiB per read; size the allocation to this file
+        # and retain one extra byte so growth during the read is detectable.
+        raw = stream.read(before.st_size + 1)
         after = os.fstat(stream.fileno())
         if len(raw) > cap:
             raise ValueError("too_large")
-        if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_nlink) != (
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_nlink,
-        ) or target.stat().st_ino != before.st_ino:
+        if (
+            len(raw) != before.st_size
+            or (before.st_ino, before.st_size, before.st_mtime_ns, before.st_nlink)
+            != (
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_nlink,
+            )
+            or target.stat().st_ino != before.st_ino
+        ):
             raise ValueError("unstable_file")
         return raw

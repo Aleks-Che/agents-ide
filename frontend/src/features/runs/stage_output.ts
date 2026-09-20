@@ -3,6 +3,7 @@ import { eventPreview, toolProgress } from './observation'
 
 interface StageOutputEntry {
   key: number
+  occurredAt: number
   text: string
   role: string
   tool?: { scope: string; count: number }
@@ -22,6 +23,7 @@ export function stageOutput(all: EventEnvelope[]): StageOutputEntry[] {
       else
         output.push({
           key: event.sequence,
+          occurredAt: event.occurred_at,
           text,
           role: `assistant:${event.step_attempt_id}`,
         })
@@ -32,6 +34,7 @@ export function stageOutput(all: EventEnvelope[]): StageOutputEntry[] {
       else {
         const entry: StageOutputEntry = {
           key: event.sequence,
+          occurredAt: event.occurred_at,
           text: tool.text,
           role: 'system',
           tool: {
@@ -55,6 +58,7 @@ export function stageOutput(all: EventEnvelope[]): StageOutputEntry[] {
       const status = delivery?.payload.delivery
       output.push({
         key: event.sequence,
+        occurredAt: event.occurred_at,
         text: `${String(event.payload.text ?? '')}\n${status === 'delivered' ? 'Передано агенту' : status === 'failed' ? 'Не удалось подтвердить доставку' : 'Ожидает передачи агенту'}`,
         role: 'user',
       })
@@ -70,6 +74,7 @@ export function stageOutput(all: EventEnvelope[]): StageOutputEntry[] {
     ) {
       output.push({
         key: event.sequence,
+        occurredAt: event.occurred_at,
         text:
           event.type === 'attempt.finished' &&
           event.payload.status === 'interrupted'

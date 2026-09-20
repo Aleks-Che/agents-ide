@@ -886,6 +886,7 @@
               "run.completed",
               "run.created",
               "run.failed",
+              "run.history_compacted",
               "run.paused",
               "run.reconciling",
               "run.resumed",

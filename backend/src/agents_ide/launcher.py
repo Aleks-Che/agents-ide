@@ -150,7 +150,10 @@ def stop(settings: Settings) -> dict[str, Any]:
 
 
 def run_launcher(settings: Settings) -> None:
-    with portalocker.Lock(str(settings.data_dir / "runtime/launcher.lock"), timeout=0):
+    with (
+        portalocker.Lock(str(settings.data_dir / "runtime/launcher.lock"), timeout=0),
+        httpx.Client(timeout=0.5, trust_env=False) as health_client,
+    ):
         migrate(settings)
         engine = create_database(settings)
         groups: dict[str, ProcessGroup] = {}
@@ -168,7 +171,8 @@ def run_launcher(settings: Settings) -> None:
         retries = {"api": 0, "worker": 0}
         failed = False
         try:
-            atomic_write(registry, json.dumps(state).encode())
+            saved_state = json.dumps(state).encode()
+            atomic_write(registry, saved_state)
             while not stop_requested(settings, launch_id):
                 for role in ("api", "worker"):
                     if role in children and is_running(children[role]):
@@ -207,9 +211,7 @@ def run_launcher(settings: Settings) -> None:
                         heartbeat = connection.execute(
                             text("SELECT last_seen_at FROM worker_heartbeat WHERE status='running'")
                         ).scalar()
-                    response = httpx.get(
-                        settings.origin + "/api/health", timeout=0.5, trust_env=False
-                    )
+                    response = health_client.get(settings.origin + "/api/health")
                     ready = bool(
                         response.status_code == 200
                         and heartbeat
@@ -218,7 +220,10 @@ def run_launcher(settings: Settings) -> None:
                 except Exception:
                     pass
                 state["status"] = "running" if ready else "starting"
-                atomic_write(registry, json.dumps(state).encode())
+                encoded_state = json.dumps(state).encode()
+                if encoded_state != saved_state:
+                    atomic_write(registry, encoded_state)
+                    saved_state = encoded_state
                 time.sleep(0.25)
         except Exception as error:
             failed = True

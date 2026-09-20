@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -43,6 +44,7 @@ from agents_ide.services import planning as service
 from agents_ide.services.transactions import begin_write
 
 LEASE_SECONDS = 30
+LEASE_RENEW_SECONDS = 5
 ACTIVE = {"drafting", "merging"}
 
 
@@ -665,15 +667,24 @@ def dispatch_planning_job(
                 raise AppError("planning_interrupted", "Planning interrupted", 409)
 
     def monitor() -> None:
+        last_renewal = time.monotonic()
         while not finished.wait(0.2):
             try:
+                if abort.is_set():
+                    call_stop.set()
+                    return
+                renew = time.monotonic() - last_renewal >= LEASE_RENEW_SECONDS
                 with factory() as session:
-                    begin_write(session, cancel=finished)
+                    if renew:
+                        begin_write(session, cancel=finished)
                     job = _owned(session, claim)
                     if job.state not in ACTIVE or abort.is_set():
                         call_stop.set()
-                    job.lease_expires_at = utc_now() + LEASE_SECONDS
-                    session.commit()
+                        return
+                    if renew:
+                        job.lease_expires_at = utc_now() + LEASE_SECONDS
+                        session.commit()
+                        last_renewal = time.monotonic()
             except Exception:
                 call_stop.set()
                 return

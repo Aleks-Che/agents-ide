@@ -277,7 +277,9 @@ class ProcessGroup:
 
 def is_running(process: psutil.Process) -> bool:
     try:
-        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+        return process.is_running() and (
+            sys.platform == "win32" or process.status() != psutil.STATUS_ZOMBIE
+        )
     except psutil.Error:
         return False
 
@@ -427,9 +429,12 @@ def process_state(pid: int, create_time: float) -> str:
         process = psutil.Process(pid)
         if abs(process.create_time() - create_time) > 0.000001:
             return "dead"
-        return (
-            "alive" if process.is_running() and process.status() != psutil.STATUS_ZOMBIE else "dead"
+        # Windows has no zombie processes. status() inspects suspension of all
+        # threads, which is expensive and irrelevant to process ownership.
+        alive = process.is_running() and (
+            sys.platform == "win32" or process.status() != psutil.STATUS_ZOMBIE
         )
+        return "alive" if alive else "dead"
     except psutil.NoSuchProcess:
         return "dead"
     except (psutil.Error, OSError, ValueError):

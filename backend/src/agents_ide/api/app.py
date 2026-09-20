@@ -151,7 +151,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "default-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
         )
         response.headers["Cache-Control"] = "no-store"
-        logging.info(
+        # Successful polling GETs are frequent; keep them available at DEBUG
+        # without flushing a log line for every health/SSE/UI refresh by default.
+        logging.log(
+            logging.DEBUG
+            if request.method in {"GET", "HEAD"} and response.status_code < 400
+            else logging.INFO,
             "request.finished",
             extra={
                 "request_id": request_id,

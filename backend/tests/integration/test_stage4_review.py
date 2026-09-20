@@ -1031,7 +1031,7 @@ def test_simulated_text_deltas_are_persisted_before_result(authenticated, tmp_pa
     with factory() as session:
         rows = list(session.scalars(select(RunEvent).order_by(RunEvent.sequence)))
         deltas = [e for e in rows if e.type == "attempt.text_delta"]
-        assert [json.loads(e.payload_json)["text"] for e in deltas] == ["first", "second"]
+        assert [json.loads(e.payload_json)["text"] for e in deltas] == ["firstsecond"]
         finished = next(e for e in rows if e.type == "attempt.finished")
         assert all(
             e.sequence < finished.sequence and e.step_attempt_id == finished.step_attempt_id

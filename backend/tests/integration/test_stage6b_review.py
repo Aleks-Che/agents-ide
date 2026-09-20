@@ -65,6 +65,32 @@ def test_wire_ids_scoping_final_message_usage_and_feedback(transport):
     assert len([r for r in records if r.get("method") == "initialize"]) == 1
 
 
+def test_tool_history_disabled_keeps_final_answer_and_small_handoff_hints(transport, monkeypatch):
+    from agents_ide.adapters import native_events
+    from agents_ide.adapters.history import OMITTED_HISTORY_EVENTS
+
+    adapter, _ = transport(early_events=1, final_only=1)
+    events = []
+
+    def forbidden(_):
+        raise AssertionError("Discarded vendor bodies must not be serialized or sanitized")
+
+    monkeypatch.setattr(native_events, "sanitize", forbidden)
+    result = adapter.run(
+        replace(
+            _make_request(),
+            record_tool_history=False,
+            emit_event=lambda kind, body: events.append((kind, body)),
+        )
+    )
+    assert result.succeeded and result.raw_text == "hello from codex"
+    assert result.tool_calls and all(
+        set(call) == {"tool", "status", "summary"} for call in result.tool_calls
+    )
+    assert not any(kind in OMITTED_HISTORY_EVENTS for kind, _ in events)
+    assert any(kind == "attempt.text_delta" for kind, _ in events)
+
+
 def test_codex_terminal_quota_after_tools_allows_handoff(transport):
     adapter, _ = transport(
         response_error_json=json.dumps(

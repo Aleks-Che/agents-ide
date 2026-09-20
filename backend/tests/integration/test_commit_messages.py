@@ -110,6 +110,26 @@ def test_exact_staged_diff_omits_deleted_contents_and_preserves_message(reposito
     )
 
 
+def test_large_staged_diff_reaches_generator_and_commits_without_truncation(repository):
+    value = baseline(repository)
+    content = "test report entry\n" * 40000 + "end of report\n"
+    assert len(content.encode()) > 512 * 1024
+    (repository / "src/report.txt").write_text(content, encoding="utf-8", newline="\n")
+    seen = []
+
+    def generate(diff):
+        seen.append(diff)
+        return "test: save complete report"
+
+    result = git.execute(repository, value, intent(value), generate_message=generate)
+    assert result.sha
+    assert len(seen) == 1
+    expected_patch = "".join(f"+{line}\n" for line in content.splitlines())
+    assert expected_patch in seen[0]["staged_diff"]
+    assert command(repository, "show", "HEAD:src/report.txt") == content.strip()
+    assert command(repository, "status", "--porcelain") == ""
+
+
 @pytest.mark.parametrize(
     "invalid_message",
     [

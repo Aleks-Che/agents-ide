@@ -8,7 +8,6 @@ under its lock only after verifying that nobody staged anything during the call.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import tempfile
@@ -643,15 +642,10 @@ def staged_message_diff(workspace: Path, index: Path, parent: str) -> dict[str, 
     deleted = run_git(
         workspace, [*common, "--diff-filter=D", "--name-only", "-z", parent, "--"], env=env
     )
-    result = {
+    return {
         "staged_diff": patch.decode("utf-8", "replace"),
         "deleted_files": [name.decode("utf-8", "replace") for name in deleted.split(b"\0") if name],
     }
-    if len(json.dumps(result, ensure_ascii=False).encode()) > 512 * 1024:
-        raise GitCommitError(
-            "commit_diff_too_large", "Staged diff exceeds the message generation limit (512 KiB)"
-        )
-    return result
 
 
 def _without_commit_thinking(text: str) -> str:

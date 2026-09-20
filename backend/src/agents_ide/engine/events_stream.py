@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, load_only, sessionmaker
 
 from agents_ide.domain.planning import PlanningProvenance
 from agents_ide.domain.schemas import Run as RunSchema
@@ -83,12 +83,15 @@ def fetch_events_after(
     session: Session, run_id: str, *, after_sequence: int, limit: int = MAX_EVENTS_PER_BATCH
 ) -> EventBatch:
     _read_transaction(session)
-    run = session.get(Run, run_id)
+    run = session.get(Run, run_id, options=[load_only(Run.state, Run.retention_sequence)])
     if run is None:
         raise AppError("run_not_found", "Run не найден", 404)
+    # Combining MIN and MAX in one aggregate scans the entire run's history in
+    # SQLite. Separate scalar subqueries each seek an edge of the existing index.
     minimum, highest = session.execute(
-        select(func.min(RunEvent.sequence), func.max(RunEvent.sequence)).where(
-            RunEvent.run_id == run_id
+        select(
+            select(func.min(RunEvent.sequence)).where(RunEvent.run_id == run_id).scalar_subquery(),
+            select(func.max(RunEvent.sequence)).where(RunEvent.run_id == run_id).scalar_subquery(),
         )
     ).one()
     highest, minimum = int(highest or 0), int(minimum or 0)
@@ -122,7 +125,7 @@ def fetch_full_history(
     minimum = (
         session.scalar(select(func.min(RunEvent.sequence)).where(RunEvent.run_id == run_id)) or 1
     )
-    run = session.get(Run, run_id)
+    run = session.get(Run, run_id, options=[load_only(Run.state, Run.retention_sequence)])
     minimum = max(minimum, run.retention_sequence if run else 0)
     return fetch_events_after(session, run_id, after_sequence=minimum - 1, limit=limit)
 

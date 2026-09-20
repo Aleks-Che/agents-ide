@@ -426,7 +426,6 @@ def git_commit_node(
             if exc.code not in {
                 "commit_message_generation_failed",
                 "commit_message_invalid",
-                "commit_diff_too_large",
                 "limit_exceeded",
             }:
                 raise

@@ -174,3 +174,51 @@ def test_git_restart_rejects_dispatched_or_active_commit(
     assert after["observation"]["current_execution_id"] == payload["execution_id"]
     assert len(calls) == len(messages) == 1
     assert command(repository, "rev-list", "--count", "HEAD") == "1"
+
+
+@pytest.mark.parametrize("has_intent", [False, True])
+def test_restart_recovers_git_stage_hidden_by_legacy_diff_limit(
+    authenticated, repository, settings, monkeypatch, has_intent
+):
+    run, factory, calls, messages = failed_commit_run(
+        authenticated, repository, settings, monkeypatch
+    )
+    payload = stage_payload(factory, run, "commit")
+    with factory() as session:
+        row = session.get(Run, run["id"])
+        attempt = session.get(StepAttempt, row.current_attempt_id)
+        attempt.error_code = "commit_diff_too_large"
+        runtime = json.loads(row.runtime_json)
+        runtime["invalidated_executions"] = [payload["execution_id"]]
+        runtime.pop("waiting_reason", None)
+        runtime.pop("waiting_code", None)
+        row.runtime_json = json.dumps(runtime)
+        row.current_execution_id = row.current_attempt_id = None
+        row.resume_target_json = json.dumps(
+            {"action": "dispatch_next", "node_id": "commit", "blockers": ["configuration_invalid"]}
+        )
+        session.get(StepExecution, payload["execution_id"]).status = "interrupted"
+        if has_intent:
+            artifacts.record_artifact(
+                session,
+                run["id"],
+                artifacts.ArtifactPayload("git_intent", body={}),
+                step_execution_id=payload["execution_id"],
+                step_attempt_id=attempt.id,
+            )
+        session.commit()
+    client, headers = authenticated
+    snapshot = client.get(f"/api/runs/{run['id']}/snapshot", headers=headers).json()
+    node = next(node for node in snapshot["observation"]["nodes"] if node["id"] == "commit")
+    assert node["execution_id"] == payload["execution_id"]
+    if has_intent:
+        assert node["restart_blocked_reason"]
+        assert run_command(authenticated, run, "restart_stage", payload).status_code == 409
+        assert len(calls) == len(messages) == 1
+        return
+    assert node["restart_blocked_reason"] is None
+    response = run_command(authenticated, run, "restart_stage", payload)
+    assert response.status_code == 200, response.text
+    assert run_now(run, factory, settings).final_state == "completed"
+    assert len(calls) == 1 and len(messages) == 2
+    assert command(repository, "rev-list", "--count", "HEAD") == "2"

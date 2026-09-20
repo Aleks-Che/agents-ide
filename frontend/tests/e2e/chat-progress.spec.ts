@@ -300,6 +300,35 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   await expect(
     progress.getByRole('button', { name: 'Продолжить выполнение' }),
   ).toBeEnabled()
+  await navigation
+    .getByRole('button', { name: /Implementation/ })
+    .click({ button: 'right' })
+  const stageContinue = page.getByRole('menuitem', {
+    name: 'Продолжить',
+    exact: true,
+  })
+  await expect(stageContinue).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await navigation.getByRole('button', { name: /Review/ }).press('Shift+F10')
+  await expect(stageContinue).toBeEnabled()
+  const stageContinueResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith(`/runs/${run.id}/commands`),
+  )
+  await stageContinue.click()
+  const resumedStage = await stageContinueResponse
+  expect(resumedStage.status()).toBe(200)
+  expect(resumedStage.request().postDataJSON()).toMatchObject({
+    command_type: 'resume',
+  })
+  await expect(progress).toContainText('В очереди исполнителя')
+  await expect(stageContinue).toHaveCount(0)
+  await progress.locator('.stage-heading').click({ button: 'right' })
+  await expect(stageContinue).toBeDisabled()
+  await page.keyboard.press('Escape')
+  checkpoint(run.id, 'paused')
+  await expect(progress).toContainText('На паузе')
   await progress
     .getByRole('button', { name: 'Остановить выполнение', exact: true })
     .click()
@@ -427,6 +456,10 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   await expect(stageRestart).toHaveCount(0)
   const reviewStage = navigation.getByRole('button', { name: /Review/ })
   await expect(reviewStage).toBeFocused()
+  await progress.locator('.stage-heading').click({ button: 'right' })
+  await expect(stageRestart).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await expect(progress.locator('.stage-heading')).toBeFocused()
   await reviewStage.press('Shift+F10')
   const stageRestartResponse = page.waitForResponse(
     (response) =>

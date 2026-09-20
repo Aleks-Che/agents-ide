@@ -256,6 +256,42 @@ def _git_check_retry(
     return attempt.id
 
 
+def _legacy_interrupted_agent(
+    session: Session,
+    run: Run,
+    runtime: dict[str, Any],
+    snapshot: dict[str, Any],
+    waiting: dict[str, Any],
+) -> bool:
+    """Recognize pauses saved before post-interruption evidence checkpoints."""
+    if (
+        not run.current_attempt_id
+        or runtime.get("interrupted_evidence_attempt_id") == run.current_attempt_id
+        or (
+            waiting
+            and (
+                waiting.get("code") != "external_change_detected"
+                or waiting.get("details", {}).get("reason") != "evidence_changed_between_candidates"
+            )
+        )
+        or not any(
+            node["id"] == run.current_node_id and node["type"] == "AgentTask"
+            for node in snapshot["graph"]["nodes"]
+        )
+    ):
+        return False
+    attempt = session.get(StepAttempt, run.current_attempt_id)
+    return bool(
+        attempt
+        and attempt.execution_id == run.current_execution_id
+        and attempt.status == "interrupted"
+        and attempt.error_code == "interrupted"
+        and json.loads(attempt.error_details_json or "{}")
+        .get("details", {})
+        .get("interruption_confirmed")
+    )
+
+
 def _check_resume(session: Session, run: Run) -> None:
     from agents_ide.services.live_groups import refresh_groups
     from agents_ide.worker.processes import stored_processes_stopped
@@ -271,6 +307,12 @@ def _check_resume(session: Session, run: Run) -> None:
         raise AppError("reconciliation_required", "Прежняя операция требует сверки", 409)
     if git_retry and git_retry not in runtime.get("retry_authorized_attempts", []):
         runtime.setdefault("retry_authorized_attempts", []).append(git_retry)
+    legacy_interrupted_agent = _legacy_interrupted_agent(session, run, runtime, snapshot, waiting)
+    if legacy_interrupted_agent:
+        # Old PAUSE/STOP checkpoints still hash the workspace before the agent's
+        # edits. Rebase once, after confirming all prior operations have stopped.
+        runtime["logical_evidence_hash"] = None
+        runtime["interrupted_evidence_attempt_id"] = run.current_attempt_id
     if run.state == "stopped":
         execution = (
             session.get(StepExecution, run.current_execution_id)
@@ -399,6 +441,8 @@ def _check_resume(session: Session, run: Run) -> None:
             continue
         elif code == "external_change_detected" and git_retry:
             # The worker rechecks HEAD, index, config and protected files before dispatch.
+            continue
+        elif code == "external_change_detected" and legacy_interrupted_agent:
             continue
         elif code in {"unknown_external_result", "owner_expired", "reconciliation_required"}:
             if not runtime.get("work"):

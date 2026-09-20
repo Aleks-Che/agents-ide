@@ -1,5 +1,7 @@
 """Local process identity, independent of delayed database heartbeats."""
 
+import sys
+
 import psutil
 
 
@@ -11,7 +13,7 @@ def owner_may_be_alive(pid: int | None, created_at: float | None) -> bool:
         return (
             process.create_time() == created_at
             and process.is_running()
-            and process.status() != psutil.STATUS_ZOMBIE
+            and (sys.platform == "win32" or process.status() != psutil.STATUS_ZOMBIE)
         )
     except psutil.NoSuchProcess:
         return False

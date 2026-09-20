@@ -176,8 +176,10 @@ export function ChatRunProgress({
   })
   const command = useMutation({
     mutationFn: (body: RunCommand) => runsApi.submitCommand(runId, body, csrf),
-    onSuccess: () => {
+    onSuccess: (_, body) => {
       setResolution(false)
+      if (body.command_type === 'restart_stage')
+        void client.invalidateQueries({ queryKey: ['chat_run_stream', runId] })
       refresh()
     },
     onError: refresh,
@@ -487,7 +489,14 @@ export function ChatRunProgress({
               className={`stage-card${opened.id === current ? ' current' : ''}`}
               key={opened.id}
             >
-              <header className="stage-heading">
+              <header
+                className="stage-heading"
+                tabIndex={0}
+                {...contextMenuHandlers((target) =>
+                  setStageMenu({ target, nodeId: opened.id }),
+                )}
+                title="Правая кнопка мыши — действия с этапом"
+              >
                 <strong>
                   {nodes.indexOf(opened) + 1}. {opened.label}
                 </strong>
@@ -518,6 +527,24 @@ export function ChatRunProgress({
           label={`Действия с этапом ${menuNode.label}`}
           onClose={() => setStageMenu(null)}
           items={[
+            {
+              label: 'Продолжить',
+              title:
+                menuNode.id !== current
+                  ? 'Продолжить можно только текущий этап.'
+                  : run?.state === 'stopped'
+                    ? 'Продолжить выполнение с новой попытки текущего этапа.'
+                    : 'Продолжить текущий этап с сохранённого места.',
+              disabled:
+                !csrf ||
+                menuNode.id !== current ||
+                !actions.includes('resume') ||
+                command.isPending ||
+                restart.isPending ||
+                uncertain ||
+                restartUncertain,
+              onSelect: () => send('resume'),
+            },
             {
               label: 'Перезапустить этап',
               title:
@@ -664,6 +691,27 @@ function StageContent({
               key={entry.key}
             >
               <small>
+                <time
+                  dateTime={new Date(entry.occurredAt * 1000).toISOString()}
+                >
+                  {new Date(entry.occurredAt * 1000).toLocaleDateString(
+                    'ru-RU',
+                    {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                    },
+                  )}{' '}
+                  {new Date(entry.occurredAt * 1000).toLocaleTimeString(
+                    'ru-RU',
+                    {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      second: '2-digit',
+                      hour12: false,
+                    },
+                  )}
+                </time>{' '}
                 {entry.role === 'user'
                   ? 'Вы'
                   : entry.role === 'system'

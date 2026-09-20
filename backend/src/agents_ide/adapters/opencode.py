@@ -29,6 +29,7 @@ from agents_ide.adapters.base import (
     AgentResult,
     ExternalOutcome,
 )
+from agents_ide.adapters.history import OMITTED_HISTORY_EVENTS
 from agents_ide.adapters.model_catalog import CatalogModels, parameters_for
 from agents_ide.adapters.native_events import archive_native
 from agents_ide.errors import AppError
@@ -37,6 +38,7 @@ MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 HEALTH_TIMEOUT_SECONDS = OPENCODE_HEALTH_TIMEOUT = 2.0
 STARTUP_TIMEOUT_SECONDS = 30.0
 TOOL_OUTPUT_SAMPLE_SECONDS = 1.0
+TEXT_SNAPSHOT_SAMPLE_SECONDS = 2.0
 DENY_TOOLS = [{"permission": "*", "pattern": "*", "action": "deny"}]
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 
@@ -201,6 +203,7 @@ class OpenCodeAdapter(AgentAdapter):
             return self._run(request)
 
     def _run(self, request: AgentAdapterRequest) -> AgentResult:
+        record_tool_history = getattr(request, "record_tool_history", False)
         started = time.monotonic()
         sent = False
         done, ready, permission = threading.Event(), threading.Event(), threading.Event()
@@ -209,6 +212,7 @@ class OpenCodeAdapter(AgentAdapter):
         message_roles: dict[str, str] = {}
         tool_progress: dict[tuple[str, str], dict[str, Any]] = {}
         tool_archived_at: dict[tuple[str, str], float] = {}
+        text_archived_at: dict[tuple[str, str], float] = {}
         errors: list[Exception] = []
         threads: list[threading.Thread] = []
         questions: dict[str, list[dict[str, Any]]] = {}
@@ -258,6 +262,8 @@ class OpenCodeAdapter(AgentAdapter):
             )
 
         def emit(kind: str, payload: dict[str, Any]) -> None:
+            if not record_tool_history and kind in OMITTED_HISTORY_EVENTS:
+                return
             if request.emit_event:
                 request.emit_event(kind, payload)
 
@@ -400,7 +406,32 @@ class OpenCodeAdapter(AgentAdapter):
                         ):
                             return
                         tool_progress[tool_key] = tool_update
-                archive_native(request.emit_event, "opencode", kind, event, str(sid))
+                archive = True
+                if (
+                    kind == "message.part.updated"
+                    and isinstance(part, dict)
+                    and part.get("type") in {"text", "reasoning"}
+                    and len(str(part.get("text", ""))) > 4096
+                    and (part.get("time") or {}).get("end") is None
+                ):
+                    # Large growing snapshots can exceed the event buffer's block
+                    # limit on every token. Sample that redundant archive, while
+                    # forwarding every normalized delta and the completed snapshot.
+                    text_key = (str(part.get("messageID", "")), str(part.get("id", "")))
+                    now = time.monotonic()
+                    archive = now - text_archived_at.get(text_key, float("-inf")) >= (
+                        TEXT_SNAPSHOT_SAMPLE_SECONDS
+                    )
+                    if archive:
+                        text_archived_at[text_key] = now
+                if archive:
+                    archive_native(
+                        request.emit_event if record_tool_history else None,
+                        "opencode",
+                        kind,
+                        event,
+                        str(sid),
+                    )
                 if tool_key is not None:
                     tool_archived_at[tool_key] = time.monotonic()
                 if kind == "question.asked" and request.receive_message:
@@ -723,7 +754,13 @@ class OpenCodeAdapter(AgentAdapter):
                 or info.get("role") != "assistant"
             ):
                 return fail("invalid_provider_payload", ExternalOutcome.INVALID_FORMAT)
-            archive_native(request.emit_event, "opencode", "message.completed", payload, resume)
+            archive_native(
+                request.emit_event if record_tool_history else None,
+                "opencode",
+                "message.completed",
+                payload,
+                resume,
+            )
             emit(
                 "attempt.progress",
                 {

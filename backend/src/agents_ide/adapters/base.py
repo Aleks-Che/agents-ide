@@ -108,6 +108,8 @@ class AgentAdapterRequest:
     stop_event: Event | None = None
     check_owned: Callable[[], None] | None = None
     receive_message: Callable[[], dict[str, Any] | None] | None = None
+    # Standalone protocol diagnostics retain envelopes; the IDE disables this archive.
+    record_tool_history: bool = True
 
 
 @dataclass(frozen=True)
