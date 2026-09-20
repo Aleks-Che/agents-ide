@@ -328,9 +328,11 @@ def start_run(session: Session, payload: RunStart) -> Run:
     )
     run_id = new_id()
     if configuration.get("workspace_mode") == "worktree" and payload.execution_mode != "simulated":
-        from agents_ide.engine.worktrees import worktree_path
+        from agents_ide.engine.worktrees import plan_worktree
 
-        snapshot["workspace"]["worktree_path"] = str(worktree_path(Path(normalized), run_id))
+        snapshot["workspace"].update(
+            plan_worktree(session, Path(normalized), run_id, payload.chat_id)
+        )
     snapshot_payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     snapshot_hash_value = content_hash(snapshot)
     now = utc_now()

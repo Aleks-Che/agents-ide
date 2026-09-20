@@ -451,7 +451,7 @@ test('imports graph with explicit resource mapping, reviews backup candidates an
     .check()
   await page.getByRole('button', { name: 'Применить импорт' }).click()
   await expect(
-    page.getByRole('heading', { name: 'Входы, роли и лимиты' }),
+    page.getByRole('heading', { name: 'Входы и роли' }),
   ).toBeVisible()
   await page.getByRole('button', { name: 'Сохранить' }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(

@@ -1,0 +1,12 @@
+{
+  "version": "1.18.31",
+  "provider": "local HTTP fixture returning 401",
+  "native_credentials_used": false,
+  "local_provider_calls": 1,
+  "external_provider_calls": 0,
+  "outcome": "unavailable",
+  "error_code": "provider_unauthorized",
+  "retry_safety": "safe",
+  "no_effect": true,
+  "all_processes_stopped": true
+}

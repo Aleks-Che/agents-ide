@@ -146,7 +146,7 @@ test('group diagnostics, safe event text, resume and durable executor after reop
   ).toBeVisible({ timeout: 10000 })
   await expect(dialog.locator('[data-untrusted]')).toHaveCount(0)
   await expect(summary).toContainText(
-    'Изменения группы применятся только к новым Run',
+    'Изменения состава, порядка и параметров применяются перед следующим обращением к модели',
   )
   await dialog.getByRole('button', { name: 'Продолжить', exact: true }).click()
   await expect(

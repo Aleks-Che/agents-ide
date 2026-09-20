@@ -77,6 +77,7 @@ def prepare_git(runner: Runner) -> None:
     if runner.simulated or not any(n["type"] == "GitCommit" for n in runner.nodes.values()):
         return
     workspace = Path(runner.snapshot["workspace"]["workspace_path"])
+    isolated = runner.snapshot["resolved_settings"].get("workspace_mode") == "worktree"
     allowed = tuple(
         sorted(
             {
@@ -90,15 +91,18 @@ def prepare_git(runner: Runner) -> None:
     state = runner.runtime.get("git")
     with using_transport(transport(runner)):
         if state is None:
+            # A dialog worktree owns the edits left by its previous runs. Capture
+            # them in this run's baseline while still protecting paths outside its allowlist.
             baseline = git.capture_baseline(
                 workspace,
                 runner.run_id,
                 allowed,
                 dirty_policy=runner.snapshot["resolved_settings"]["dirty_policy"],
+                allow_existing_changes=isolated,
             )
             expected = runner.snapshot.get("dependencies", {}).get("git", {}).get("fingerprint")
             if (
-                runner.snapshot["resolved_settings"].get("workspace_mode") != "worktree"
+                not isolated
                 and expected is not None
                 and not git.git_policy_matches(baseline.fingerprint, expected)
             ):
@@ -107,11 +111,12 @@ def prepare_git(runner: Runner) -> None:
                 )
             if baseline.head_sha != runner.snapshot["workspace"]["git_head_sha"]:
                 raise AppError("external_change_detected", "HEAD changed after Start", 409)
-            branch = (
-                git.RUN_BRANCH_TEMPLATE.format(run_id=runner.run_id)
-                if runner.snapshot["resolved_settings"]["branch_policy"] == "run_branch"
-                else baseline.branch
-            )
+            branch = baseline.branch
+            if (
+                not isolated
+                and runner.snapshot["resolved_settings"]["branch_policy"] == "run_branch"
+            ):
+                branch = git.RUN_BRANCH_TEMPLATE.format(run_id=runner.run_id)
             if not branch:
                 raise AppError("git_detached_head", "current requires a branch", 409)
             state = {
@@ -143,7 +148,10 @@ def prepare_git(runner: Runner) -> None:
             )
         if state["phase"] != "ready":
             git.update_baseline_ref(workspace, runner.run_id, baseline.head_sha)
-            if runner.snapshot["resolved_settings"]["branch_policy"] == "run_branch":
+            if (
+                not isolated
+                and runner.snapshot["resolved_settings"]["branch_policy"] == "run_branch"
+            ):
                 git.ensure_run_branch(workspace, runner.run_id, baseline.head_sha)
             git.check_workspace(
                 workspace, baseline, allowed, expected_head=state["head"], branch=state["branch"]

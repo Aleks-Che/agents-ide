@@ -323,6 +323,11 @@ def seed(authenticated, tmp_path, *, settings=None, params=None, legacy=False):
                     "role": role,
                     "prompt": "force_decision=passed",
                     "response_format": "json",
+                    "output_schema": {
+                        "type": "object",
+                        "properties": {"verdict": {"type": "string"}},
+                        "required": ["verdict"],
+                    },
                     "params": params or {},
                     "model_selection": {
                         "kind": "direct",
@@ -424,7 +429,11 @@ def test_runner_durable_thread_turn_role_isolation_and_process_cleanup(
         )
         assert all(p.state == "finished" for p in db.scalars(select(ProcessSupervision)))
         assert any(e.type == "agent.session_resumed" for e in db.scalars(select(RunEvent)))
-    assert len([r for r in _read_records(trace) if r["message"].get("method") == "turn/start"]) == 3
+    turns = [
+        r["message"] for r in _read_records(trace) if r["message"].get("method") == "turn/start"
+    ]
+    assert len(turns) == 3
+    assert all(turn["params"]["outputSchema"]["required"] == ["verdict"] for turn in turns)
 
 
 def test_large_response_does_not_abort_active_turn(transport):

@@ -301,7 +301,12 @@ def detect_signing_required(workspace: Path) -> bool:
 
 
 def capture_baseline(
-    workspace: Path, run_id: str, allowlist: Iterable[str], *, dirty_policy: str = "strict"
+    workspace: Path,
+    run_id: str,
+    allowlist: Iterable[str],
+    *,
+    dirty_policy: str = "strict",
+    allow_existing_changes: bool = False,
 ) -> Baseline:
     root = run_git(workspace, ["rev-parse", "--show-toplevel"]).decode().strip()
     if Path(root).resolve() != workspace.resolve():
@@ -312,7 +317,9 @@ def capture_baseline(
         code, path = item["code"], item["path"]
         if code != "??" and code[0] != ".":
             raise GitCommitError("git_index_dirty", "Existing staged changes block the run")
-        if (code != "??" and dirty_policy == "strict") or is_path_allowed(path, allowed):
+        if not allow_existing_changes and (
+            (code != "??" and dirty_policy == "strict") or is_path_allowed(path, allowed)
+        ):
             raise GitCommitError(
                 "git_dirty", "Existing changes overlap the run", details={"path": path}
             )

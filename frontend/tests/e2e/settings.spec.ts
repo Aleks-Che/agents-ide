@@ -445,9 +445,13 @@ test('missing installations and failed catalog have actionable states', async ({
   await panel.getByRole('button', { name: 'OpenCode', exact: true }).click()
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByRole('alert')).toContainText('Проверьте вход')
+  await expect(dialog.getByLabel('Модель по умолчанию')).toHaveValue(
+    'test/first',
+  )
+  // A failed refresh keeps confirmed settings editable without erasing the model.
   await expect(
     dialog.getByRole('button', { name: 'Сохранить', exact: true }),
-  ).toBeDisabled()
+  ).toBeEnabled()
   await expect(
     dialog.getByRole('button', { name: 'Обновить модели' }),
   ).toBeEnabled()

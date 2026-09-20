@@ -10,14 +10,26 @@ from agents_ide.domain.common import to_json, utc_now
 from agents_ide.domain.schemas import RunCommand
 from agents_ide.engine.run_configuration import effective_snapshot
 from agents_ide.errors import AppError
-from agents_ide.persistence.models import CommandJournal, QueueJob, Run, StepExecution
+from agents_ide.persistence.models import (
+    ArtifactManifest,
+    CommandJournal,
+    QueueJob,
+    Run,
+    StepAttempt,
+    StepExecution,
+)
 
 RESTART_STATES = {"queued", "running", "retry_wait", "paused", "stopped", "waiting_input"}
-RESTART_TYPES = {"AgentTask", "LLMRequest", "Command", "CollectContext"}
+RESTART_TYPES = {"AgentTask", "LLMRequest", "Command", "CollectContext", "GitCommit"}
+COMMIT_MESSAGE_ERRORS = {"commit_message_generation_failed", "commit_message_invalid"}
 
 
 def restart_blocked_reason(
-    run: Run, runtime: dict[str, Any], node_type: str, execution: StepExecution | None
+    session: Session,
+    run: Run,
+    runtime: dict[str, Any],
+    node_type: str,
+    execution: StepExecution | None,
 ) -> str | None:
     if run.state not in RESTART_STATES or run.stop_goal == "cancelled":
         return "Дождитесь остановки или завершения текущей команды"
@@ -29,6 +41,22 @@ def restart_blocked_reason(
         "work", {}
     ).get("scope"):
         return "Можно перезапустить этап текущего цикла и пункта плана"
+    if node_type == "GitCommit":
+        if (
+            run.state not in {"waiting_input", "paused", "stopped"}
+            or run.current_execution_id != execution.id
+            or execution.status == "succeeded"
+        ):
+            return "Можно перезапустить только остановившийся Git-этап до создания коммита"
+        if session.scalar(
+            select(ArtifactManifest.id)
+            .where(
+                ArtifactManifest.step_execution_id == execution.id,
+                ArtifactManifest.schema_type == "git_intent",
+            )
+            .limit(1)
+        ):
+            return "Создание коммита уже началось; сначала требуется сверка результата"
     return None
 
 
@@ -45,7 +73,9 @@ def prepare_restart(session: Session, run: Run, command: RunCommand) -> tuple[st
         raise AppError("stage_restart_invalid", "Выполнение этапа не найдено", 422)
     runtime = json.loads(run.runtime_json)
     nodes = {n["id"]: n for n in effective_snapshot(run)["graph"]["nodes"]}
-    reason = restart_blocked_reason(run, runtime, nodes[execution.node_id]["type"], execution)
+    reason = restart_blocked_reason(
+        session, run, runtime, nodes[execution.node_id]["type"], execution
+    )
     latest = session.scalar(
         select(StepExecution.id)
         .where(StepExecution.run_id == run.id, StepExecution.node_id == execution.node_id)
@@ -75,7 +105,12 @@ def prepare_restart(session: Session, run: Run, command: RunCommand) -> tuple[st
         }
         run.runtime_json = to_json(runtime)
     job = session.scalar(select(QueueJob).where(QueueJob.run_id == run.id))
-    if (job is None or job.claimed_by is None) and stored_processes_stopped(session, run):
+    can_apply = (job is None or job.claimed_by is None) and stored_processes_stopped(session, run)
+    if nodes[execution.node_id]["type"] == "GitCommit" and not can_apply:
+        # Do not defer this check: a still-active operation could save an intent
+        # between accepting the restart and the worker applying it.
+        raise AppError("stage_restart_unavailable", "Сначала дождитесь остановки операции Git", 409)
+    if can_apply:
         from agents_ide.engine.events import append_event
 
         for pending in session.scalars(
@@ -193,6 +228,23 @@ def apply_restart(session: Session, run: Run, payload: dict[str, Any], command_i
         "owner_expired",
         "reconciliation_required",
     }
+    # Message generation fails before git_intent is saved. It was historically
+    # reported as configuration_invalid, including in already waiting runs.
+    failed_attempt = (
+        session.get(StepAttempt, run.current_attempt_id) if run.current_attempt_id else None
+    )
+    if (
+        failed_attempt
+        and failed_attempt.execution_id == execution.id
+        and failed_attempt.status == "failed"
+        and failed_attempt.retry_safety == "safe"
+        and failed_attempt.error_code in COMMIT_MESSAGE_ERRORS
+        and any(
+            node["id"] == execution.node_id and node["type"] == "GitCommit"
+            for node in effective_snapshot(run)["graph"]["nodes"]
+        )
+    ):
+        retryable.add("configuration_invalid")
     run.resume_target_json = to_json(
         {
             "action": "dispatch_next",

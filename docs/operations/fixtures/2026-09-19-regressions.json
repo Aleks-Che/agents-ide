@@ -1,0 +1,29 @@
+{
+  "platform": "Windows",
+  "initial_full_suite": {
+    "tests": 1065,
+    "passed": 1052,
+    "failures": 13,
+    "shards": 3
+  },
+  "targeted_after_fixes": {
+    "tests": 32,
+    "failures": 0
+  },
+  "initial_failures_without_passing_rerun": [],
+  "frontend": {
+    "vitest_passed": 159,
+    "playwright_initial_passed": 53,
+    "playwright_initial_failed": 2,
+    "playwright_targeted_passed": 4,
+    "playwright_distinct_scenarios_verified": 55
+  },
+  "checks": [
+    "ruff",
+    "mypy 143 modules",
+    "ESLint",
+    "Prettier",
+    "TypeScript/Vite",
+    "server contracts"
+  ]
+}

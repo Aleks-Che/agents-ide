@@ -355,16 +355,14 @@ def test_preset_update_keeps_user_copy_and_validates_group_resources(authenticat
     with factory() as session:
         system = presets.ensure_preset_installed(session, None, definition.preset_id)
         session.commit()
-        assert (
-            len(
-                list(
-                    session.scalars(
-                        select(PipelineVersion).where(PipelineVersion.template_id == system.id)
-                    )
-                )
-            )
-            == 2
+        definitions = list(
+            session.scalars(select(PipelineVersion).where(PipelineVersion.template_id == system.id))
         )
+        assert len(definitions) == 1
+        updated_nodes = json.loads(definitions[0].graph_json)["nodes"]
+        assert next(n for n in updated_nodes if n["id"] == "implementer")["config"][
+            "prompt"
+        ].endswith("Updated policy")
         assert (
             session.get(PipelineVersion, published.json()["id"]).execution_hash
             == published.json()["execution_hash"]

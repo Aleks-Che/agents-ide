@@ -102,7 +102,7 @@ def test_existing_mixed_job_real_dispatch_never_calls_any_adapter(
     [
         ("opencode", {"permission_mode": "no_tools", "auth": False}),
         ("opencode", {"permission_mode": "no_tools", "serve_args": ["--unsafe"]}),
-        ("codex", {"permission_mode": "read_only", "approval_policy": "on-request"}),
+        ("codex", {"permission_mode": "read_only", "approval_policy": "invalid-policy"}),
         ("codex", {"permission_mode": "read_only", "env": {"CONFIG": "override"}}),
     ],
 )
@@ -249,7 +249,7 @@ def test_retry_cannot_replace_pinned_harness_configuration(authenticated, tmp_pa
     assert job["state"] == "failed"
     patch = {"expected_version": profile["version"]}
     if change == "permission":
-        patch["settings"] = {"permission_mode": "allow"}
+        patch["settings"] = {"permission_mode": "native"}
     elif change == "settings":
         patch["settings"] = {"permission_mode": "no_tools", "new_setting": True}
     elif change == "executable":
@@ -280,11 +280,7 @@ def test_retry_cannot_replace_pinned_harness_configuration(authenticated, tmp_pa
     else:
         with factory() as session, pytest.raises(AppError) as error:
             planning.retry_planning_job(session, job["id"], retry, simulated=True)
-        assert error.value.code == (
-            "council_harness_unverified"
-            if change == "permission"
-            else "planning_retry_harness_changed"
-        )
+        assert error.value.code == "planning_retry_harness_changed"
         assert client.get(f"/api/planning_jobs/{job['id']}").json() == job
 
 

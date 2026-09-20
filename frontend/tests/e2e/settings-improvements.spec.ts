@@ -225,23 +225,30 @@ test('existing published templates and built-in presets open in constructor', as
     .getByRole('menuitem', { name: 'Редактировать', exact: true })
     .click()
   await expect(page.locator('.react-flow__node')).toHaveCount(2)
-  await page.getByRole('button', { name: '+ Condition', exact: true }).click()
-  await page
-    .getByRole('button', { name: 'Сохранить черновик', exact: true })
-    .click()
+  await page.getByRole('button', { name: 'e', exact: true }).click()
+  const nodeParameters = page.getByRole('group', {
+    name: 'Параметры узла',
+    exact: true,
+  })
+  await nodeParameters.getByLabel('Задать: Подпись', { exact: true }).check()
+  await nodeParameters.getByLabel('Подпись', { exact: true }).fill('Completed')
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect
     .poll(
       async () =>
-        (await api(page, 'GET', `/templates/${template.id}`)).draft.graph.nodes
-          .length,
+        (await api(page, 'GET', `/templates/${template.id}`)).draft?.graph
+          ?.nodes?.[1]?.label,
     )
-    .toBe(3)
+    .toBe('Completed')
   await page.getByRole('button', { name: 'Закрыть конструктор' }).click()
   await item.click({ button: 'right' })
   await page
     .getByRole('menuitem', { name: 'Редактировать', exact: true })
     .click()
-  await expect(page.locator('.react-flow__node')).toHaveCount(3)
+  await expect(page.locator('.react-flow__node')).toHaveCount(2)
+  await expect(
+    page.getByRole('button', { name: 'Completed', exact: true }),
+  ).toBeVisible()
   await page.getByRole('button', { name: 'Закрыть конструктор' }).click()
   const preset = page
     .locator('.profile-item')

@@ -383,11 +383,12 @@ class Runner:
         self.simulated = self.snapshot.get("execution_mode") == "simulated"
         graph = self.snapshot["graph"]
         self.nodes = {node["id"]: node for node in graph["nodes"]}
-        if recovering or (has_history and not self.runtime):
+        if recovering or (has_history and not self.runtime.get("work")):
             return self._reconcile(target)
-        if not self.runtime:
+        if not self.runtime.get("work"):
             start = next((n["id"] for n in graph["nodes"] if n["type"] == "Start"), None)
             self.runtime = {
+                **self.runtime,
                 "next_node_id": start,
                 "cycle_id": 1,
                 "external_calls": 0,
@@ -455,7 +456,7 @@ class Runner:
                     else "unknown_external_result",
                     {"reason": exc.code},
                 )
-        if evidence["stopped"] and not self.runtime:
+        if evidence["stopped"] and not self.runtime.get("work"):
             with self.session_factory() as session:
                 has_work = session.scalar(
                     select(StepExecution.id).where(StepExecution.run_id == self.run_id).limit(1)
@@ -2857,6 +2858,12 @@ class Runner:
                         capabilities={
                             "source": "simulated" if self.simulated else "engine",
                             "network": not self.simulated,
+                            "response_format": config.get("response_format", "text"),
+                            **(
+                                {"output_schema": config["output_schema"]}
+                                if isinstance(config.get("output_schema"), dict)
+                                else {}
+                            ),
                         },
                     )
                     key = self._agent_session_key(candidate, str(config.get("role", "")))

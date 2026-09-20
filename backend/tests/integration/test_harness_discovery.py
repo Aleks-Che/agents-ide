@@ -27,7 +27,7 @@ def test_discovery_is_idempotent_and_preserves_settings_after_upgrade(
     first = discover(client, headers)
     assert [h["harness_kind"] for h in first] == ["codex", "opencode"]
     assert first[0]["settings"] == {"permission_mode": "read_only"}
-    assert first[1]["settings"] == {"permission_mode": "no_tools"}
+    assert first[1]["settings"] == {"permission_mode": "native"}
     assert discover(client, headers) == first
     installations["codex"] = str(tmp_path / "new/codex.exe")
     changed = discover(client, headers)

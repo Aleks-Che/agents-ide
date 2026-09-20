@@ -53,6 +53,8 @@ export function workspace(): string {
     'Проект с пробелами',
   )
   mkdirSync(directory, { recursive: true })
+  // Each test project has its own Git identity and workspace reservation.
+  execFileSync('git', ['init', '--quiet', directory], { windowsHide: true })
   return directory
 }
 

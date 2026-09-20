@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from jsonschema import Draft202012Validator
 
 from agents_ide.adapters.base import (
     AdapterError,
@@ -739,6 +740,11 @@ class OpenCodeAdapter(AgentAdapter):
                 return fail("interrupted", ExternalOutcome.UNKNOWN, interruption_confirmed=True)
             if info.get("error"):
                 native_error = info["error"]
+                if (
+                    isinstance(native_error, dict)
+                    and native_error.get("name") == "StructuredOutputError"
+                ):
+                    return fail("invalid_response_format", ExternalOutcome.INVALID_FORMAT)
                 usage = info.get("tokens", {})
                 zero_usage = isinstance(usage, dict) and usage == {
                     "input": 0,
@@ -795,7 +801,12 @@ class OpenCodeAdapter(AgentAdapter):
                     can_handoff=True,
                     elapsed_seconds=time.monotonic() - started,
                 )
-            if info.get("finish") not in {"stop", "end_turn", "length"}:
+            schema = request.capabilities.get("output_schema")
+            structured_key = "structured" if "structured" in info else "structured_output"
+            structured_completion = isinstance(schema, dict) and structured_key in info
+            if info.get("finish") not in {"stop", "end_turn", "length"} and not (
+                info.get("finish") == "tool-calls" and structured_completion
+            ):
                 return fail("provider_result_incomplete", ExternalOutcome.UNKNOWN)
             text = "".join(
                 p["text"]
@@ -808,6 +819,22 @@ class OpenCodeAdapter(AgentAdapter):
                 return fail("response_truncated", ExternalOutcome.INVALID_FORMAT)
             if "]<]minimax[>[<tool_call>" in text:
                 return fail("provider_tool_protocol_invalid", ExternalOutcome.INVALID_FORMAT)
+            if structured_completion:
+                assert isinstance(schema, dict)
+                structured = info[structured_key]
+                if (
+                    "structured" in info
+                    and "structured_output" in info
+                    and info["structured"] != info["structured_output"]
+                ):
+                    return fail("schema_mismatch", ExternalOutcome.INVALID_FORMAT)
+                if not isinstance(structured, dict) or not Draft202012Validator(schema).is_valid(
+                    structured
+                ):
+                    return fail("schema_mismatch", ExternalOutcome.INVALID_FORMAT)
+                # The native envelope (including commentary/tool parts) has already
+                # been archived. The engine must validate the actual structured result.
+                text = json.dumps(structured, ensure_ascii=False, allow_nan=False)
             usage = info.get("tokens", {})
             metrics = []
             if isinstance(usage, dict):
@@ -921,6 +948,24 @@ class OpenCodeAdapter(AgentAdapter):
                 },
             ],
         }
+        if isinstance(request.capabilities.get("output_schema"), dict):
+            if self.session.settings.get("permission_mode", "no_tools") == "native":
+                body["format"] = {
+                    "type": "json_schema",
+                    "schema": request.capabilities["output_schema"],
+                    # Retries belong to the durable engine, not a hidden harness loop.
+                    "retryCount": 0,
+                }
+            else:
+                # OpenCode implements native JSON via a tool. no_tools deliberately
+                # denies that tool too; retain the policy and validate text in Runner.
+                body["parts"].append(
+                    {
+                        "type": "text",
+                        "text": "Return only a JSON object matching this output schema:\n"
+                        + json.dumps(request.capabilities["output_schema"], ensure_ascii=False),
+                    }
+                )
         return body
 
     @staticmethod

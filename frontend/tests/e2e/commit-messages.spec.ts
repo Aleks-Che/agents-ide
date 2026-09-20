@@ -66,11 +66,28 @@ test('GitCommit inherits global defaults and persists independent custom generat
     .fill('Custom prompt for this node')
   await page.getByLabel('Задать: temperature', { exact: true }).check()
   await page.getByLabel('temperature', { exact: true }).fill('0.3')
-  await page
-    .getByRole('button', { name: 'Сохранить черновик', exact: true })
-    .click()
+  await page.getByRole('button', { name: '+ Start', exact: true }).click()
+  await page.getByRole('button', { name: '+ End', exact: true }).click()
+  for (const [source, target] of [
+    ['start_1', 'gitcommit_1'],
+    ['gitcommit_1', 'end_1'],
+  ]) {
+    await page
+      .getByRole('button', { name: 'Добавить связь', exact: true })
+      .click()
+    await page
+      .getByRole('combobox', { name: 'Из узла', exact: true })
+      .selectOption(source)
+    await page
+      .getByRole('combobox', { name: 'В узел', exact: true })
+      .selectOption(target)
+    await page
+      .getByRole('button', { name: 'Создать связь', exact: true })
+      .click()
+  }
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
-    'Черновик сохранён',
+    'Шаблон сохранён',
   )
   const template = (await api(page, 'GET', '/templates')).find(
     (item: { name: string }) => item.name === name,

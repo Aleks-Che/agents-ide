@@ -344,7 +344,7 @@ test('Council can be cancelled before the first revision', async ({ page }) => {
 })
 
 for (const unknown of [false, true]) {
-  test(`Council retry: ${unknown ? 'explicit unknown consent' : 'rotated credentials and lost reply'}`, async ({
+  test(`Council retry: ${unknown ? 'text-only transport failure' : 'rotated credentials and lost reply'}`, async ({
     page,
   }) => {
     test.setTimeout(60_000)
@@ -432,10 +432,8 @@ for (const unknown of [false, true]) {
       await dispatch()
       const before = await api(page, 'GET', `/planning_jobs/${job.id}`)
       expect(before.state).toBe('failed')
-      expect(before.last_error.code).toBe(
-        unknown ? 'unknown_external_result' : 'council_quorum_missing',
-      )
-      expect(before.usage.external_calls).toBe(unknown ? 1 : 2)
+      expect(before.last_error.code).toBe('council_quorum_missing')
+      expect(before.usage.external_calls).toBe(2)
       const accepted = before.drafts.filter(
         (d: { accepted: boolean }) => d.accepted,
       )
@@ -455,10 +453,13 @@ for (const unknown of [false, true]) {
         name: 'Повторить после восстановления доступа',
       })
       if (unknown) {
-        await expect(button).toBeDisabled()
-        await page
-          .getByRole('checkbox', { name: /Предыдущий вызов мог выполниться/ })
-          .check()
+        // Text-only HTTP calls have no workspace effects; retry needs no tool consent.
+        await expect(button).toBeEnabled()
+        await expect(
+          page.getByRole('checkbox', {
+            name: /Предыдущий вызов мог выполниться/,
+          }),
+        ).toHaveCount(0)
       } else {
         // Commit the mutation but lose its HTTP reply: refetch must leave failed UI.
         await page.route(
@@ -476,7 +477,7 @@ for (const unknown of [false, true]) {
       )
       await button.click()
       expect((await request).postDataJSON().acknowledge_unknown_result).toBe(
-        unknown,
+        false,
       )
       await expect(page.getByRole('dialog')).toContainText('drafting')
       if (!unknown) await page.unroute(`**/api/planning_jobs/${job.id}/retry`)
@@ -490,9 +491,7 @@ for (const unknown of [false, true]) {
       expect(after.usage.external_calls).toBe(4)
       expect(after.started_at).toBe(before.started_at)
       expect(after.drafts).toEqual(expect.arrayContaining(accepted))
-      expect(calls.map((c) => c.model)).toEqual(
-        unknown ? ['x', 'x', 'y', 'merge'] : ['x', 'y', 'x', 'merge'],
-      )
+      expect(calls.map((c) => c.model)).toEqual(['x', 'y', 'x', 'merge'])
       expect(
         calls
           .slice(before.usage.external_calls)
@@ -502,9 +501,7 @@ for (const unknown of [false, true]) {
         (e: { type: string }) => e.type === 'planning.retried',
       )
       expect(events).toHaveLength(1)
-      expect(events[0].payload.acknowledged_unknown_members).toHaveLength(
-        unknown ? 1 : 0,
-      )
+      expect(events[0].payload.acknowledged_unknown_members).toHaveLength(0)
       expect(JSON.stringify(after)).not.toContain('synthetic-new-key')
     } finally {
       server.closeAllConnections()
@@ -695,6 +692,7 @@ test('Council with a single accepted draft can be promoted to a degraded plan', 
     )
     await start.click()
     const run = await (await runResponse).json()
+    await page.getByRole('button', { name: 'Подробности', exact: true }).click()
     await expect(
       page.getByText(
         /План Council принят в уменьшенном составе: участников 1\/2/,

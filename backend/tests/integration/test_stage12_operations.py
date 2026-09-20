@@ -15,6 +15,7 @@ from sqlalchemy import select
 from test_stage4_review import execute, make_run
 
 from agents_ide.config import Settings
+from agents_ide.domain.schemas import RunCommand
 from agents_ide.engine.artifacts import ArtifactPayload, record_artifact
 from agents_ide.engine.events import append_event
 from agents_ide.errors import AppError
@@ -26,6 +27,7 @@ from agents_ide.persistence import database
 from agents_ide.persistence.models import ArtifactManifest, PipelineTemplate, PipelineVersion, Run
 from agents_ide.security.filesystem import prepare_data_dir
 from agents_ide.security.secrets import SecretStore
+from agents_ide.services.runs import submit_command
 
 
 def new_target(tmp_path):
@@ -71,6 +73,19 @@ def test_backup_restore_preserves_results_and_requires_reconciliation(
     try:
         result, _ = execute(queued, restored_factory, target, monkeypatch)
         assert result.final_state.value == "paused"
+        with restored_factory() as session:
+            row = session.get(Run, queued["id"])
+            submit_command(
+                session,
+                row.id,
+                RunCommand(
+                    command_id="resume-restored",
+                    command_type="resume",
+                    expected_state_version=row.state_version,
+                ),
+            )
+            session.commit()
+        assert execute(queued, restored_factory, target, monkeypatch)[0].final_state == "completed"
     finally:
         engine.dispose()
     with pytest.raises(AppError, match="new|новый"):
@@ -206,18 +221,10 @@ def test_populated_migration_preset_update_preserves_user_versions(
 )
 def test_update_rejects_unsupported_versions(authenticated, tmp_path, settings, field, value):
     _, factory = make_run(authenticated, tmp_path)
-    # An old/foreign DB may contain unsupported data. Do not weaken triggers in the product.
+    # An old/foreign DB may contain an unsupported saved definition.
     with factory() as session:
         version = session.scalar(select(PipelineVersion))
-        foreign = PipelineVersion(
-            **{
-                column.name: getattr(version, column.name)
-                for column in PipelineVersion.__table__.columns
-            }
-        )
-        foreign.id, foreign.version_number, foreign.execution_hash = "foreign", 999, "f" * 64
-        setattr(foreign, field, value)
-        session.add(foreign)
+        setattr(version, field, value)
         session.commit()
     with pytest.raises(AppError) as error:
         backups.update(settings, tmp_path / "should-not-exist")

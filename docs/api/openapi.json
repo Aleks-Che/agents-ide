@@ -897,7 +897,8 @@
               "transition.selected",
               "workspace.reservation_released",
               "workspace.worktree_created",
-              "workspace.worktree_planned"
+              "workspace.worktree_planned",
+              "workspace.worktree_reused"
             ],
             "title": "Type",
             "type": "string"

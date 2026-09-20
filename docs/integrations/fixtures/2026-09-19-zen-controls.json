@@ -1,0 +1,52 @@
+{
+  "provider": "real native OpenCode Zen + synthetic HTTP LLM",
+  "native_version": "1.18.31",
+  "native_credentials_used": false,
+  "external_model_calls": null,
+  "native_structured_results": 2,
+  "local_provider_calls": 0,
+  "structured_calls": 0,
+  "pipeline_state": "not_run",
+  "single_agent_state": "not_run",
+  "waiting_reasons": [],
+  "controls": [
+    {
+      "command": "pause",
+      "initial_state": "paused",
+      "controller_errors": [],
+      "resumed_state": "completed",
+      "sessions": 2,
+      "session_reused": true
+    },
+    {
+      "command": "stop",
+      "initial_state": "stopped",
+      "controller_errors": [],
+      "resumed_state": "completed",
+      "sessions": 2,
+      "session_reused": false
+    }
+  ],
+  "distinct_sessions": 3,
+  "attempts": 4,
+  "all_processes_stopped": true,
+  "provider_failures": [],
+  "agent_group_fallback": false,
+  "llm_group_fallback": false,
+  "attempt_errors": [
+    "interrupted"
+  ],
+  "structured_result_fields": [
+    "structured"
+  ],
+  "model": "opencode/ling-3.0-flash-fin-free",
+  "catalog_cost": {
+    "input": 0,
+    "output": 0,
+    "cache": {
+      "read": 0,
+      "write": 0
+    }
+  },
+  "account_credentials_used": false
+}

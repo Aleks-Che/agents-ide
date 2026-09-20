@@ -501,6 +501,10 @@ def resolve_settings(
     binding = get_or_404(session, PipelineBindingModel, binding_id)
     version = get_or_404(session, PipelineVersionModel, binding.version_id)
     values, sources = resolve_configuration(binding, version, overrides)
+    from agents_ide.operations.storage import settings_for
+
+    if not settings_for(session).enforce_execution_limits:
+        values["limit_overrides"] = {}
     dependencies = capture_dependencies(session, version_from_model(version).graph, values)
     roles = _binding_role_assignments(version, values)
     settings = []

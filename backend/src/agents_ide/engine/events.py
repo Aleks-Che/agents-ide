@@ -91,6 +91,7 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "git.branch_selected",
         "workspace.worktree_planned",
         "workspace.worktree_created",
+        "workspace.worktree_reused",
         "plan.item_changed",
         "plan.final_check",
         "plan.commit_attached",

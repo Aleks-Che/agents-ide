@@ -1,0 +1,23 @@
+{
+  "provider": "synthetic loopback Chat Completions",
+  "native_version": "1.18.31",
+  "native_credentials_used": false,
+  "external_model_calls": 0,
+  "local_provider_calls": 5,
+  "structured_calls": 3,
+  "pipeline_state": "completed",
+  "single_agent_state": "completed",
+  "distinct_sessions": 3,
+  "attempts": 7,
+  "all_processes_stopped": true,
+  "provider_failures": [],
+  "agent_group_fallback": true,
+  "llm_group_fallback": true,
+  "attempt_errors": [
+    "provider_unauthorized",
+    "server_unavailable"
+  ],
+  "structured_result_fields": [
+    "structured"
+  ]
+}

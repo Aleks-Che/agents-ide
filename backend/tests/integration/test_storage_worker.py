@@ -14,7 +14,7 @@ def test_migration_repeatable_and_sqlite_contract(client, settings):
     with client.app.state.engine.connect() as connection:
         assert connection.exec_driver_sql("PRAGMA journal_mode").scalar() == "wal"
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.exec_driver_sql("PRAGMA busy_timeout").scalar() == 5000
+        assert connection.exec_driver_sql("PRAGMA busy_timeout").scalar() == 100
 
 
 def test_health_separates_worker_readiness(authenticated, settings):

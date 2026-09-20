@@ -126,6 +126,83 @@ def test_explicit_resume_uses_same_id_and_missing_session_creates_new(server):
     assert "agent.session_invalidated" in events
 
 
+@pytest.mark.parametrize("valid", [True, False])
+@pytest.mark.parametrize("field", ["structured", "structured_output"])
+def test_native_structured_result_is_used_and_validated(server, monkeypatch, valid, field):
+    handler, adapter, request = server
+    adapter.session.settings["permission_mode"] = "native"
+    original = handler._send_json
+    schema = {
+        "type": "object",
+        "properties": {"verdict": {"const": "passed"}},
+        "required": ["verdict"],
+    }
+
+    def send(self, status, payload):
+        if isinstance(payload, dict) and isinstance(payload.get("info"), dict):
+            payload["info"][field] = {"verdict": "passed" if valid else "failed"}
+            payload["info"]["finish"] = "tool-calls"
+        return original(self, status, payload)
+
+    monkeypatch.setattr(handler, "_send_json", send)
+    result = adapter.run(replace(request, capabilities={"output_schema": schema}))
+    body = next(r["body"] for r in handler.requests if r["path"].endswith("/message"))
+    contract = json.loads((FIXTURE.parent / "opencode-1.18.30-requests.json").read_text())
+    Draft202012Validator({**contract["message"], "$defs": contract["$defs"]}).validate(body)
+    assert body["format"] == {"type": "json_schema", "schema": schema, "retryCount": 0}
+    if valid:
+        assert result.succeeded
+        assert json.loads(result.raw_text) == {"verdict": "passed"}
+    else:
+        assert result.outcome == ExternalOutcome.UNAVAILABLE
+        assert result.can_handoff
+        assert result.error.code == "schema_mismatch"
+
+
+def test_native_structured_output_error_is_invalid_format(server):
+    handler, adapter, request = server
+    handler.response_error = {"name": "StructuredOutputError", "data": {"retries": 0}}
+    result = adapter.run(request)
+    assert result.outcome == ExternalOutcome.UNAVAILABLE
+    assert result.error.code == "invalid_response_format"
+
+
+@pytest.mark.parametrize("conflicting_fields", [False, True])
+def test_structured_tool_completion_requires_unambiguous_result(
+    server, monkeypatch, conflicting_fields
+):
+    handler, adapter, request = server
+    adapter.session.settings["permission_mode"] = "native"
+    original = handler._send_json
+
+    def send(self, status, payload):
+        if isinstance(payload, dict) and isinstance(payload.get("info"), dict):
+            payload["info"]["finish"] = "tool-calls"
+            if conflicting_fields:
+                payload["info"]["structured"] = {"verdict": "passed"}
+                payload["info"]["structured_output"] = {"verdict": "failed"}
+        return original(self, status, payload)
+
+    monkeypatch.setattr(handler, "_send_json", send)
+    result = adapter.run(replace(request, capabilities={"output_schema": {"type": "object"}}))
+    assert not result.succeeded
+    assert result.error.code == (
+        "schema_mismatch" if conflicting_fields else "provider_result_incomplete"
+    )
+
+
+def test_no_tools_schema_uses_text_without_enabling_structured_output_tool(server):
+    handler, adapter, request = server
+    schema = {"type": "object", "required": ["verdict"]}
+    result = adapter.run(replace(request, capabilities={"output_schema": schema}))
+    assert result.succeeded
+    session = next(r["body"] for r in handler.requests if r["path"] == "/session")
+    assert session["permission"] == [{"permission": "*", "pattern": "*", "action": "deny"}]
+    body = next(r["body"] for r in handler.requests if r["path"].endswith("/message"))
+    assert "format" not in body
+    assert json.dumps(schema) in body["parts"][-1]["text"]
+
+
 def test_paused_session_missing_does_not_dispatch_new_task(server):
     handler, adapter, request = server
     result = adapter.run(replace(request, resume_session_id="ses_missing", resume_required=True))

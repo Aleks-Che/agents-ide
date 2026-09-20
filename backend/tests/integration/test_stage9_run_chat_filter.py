@@ -201,7 +201,7 @@ def test_chat_launch_preflight_inputs_context_snapshot_and_replay(authenticated,
     parameters = {
         "execution_mode": "simulated",
         "inputs": {"task": "from run"},
-        "overrides": {"limit_overrides": {"max_calls": 19}},
+        "overrides": {"branch_policy": "current"},
     }
     checked = client.post(url, json=parameters, headers=headers).json()
     assert checked["ok"], checked
@@ -225,7 +225,7 @@ def test_chat_launch_preflight_inputs_context_snapshot_and_replay(authenticated,
         "messages": [{"id": saved["id"], "role": "user", "content": "saved context"}],
         "values": {"task": "from run", "default_value": "from version"},
     }
-    assert snapshot["resolved_settings"]["limit_overrides"]["max_calls"] == 19
+    assert snapshot["resolved_settings"]["branch_policy"] == "current"
     assert len(client.get(f"/api/chats/{chat['id']}/messages").json()) == 1
     # A retry after subsequent chat/binding edits returns the original immutable snapshot.
     client.post(
@@ -235,7 +235,7 @@ def test_chat_launch_preflight_inputs_context_snapshot_and_replay(authenticated,
     )
     client.patch(
         f"/api/bindings/{binding['id']}",
-        json={"expected_version": binding["version"], "limit_overrides": {"max_calls": 29}},
+        json={"expected_version": binding["version"], "dirty_policy": "allow_nonoverlap"},
         headers=headers,
     )
     replay = client.post("/api/runs", json=body, headers=headers)

@@ -87,16 +87,14 @@ test('library copies a preset and creates a project binding from its immutable v
   await expect(dialog.getByLabel('Название', { exact: true })).toHaveValue(
     `${name} binding`,
   )
-  await dialog.getByLabel('Лимиты (JSON)').fill('broken')
-  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
-  await expect(dialog.getByRole('alert')).toBeVisible()
   const bindings = await api(page, 'GET', `/bindings?project_id=${p.id}`)
   expect(bindings[0].limit_overrides).toEqual({})
-  await dialog.getByLabel('Лимиты (JSON)').fill('{"max_calls":250}')
+  await dialog.getByLabel('Грязный каталог').selectOption('allow_nonoverlap')
   await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   const updated = await api(page, 'GET', `/bindings/${bindings[0].id}`)
-  expect(updated.limit_overrides).toEqual({ max_calls: 250 })
+  expect(updated.dirty_policy).toBe('allow_nonoverlap')
+  expect(updated.limit_overrides).toEqual({})
   expect(updated.project_id).toBe(p.id)
 
   const list = page.getByRole('list', { name: 'Привязки проекта' })
@@ -115,7 +113,7 @@ test('library copies a preset and creates a project binding from its immutable v
   // A stale revision must keep the card; the refreshed revision allows retry.
   await api(page, 'PATCH', `/bindings/${updated.id}`, {
     expected_version: updated.version,
-    limit_overrides: { max_calls: 300 },
+    dirty_policy: 'strict',
   })
   await card.click({ button: 'right' })
   await menu.getByRole('menuitem', { name: 'Удалить', exact: true }).click()

@@ -186,7 +186,9 @@ def build_observation(session: Session, run: Run) -> RunObservation:
         execution = executions.get(item.id)
         from agents_ide.services.stage_restart import restart_blocked_reason
 
-        item.restart_blocked_reason = restart_blocked_reason(run, runtime, item.type, execution)
+        item.restart_blocked_reason = restart_blocked_reason(
+            session, run, runtime, item.type, execution
+        )
         if execution:
             item.execution_id = execution.id
             for key in (

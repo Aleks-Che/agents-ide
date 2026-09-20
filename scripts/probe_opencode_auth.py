@@ -46,8 +46,8 @@ def probe(executable: str) -> dict[str, object]:
         with tempfile.TemporaryDirectory(prefix="agents-ide-provider-auth-") as directory:
             root = Path(directory)
 
-            def environment(password, username="opencode"):
-                env = original(password, username)
+            def environment(password, username="opencode", *, permission_mode="no_tools"):
+                env = original(password, username, permission_mode=permission_mode)
                 env.update(
                     XDG_CONFIG_HOME=str(root / "config"),
                     XDG_DATA_HOME=str(root / "data"),

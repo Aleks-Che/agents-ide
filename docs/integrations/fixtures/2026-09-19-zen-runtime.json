@@ -1,0 +1,51 @@
+{
+  "provider": "real native OpenCode Zen + synthetic HTTP LLM",
+  "native_version": "1.18.31",
+  "native_credentials_used": false,
+  "external_model_calls": null,
+  "native_structured_results": 3,
+  "local_provider_calls": 2,
+  "structured_calls": 0,
+  "pipeline_state": "completed",
+  "single_agent_state": "completed",
+  "waiting_reasons": [],
+  "distinct_sessions": 3,
+  "attempts": 7,
+  "all_processes_stopped": true,
+  "provider_failures": [],
+  "agent_group_fallback": true,
+  "llm_group_fallback": true,
+  "attempt_errors": [
+    "provider_unauthorized",
+    "server_unavailable"
+  ],
+  "structured_result_fields": [
+    "structured"
+  ],
+  "model": "opencode/ling-3.0-flash-fin-free",
+  "catalog_cost": {
+    "input": 0,
+    "output": 0,
+    "cache": {
+      "read": 0,
+      "write": 0
+    }
+  },
+  "account_credentials_used": false,
+  "earlier_observations": [
+    {
+      "route": "direct Chat Completions outside OpenCode",
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "status": 403,
+      "error_type": "FreeTierError",
+      "message": "Free tier only available within OpenCode"
+    },
+    {
+      "route": "native OpenCode",
+      "model": "opencode/nemotron-3.5-lightning-free",
+      "result": "probe_deadline",
+      "deadline_seconds": 300,
+      "completed_acceptance": false
+    }
+  ]
+}

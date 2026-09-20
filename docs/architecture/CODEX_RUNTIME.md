@@ -1,5 +1,11 @@
 # Codex App Server: проверенная часть этапа 6B
 
+Дополнение 19.09.2026: Runner передаёт `AgentTask.output_schema` в capabilities
+адаптера, откуда она попадает в `turn/start.outputSchema`. Strict process fixture
+проверяет это для direct/legacy выбора, продолжения и отдельной reviewer-сессии.
+Повторён native command/exec probe запретов доступа без модели:
+[результаты и границы](../operations/ACCEPTANCE_2026_09_19.md).
+
 Ревью: 2026-09-16. Схема извлечена командой `codex app-server generate-json-schema`
 из **codex-cli 0.153.4**; используемые request/approval схемы сохранены в
 [fixture](../../backend/tests/fixtures/codex-0.153.4-requests.json), без описательного текста.

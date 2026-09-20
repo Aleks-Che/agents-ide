@@ -159,7 +159,8 @@
           "transition.selected",
           "workspace.reservation_released",
           "workspace.worktree_created",
-          "workspace.worktree_planned"
+          "workspace.worktree_planned",
+          "workspace.worktree_reused"
         ],
         "title": "Type",
         "type": "string"
@@ -263,7 +264,8 @@
     "transition.selected",
     "workspace.reservation_released",
     "workspace.worktree_created",
-    "workspace.worktree_planned"
+    "workspace.worktree_planned",
+    "workspace.worktree_reused"
   ],
   "max_payload_bytes": 16384,
   "schema_version": "1.0.0",
@@ -338,6 +340,7 @@
     "transition.selected",
     "workspace.reservation_released",
     "workspace.worktree_created",
-    "workspace.worktree_planned"
+    "workspace.worktree_planned",
+    "workspace.worktree_reused"
   ]
 }

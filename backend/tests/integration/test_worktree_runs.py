@@ -145,16 +145,18 @@ def binding_for(authenticated, workspace, *, commit=True, mode="worktree"):
 
 def start(authenticated, project, binding, **extra):
     client, headers = authenticated
-    chat = client.post(
-        f"/api/projects/{project['id']}/chats", json={"title": str(uuid4())}, headers=headers
-    ).json()
+    chat_id = extra.pop("chat_id", None)
+    if chat_id is None:
+        chat_id = client.post(
+            f"/api/projects/{project['id']}/chats", json={"title": str(uuid4())}, headers=headers
+        ).json()["id"]
     response = client.post(
         "/api/runs",
         headers=headers,
         json={
             "project_id": project["id"],
             "binding_id": binding["id"],
-            "chat_id": chat["id"],
+            "chat_id": chat_id,
             "message": "go",
             "idempotency_key": str(uuid4()),
             **extra,
@@ -162,6 +164,197 @@ def start(authenticated, project, binding, **extra):
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def restart(authenticated, run):
+    client, headers = authenticated
+    current = client.get(f"/api/runs/{run['id']}").json()
+    response = client.post(
+        f"/api/runs/{run['id']}/restart",
+        headers=headers,
+        json={"command_id": str(uuid4()), "expected_state_version": current["state_version"]},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+class ContinuingAgent(AgentAdapter):
+    def __init__(self, root, expected):
+        self.root, self.expected = root, expected
+        self.paths = []
+
+    def run(self, request):
+        root = Path(request.workspace_path)
+        assert root == self.root
+        if request.role == "verifier":
+            assert (root / "src/a.txt").read_text() == self.expected + " continued"
+            body = {"verdict": "passed"}
+            return AgentResult(ExternalOutcome.SUCCEEDED, json.dumps(body), body, "passed")
+        self.paths.append(root)
+        assert (root / "src/a.txt").read_text() == self.expected
+        assert (root / "src/draft.txt").read_text() == "unfinished draft"
+        (root / "src/a.txt").write_text(self.expected + " continued")
+        return AgentResult(ExternalOutcome.SUCCEEDED, "done", {"output": "done"}, None)
+
+
+@pytest.mark.parametrize("commit", [False, True])
+@pytest.mark.parametrize("paused", [False, True])
+def test_restart_and_new_run_in_dialog_keep_worktree_changes(
+    authenticated, repository, settings, monkeypatch, commit, paused
+):
+    client, headers = authenticated
+    project, binding = binding_for(authenticated, repository, commit=commit)
+    first = start(authenticated, project, binding)
+    factory = client.app.state.session_factory
+    runner = claim(factory, settings, first)
+    agent = WritingAgent()
+    monkeypatch.setattr(Runner, "_build_adapters", lambda *_: (agent, None))
+    controls = runner._controls
+
+    def pause_after_edit(**kwargs):
+        if runner.runtime.get("next_node_id") == "command":
+            current = client.get(f"/api/runs/{first['id']}").json()
+            response = client.post(
+                f"/api/runs/{first['id']}/commands",
+                headers=headers,
+                json={
+                    "command_id": "pause",
+                    "command_type": "pause",
+                    "expected_state_version": current["state_version"],
+                },
+            )
+            assert response.status_code == 200, response.text
+        return controls(**kwargs)
+
+    if paused:
+        runner._controls = pause_after_edit
+    assert runner.execute(first["id"]).final_state == ("paused" if paused else "completed")
+    root = agent.paths[0]
+    # Keep both agent output and edits added between runs, regardless of dirty policy.
+    (root / "src/a.txt").write_text(first["id"] + " edited")
+    (root / "src/draft.txt").write_text("unfinished draft")
+    (root / "README.md").write_text("keep outside allowlist")
+    command(repository, "checkout", "-b", "source-moved")
+    (repository / "README.md").write_text("source only")
+    command(repository, "commit", "-am", "source advanced")
+    source_head = command(repository, "rev-parse", "HEAD")
+    with factory() as session:
+        original_snapshot = session.get(Run, first["id"]).snapshot_json
+
+    second = restart(authenticated, first)
+    agent = ContinuingAgent(root, first["id"] + " edited")
+    result = claim(factory, settings, second).execute(second["id"])
+    assert result.final_state == "completed", result
+    assert agent.paths == [root]
+    # A fresh start (e.g. another message/template) shares the same durable assignment.
+    third = start(authenticated, project, binding, chat_id=first["chat_id"])
+    agent = ContinuingAgent(root, first["id"] + " edited continued")
+    result = claim(factory, settings, third).execute(third["id"])
+    assert result.final_state == "completed", result
+    assert agent.paths == [root]
+    assert command(root, "branch", "--show-current") == f"agents-ide/run/{first['id']}"
+    assert command(repository, "worktree", "list", "--porcelain").count("worktree ") == 2
+    assert command(repository, "rev-parse", "HEAD") == source_head
+    assert (repository / "src/a.txt").read_text() == "base\n"
+    assert (root / "README.md").read_text() == "keep outside allowlist"
+    if commit:
+        assert command(root, "rev-list", "--count", "HEAD") == ("3" if paused else "4")
+        assert command(root, "status", "--porcelain") == "M README.md"
+    with factory() as session:
+        assert session.get(Run, first["id"]).snapshot_json == original_snapshot
+        assert {
+            json.loads(row.snapshot_json)["workspace"]["worktree_path"]
+            for row in session.scalars(select(Run).where(Run.chat_id == first["chat_id"]))
+        } == {str(root)}
+
+
+def test_queued_runs_in_dialog_reserve_one_destination(
+    authenticated, repository, settings, monkeypatch
+):
+    client, headers = authenticated
+    project, binding = binding_for(authenticated, repository, commit=False)
+    first = start(authenticated, project, binding)
+    second = start(authenticated, project, binding, chat_id=first["chat_id"])
+    factory = client.app.state.session_factory
+    first_runner = claim(factory, settings, first)
+    assert queue.claim_next_job(factory, worker_id="second", lease_seconds=300) is None
+    current = client.get(f"/api/runs/{first['id']}").json()
+    response = client.post(
+        f"/api/runs/{first['id']}/commands",
+        headers=headers,
+        json={
+            "command_id": "cancel-before-checkout",
+            "command_type": "cancel",
+            "expected_state_version": current["state_version"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert first_runner.execute(first["id"]).final_state == "cancelled"
+    agent = WritingAgent()
+    monkeypatch.setattr(Runner, "_build_adapters", lambda *_: (agent, None))
+    result = claim(factory, settings, second).execute(second["id"])
+    assert result.final_state == "completed", result
+    assert agent.paths[0].name == first["id"]
+    third = restart(authenticated, second)
+    with factory() as session:
+        assert json.loads(session.get(Run, third["id"]).snapshot_json)["workspace"][
+            "worktree_path"
+        ] == str(agent.paths[0])
+    assert command(repository, "worktree", "list", "--porcelain").count("worktree ") == 2
+
+
+def test_legacy_dialog_reuses_prepared_worktree_before_queued_restart(
+    authenticated, repository, settings, monkeypatch
+):
+    from agents_ide.engine import worktrees
+
+    client, _ = authenticated
+    project, binding = binding_for(authenticated, repository, commit=False)
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            worktrees,
+            "plan_worktree",
+            lambda session, repository, run_id, chat_id: {
+                "worktree_path": str(worktrees.worktree_path(repository, run_id))
+            },
+        )
+        first = start(authenticated, project, binding)
+        factory = client.app.state.session_factory
+        agent = WritingAgent()
+        monkeypatch.setattr(Runner, "_build_adapters", lambda *_: (agent, None))
+        assert claim(factory, settings, first).execute(first["id"]).final_state == "completed"
+        queued = start(authenticated, project, binding, chat_id=first["chat_id"])
+    root = agent.paths[0]
+    (root / "src/draft.txt").write_text("unfinished draft")
+    replacement = restart(authenticated, queued)
+    # Restart journals cancellation; the worker acknowledges it before dispatching again.
+    assert claim(factory, settings, queued).execute(queued["id"]).final_state == "cancelled"
+    agent = ContinuingAgent(root, first["id"])
+    result = claim(factory, settings, replacement).execute(replacement["id"])
+    assert result.final_state == "completed", result
+    assert agent.paths == [root]
+    assert command(repository, "worktree", "list", "--porcelain").count("worktree ") == 2
+
+
+def test_missing_dialog_worktree_is_not_recreated(authenticated, repository, settings, monkeypatch):
+    client, _ = authenticated
+    project, binding = binding_for(authenticated, repository, commit=False)
+    first = start(authenticated, project, binding)
+    factory = client.app.state.session_factory
+    agent = WritingAgent()
+    monkeypatch.setattr(Runner, "_build_adapters", lambda *_: (agent, None))
+    assert claim(factory, settings, first).execute(first["id"]).final_state == "completed"
+    root = agent.paths[0]
+    retained = root.with_name("moved-worktree")
+    command(repository, "worktree", "move", str(root), str(retained))
+    replacement = restart(authenticated, first)
+    result = claim(factory, settings, replacement).execute(replacement["id"])
+    assert result.final_state == "waiting_input", result
+    assert result.waiting_reason.code == "workspace_conflict"
+    assert not root.exists()
+    assert (retained / "src/a.txt").read_text() == first["id"]
+    assert len(agent.paths) == 1
+    assert command(repository, "worktree", "list", "--porcelain").count("worktree ") == 2
 
 
 def claim(factory, settings, run):

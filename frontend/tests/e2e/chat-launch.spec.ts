@@ -82,8 +82,8 @@ test('chat launch checks actual inputs and mode, retries a lost response after r
     .getByLabel('Входы запуска (JSON)')
     .fill('{"task":"review from UI"}')
   await dialog.getByLabel('Включить текущий черновик в запуск').check()
-  await dialog.getByText('Лимиты и фильтр команд', { exact: true }).click()
-  await dialog.getByLabel('Лимиты запуска (JSON)').fill('{"max_calls":19}')
+  await dialog.getByText('Фильтр команд', { exact: true }).click()
+  await dialog.getByLabel('Фильтр команд (JSON)').fill('[]')
   await dialog.getByRole('button', { name: 'Запустить preflight' }).click()
   await expect(
     dialog.getByRole('button', { name: 'Запустить', exact: true }),
@@ -100,7 +100,8 @@ test('chat launch checks actual inputs and mode, retries a lost response after r
   const checked = await (await checkedResponse).json()
   expect(checked.execution_mode).toBe('real')
   expect(checked.inputs).toEqual({ task: 'review from UI' })
-  expect(checked.setting_sources['limit_overrides.max_calls']).toBe('run')
+  expect(checked.setting_sources.command_filter).toBe('run')
+  expect(checked.resolved_settings.command_filter).toEqual([])
   // No worker is started: the real Start/End graph is only enqueued by this test.
   const requests: Record<string, unknown>[] = []
   await page.route('**/api/runs', async (route) => {
@@ -190,7 +191,7 @@ test('import consent is explicit and a binding changed after preflight cannot la
   await consent.check()
   await api(page, 'PATCH', `/bindings/${binding.id}`, {
     expected_version: binding.version,
-    limit_overrides: { max_calls: 22 },
+    branch_policy: 'current',
   })
   await dialog.getByRole('button', { name: 'Запустить', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('execution_hash')

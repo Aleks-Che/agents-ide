@@ -366,7 +366,7 @@ def test_import_roundtrip_trust_and_settings(authenticated, tmp_path):
     changed = {
         **start,
         "idempotency_key": "changed",
-        "overrides": {"limit_overrides": {"max_calls": 10}},
+        "overrides": {"branch_policy": "current"},
     }
     assert client.post("/api/runs", headers=headers, json=changed).status_code == 409
 
@@ -555,7 +555,8 @@ def test_missing_secret_is_visible_and_next_llm_candidate_is_usable(authenticate
     }
 
 
-def test_preflight_rejects_unmeasurable_budget(authenticated, tmp_path):
+def test_preflight_rejects_unmeasurable_budget(authenticated, tmp_path, settings):
+    settings.enforce_execution_limits = True
     client, headers = authenticated
     _, _, binding = binding_fixture(authenticated, tmp_path)
     preview = post(

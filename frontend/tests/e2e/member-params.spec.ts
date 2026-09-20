@@ -158,7 +158,6 @@ test('all parameter controls and exact stop sequences survive save, reopen and r
     presence_penalty: 0.5,
     stream: false,
     structured_output: false,
-    timeout_seconds: 0.5,
   }
   await member.getByLabel('Значение stop').fill(JSON.stringify(expected.stop))
   for (const [name, value] of Object.entries(expected)) {
