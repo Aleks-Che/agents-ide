@@ -23,7 +23,11 @@ import {
   type ContextMenuTarget,
 } from '../../app/context_menu'
 import { useRunEventSource } from '../../app/useRunStream'
-import { allowedCommands, pendingAgentRecovery } from './controls'
+import {
+  allowedCommands,
+  pendingAgentRecovery,
+  pendingGitChanges,
+} from './controls'
 import {
   mergeEvents,
   stateDescriptions,
@@ -224,7 +228,7 @@ export function ChatRunProgress({
   const events = mergeEvents(bootstrap.data?.events ?? [], live)
   const actions = run ? allowedCommands(run) : []
   const waiting = run?.waiting_reason
-  const readyToContinue = pendingAgentRecovery(run)
+  const readyToContinue = pendingAgentRecovery(run) || pendingGitChanges(run)
   const menuNode = nodes.find((node) => node.id === stageMenu?.nodeId)
   return (
     <section className="chat-run-progress" aria-label="Выполнение шаблона">
@@ -377,7 +381,7 @@ export function ChatRunProgress({
           </strong>
           <p>
             {readyToContinue
-              ? 'Решение сохранено. Нажмите «Продолжить выполнение», чтобы продолжить текущий этап с выбранным контекстом.'
+              ? 'Решение сохранено. Нажмите «Продолжить выполнение». Сервер повторно проверит условия текущего этапа.'
               : waiting.details?.reason === 'process_not_responding'
                 ? waitingDescriptions.process_not_responding
                 : waiting.details?.reason === 'event_stream_lost'
@@ -450,6 +454,7 @@ export function ChatRunProgress({
       {resolution && run ? (
         <ResolutionForm
           run={run}
+          busy={command.isPending || uncertain || !csrf}
           onSubmit={(payload) => send('resolve', payload)}
           onClose={() => setResolution(false)}
         />
@@ -657,6 +662,18 @@ function StageContent({
       <p className="muted">
         {node.type} · {node.model_id ?? 'Без модели'} · посещение{' '}
         {node.visit_index ?? 0}
+        {node.type === 'AgentTask' && node.context_tokens != null ? (
+          <>
+            {' · '}
+            <span
+              title={`Используемый контекст: ${node.context_tokens.toLocaleString('ru-RU')} токенов`}
+            >
+              {node.context_tokens >= 1000
+                ? `${Number((node.context_tokens / 1000).toFixed(1))}k`
+                : node.context_tokens}
+            </span>
+          </>
+        ) : null}
       </p>
       {history.hasNextPage ? (
         <button

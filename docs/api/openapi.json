@@ -321,6 +321,592 @@
         "title": "ArtifactView",
         "type": "object"
       },
+      "AssistanceAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "context": {
+            "$ref": "#/components/schemas/AssistanceContext"
+          },
+          "model": {
+            "$ref": "#/components/schemas/AssistanceModel"
+          }
+        },
+        "required": [
+          "content",
+          "context",
+          "model"
+        ],
+        "title": "AssistanceAnswer",
+        "type": "object"
+      },
+      "AssistanceContext": {
+        "additionalProperties": false,
+        "properties": {
+          "collected_at": {
+            "title": "Collected At",
+            "type": "number"
+          },
+          "diagnostic_revision": {
+            "title": "Diagnostic Revision",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/AssistanceFinding"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "guide": {
+            "$ref": "#/components/schemas/AssistanceGuide"
+          },
+          "omitted_findings": {
+            "title": "Omitted Findings",
+            "type": "integer"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssistanceTarget"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/AssistanceTool"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
+          "worker": {
+            "additionalProperties": true,
+            "title": "Worker",
+            "type": "object"
+          }
+        },
+        "required": [
+          "target",
+          "title",
+          "collected_at",
+          "guide",
+          "worker",
+          "findings",
+          "omitted_findings",
+          "questions",
+          "diagnostic_revision"
+        ],
+        "title": "AssistanceContext",
+        "type": "object"
+      },
+      "AssistanceFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "attention": {
+            "title": "Attention",
+            "type": "boolean"
+          },
+          "chat_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
+          },
+          "chat_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Title"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "title": "Evidence",
+            "type": "object"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "next_step": {
+            "title": "Next Step",
+            "type": "string"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "source_kind",
+          "chat_id",
+          "chat_title",
+          "state",
+          "attention",
+          "node_id",
+          "code",
+          "explanation",
+          "evidence",
+          "next_step",
+          "question"
+        ],
+        "title": "AssistanceFinding",
+        "type": "object"
+      },
+      "AssistanceGuide": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_mutations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Mutations",
+            "type": "array"
+          },
+          "available_data": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Data",
+            "type": "array"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "diagnostic_cases": {
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticCase"
+            },
+            "title": "Diagnostic Cases",
+            "type": "array"
+          },
+          "diagnostic_rules": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Diagnostic Rules",
+            "type": "array"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "zone": {
+            "enum": [
+              "application",
+              "project",
+              "chat",
+              "runs",
+              "templates",
+              "settings"
+            ],
+            "title": "Zone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "zone",
+          "title",
+          "description",
+          "available_data",
+          "capabilities",
+          "allowed_mutations",
+          "questions"
+        ],
+        "title": "AssistanceGuide",
+        "type": "object"
+      },
+      "AssistanceMessage": {
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/AssistanceTurn"
+            },
+            "maxItems": 12,
+            "title": "History",
+            "type": "array"
+          },
+          "message": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssistanceTarget"
+          }
+        },
+        "required": [
+          "target",
+          "connection_id",
+          "model_id",
+          "message"
+        ],
+        "title": "AssistanceMessage",
+        "type": "object"
+      },
+      "AssistanceModel": {
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "connection_name": {
+            "title": "Connection Name",
+            "type": "string"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "connection_id",
+          "connection_name",
+          "model_id"
+        ],
+        "title": "AssistanceModel",
+        "type": "object"
+      },
+      "AssistanceSuggestions": {
+        "additionalProperties": false,
+        "properties": {
+          "diagnostic_revision": {
+            "title": "Diagnostic Revision",
+            "type": "string"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "number"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "questions",
+          "diagnostic_revision",
+          "generated_at"
+        ],
+        "title": "AssistanceSuggestions",
+        "type": "object"
+      },
+      "AssistanceTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "chat_id": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "zone": {
+            "enum": [
+              "application",
+              "project",
+              "chat",
+              "runs",
+              "templates",
+              "settings"
+            ],
+            "title": "Zone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "zone"
+        ],
+        "title": "AssistanceTarget",
+        "type": "object"
+      },
+      "AssistanceTool": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_label": {
+            "title": "Confirmation Label",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "enum": [
+              "accept_git_head_and_resume",
+              "accept_git_files_and_resume",
+              "refresh_commit_connection_and_resume"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "requires_confirmation": {
+            "const": true,
+            "default": true,
+            "title": "Requires Confirmation",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "run_id",
+          "title",
+          "description",
+          "confirmation_label"
+        ],
+        "title": "AssistanceTool",
+        "type": "object"
+      },
+      "AssistanceToolRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledge_risk": {
+            "const": true,
+            "title": "Acknowledge Risk",
+            "type": "boolean"
+          },
+          "comparison_id": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Comparison Id",
+            "type": "string"
+          },
+          "confirm_resume": {
+            "const": true,
+            "title": "Confirm Resume",
+            "type": "boolean"
+          },
+          "expected_state_version": {
+            "minimum": 0.0,
+            "title": "Expected State Version",
+            "type": "integer"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Paths",
+            "type": "array"
+          },
+          "run_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssistanceTarget"
+          },
+          "tool": {
+            "enum": [
+              "accept_git_head_and_resume",
+              "accept_git_files_and_resume",
+              "refresh_commit_connection_and_resume"
+            ],
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "target",
+          "run_id",
+          "comparison_id",
+          "expected_state_version",
+          "acknowledge_risk",
+          "confirm_resume"
+        ],
+        "title": "AssistanceToolRequest",
+        "type": "object"
+      },
+      "AssistanceToolResult": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Accepted Paths",
+            "type": "array"
+          },
+          "command_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Command Ids",
+            "type": "array"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "tool": {
+            "enum": [
+              "accept_git_head_and_resume",
+              "accept_git_files_and_resume",
+              "refresh_commit_connection_and_resume"
+            ],
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool",
+          "run_id",
+          "state",
+          "content",
+          "command_ids"
+        ],
+        "title": "AssistanceToolResult",
+        "type": "object"
+      },
+      "AssistanceTurn": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 12000,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "AssistanceTurn",
+        "type": "object"
+      },
       "CandidateEntry": {
         "properties": {
           "enabled": {
@@ -582,6 +1168,157 @@
         "title": "CommandAccepted",
         "type": "object"
       },
+      "CommitConnectionReview": {
+        "additionalProperties": false,
+        "properties": {
+          "assessment": {
+            "title": "Assessment",
+            "type": "string"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "can_accept": {
+            "title": "Can Accept",
+            "type": "boolean"
+          },
+          "changed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed Fields",
+            "type": "array"
+          },
+          "checks_not_performed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checks Not Performed",
+            "type": "array"
+          },
+          "checks_performed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checks Performed",
+            "type": "array"
+          },
+          "comparison_id": {
+            "title": "Comparison Id",
+            "type": "string"
+          },
+          "connection_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Connection Name"
+          },
+          "current_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Version"
+          },
+          "effect": {
+            "default": "Обновится только ожидаемая версия подключения для сообщения этого GitCommit. Модель, адрес, ключ, инструкции и остальные этапы сохранятся. После подтверждения запуск продолжится: повторит Git-проверки и сможет отправить diff прежнему провайдеру для генерации сообщения и создать коммит. Результаты предыдущих этапов не пересчитываются. Это не подтверждение успешного коммита.",
+            "title": "Effect",
+            "type": "string"
+          },
+          "execution_settings_match": {
+            "title": "Execution Settings Match",
+            "type": "boolean"
+          },
+          "expected_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Version"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "previous_guard_attempt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Guard Attempt Id"
+          },
+          "reviewed_at": {
+            "title": "Reviewed At",
+            "type": "number"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state_version": {
+            "title": "State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "node_id",
+          "state_version",
+          "comparison_id",
+          "reviewed_at",
+          "connection_name",
+          "model",
+          "expected_version",
+          "current_version",
+          "changed_fields",
+          "execution_settings_match",
+          "can_accept",
+          "blockers",
+          "assessment",
+          "checks_performed"
+        ],
+        "title": "CommitConnectionReview",
+        "type": "object"
+      },
       "CommitMessageSettings": {
         "additionalProperties": false,
         "properties": {
@@ -620,6 +1357,54 @@
           }
         },
         "title": "CommitMessageSettings",
+        "type": "object"
+      },
+      "DiagnosticCase": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "meaning": {
+            "title": "Meaning",
+            "type": "string"
+          },
+          "signals": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signals",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "signals",
+          "meaning",
+          "checks",
+          "limitations"
+        ],
+        "title": "DiagnosticCase",
         "type": "object"
       },
       "DirectAgentSelection": {
@@ -1136,6 +1921,331 @@
           }
         },
         "title": "GeneralSettings",
+        "type": "object"
+      },
+      "GitChangesReview": {
+        "additionalProperties": false,
+        "properties": {
+          "attempt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempt Id"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "can_accept": {
+            "title": "Can Accept",
+            "type": "boolean"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/GitProtectedChange"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "checks_performed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Checks Performed",
+            "type": "array"
+          },
+          "comparison_id": {
+            "title": "Comparison Id",
+            "type": "string"
+          },
+          "effect": {
+            "title": "Effect",
+            "type": "string"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHeadReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "default": "protected_files",
+            "enum": [
+              "protected_files",
+              "head"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "omitted_changes": {
+            "title": "Omitted Changes",
+            "type": "integer"
+          },
+          "reviewed_at": {
+            "title": "Reviewed At",
+            "type": "number"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state_version": {
+            "title": "State Version",
+            "type": "integer"
+          },
+          "workspace_path": {
+            "title": "Workspace Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "attempt_id",
+          "state_version",
+          "reviewed_at",
+          "comparison_id",
+          "workspace_path",
+          "changes",
+          "omitted_changes",
+          "blockers",
+          "can_accept",
+          "effect"
+        ],
+        "title": "GitChangesReview",
+        "type": "object"
+      },
+      "GitFileState": {
+        "additionalProperties": false,
+        "properties": {
+          "exists": {
+            "title": "Exists",
+            "type": "boolean"
+          },
+          "ignored": {
+            "title": "Ignored",
+            "type": "boolean"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          }
+        },
+        "required": [
+          "exists",
+          "size",
+          "ignored",
+          "mode"
+        ],
+        "title": "GitFileState",
+        "type": "object"
+      },
+      "GitHeadReview": {
+        "additionalProperties": false,
+        "properties": {
+          "assessment": {
+            "title": "Assessment",
+            "type": "string"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/HeadFileChange"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/HeadCommit"
+            },
+            "title": "Commits",
+            "type": "array"
+          },
+          "current": {
+            "title": "Current",
+            "type": "string"
+          },
+          "expected": {
+            "title": "Expected",
+            "type": "string"
+          },
+          "omitted_changes": {
+            "title": "Omitted Changes",
+            "type": "integer"
+          },
+          "omitted_commits": {
+            "title": "Omitted Commits",
+            "type": "integer"
+          },
+          "omitted_worktree_changes": {
+            "title": "Omitted Worktree Changes",
+            "type": "integer"
+          },
+          "relation": {
+            "enum": [
+              "same",
+              "fast_forward",
+              "rewound",
+              "diverged",
+              "unavailable"
+            ],
+            "title": "Relation",
+            "type": "string"
+          },
+          "worktree_changes": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Worktree Changes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected",
+          "current",
+          "relation",
+          "commits",
+          "omitted_commits",
+          "changes",
+          "omitted_changes",
+          "worktree_changes",
+          "omitted_worktree_changes",
+          "assessment"
+        ],
+        "title": "GitHeadReview",
+        "type": "object"
+      },
+      "GitProtectedChange": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitFileState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assessment": {
+            "title": "Assessment",
+            "type": "string"
+          },
+          "before": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitFileState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "change": {
+            "enum": [
+              "added",
+              "modified",
+              "removed"
+            ],
+            "title": "Change",
+            "type": "string"
+          },
+          "changed_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Changed Fields",
+            "type": "array"
+          },
+          "comparison": {
+            "enum": [
+              "text",
+              "metadata_only",
+              "hidden"
+            ],
+            "title": "Comparison",
+            "type": "string"
+          },
+          "comparison_note": {
+            "title": "Comparison Note",
+            "type": "string"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff"
+          },
+          "diff_truncated": {
+            "default": false,
+            "title": "Diff Truncated",
+            "type": "boolean"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "risk": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "unknown"
+            ],
+            "title": "Risk",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "change",
+          "before",
+          "after",
+          "changed_fields",
+          "risk",
+          "assessment",
+          "comparison",
+          "comparison_note"
+        ],
+        "title": "GitProtectedChange",
         "type": "object"
       },
       "GraphImportRequest": {
@@ -1718,6 +2828,75 @@
           "expected_version"
         ],
         "title": "HarnessProfileUpdate",
+        "type": "object"
+      },
+      "HeadCommit": {
+        "additionalProperties": false,
+        "properties": {
+          "sha": {
+            "title": "Sha",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "subject"
+        ],
+        "title": "HeadCommit",
+        "type": "object"
+      },
+      "HeadFileChange": {
+        "additionalProperties": false,
+        "properties": {
+          "assessment": {
+            "title": "Assessment",
+            "type": "string"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diff"
+          },
+          "diff_truncated": {
+            "default": false,
+            "title": "Diff Truncated",
+            "type": "boolean"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "risk": {
+            "enum": [
+              "medium",
+              "high",
+              "unknown"
+            ],
+            "title": "Risk",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "status",
+          "risk",
+          "assessment"
+        ],
+        "title": "HeadFileChange",
         "type": "object"
       },
       "HistoryPage": {
@@ -2741,6 +3920,17 @@
               }
             ],
             "title": "Attempt Id"
+          },
+          "context_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Tokens"
           },
           "cycle_id": {
             "anyOf": [
@@ -6534,6 +7724,39 @@
         "title": "SingleAgentSpec",
         "type": "object"
       },
+      "SuggestionsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Connection Id",
+            "type": "string"
+          },
+          "diagnostic_revision": {
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Diagnostic Revision",
+            "type": "string"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssistanceTarget"
+          }
+        },
+        "required": [
+          "target",
+          "connection_id",
+          "model_id",
+          "diagnostic_revision"
+        ],
+        "title": "SuggestionsRequest",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -6865,6 +8088,307 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/assistance/catalog": {
+      "get": {
+        "operationId": "assistance_catalog_api_assistance_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssistanceGuide"
+                  },
+                  "title": "Response Assistance Catalog Api Assistance Catalog Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Assistance Catalog",
+        "tags": [
+          "assistance"
+        ]
+      }
+    },
+    "/api/assistance/context": {
+      "get": {
+        "operationId": "assistance_context_api_assistance_context_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "zone",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application",
+                "project",
+                "chat",
+                "runs",
+                "templates",
+                "settings"
+              ],
+              "title": "Zone",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "chat_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Chat Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistanceContext"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assistance Context",
+        "tags": [
+          "assistance"
+        ]
+      }
+    },
+    "/api/assistance/messages": {
+      "post": {
+        "operationId": "assistance_message_api_assistance_messages_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistanceMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistanceAnswer"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assistance Message",
+        "tags": [
+          "assistance"
+        ]
+      }
+    },
+    "/api/assistance/models": {
+      "get": {
+        "operationId": "assistance_models_api_assistance_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssistanceModel"
+                  },
+                  "title": "Response Assistance Models Api Assistance Models Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Assistance Models",
+        "tags": [
+          "assistance"
+        ]
+      }
+    },
+    "/api/assistance/runs/{run_id}/commit-connection": {
+      "get": {
+        "operationId": "assistance_commit_connection_api_assistance_runs__run_id__commit_connection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitConnectionReview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assistance Commit Connection",
+        "tags": [
+          "assistance"
+        ]
+      }
+    },
+    "/api/assistance/suggestions": {
+      "post": {
+        "operationId": "assistance_suggestions_api_assistance_suggestions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistanceSuggestions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assistance Suggestions",
+        "tags": [
+          "assistance"
+        ]
+      }
+    },
+    "/api/assistance/tools/execute": {
+      "post": {
+        "operationId": "assistance_tool_api_assistance_tools_execute_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistanceToolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistanceToolResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assistance Tool",
+        "tags": [
+          "assistance"
+        ]
+      }
+    },
     "/api/auth/logout": {
       "post": {
         "operationId": "logout_api_auth_logout_post",
@@ -10820,6 +12344,48 @@
           }
         },
         "summary": "Replay Run Events Endpoint",
+        "tags": [
+          "domain"
+        ]
+      }
+    },
+    "/api/runs/{run_id}/git-changes": {
+      "get": {
+        "operationId": "git_changes_endpoint_api_runs__run_id__git_changes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitChangesReview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Git Changes Endpoint",
         "tags": [
           "domain"
         ]

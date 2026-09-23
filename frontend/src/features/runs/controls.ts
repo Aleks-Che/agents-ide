@@ -1,5 +1,15 @@
 import type { RunRecord, RunCommand } from '../../api/runs'
 
+export function pendingGitChanges(run?: RunRecord): boolean {
+  const status = run?.waiting_reason?.resolution_schema?.git_changes as
+    { accepted?: boolean } | undefined
+  return (
+    !!run &&
+    ['waiting_input', 'paused', 'stopped'].includes(run.state) &&
+    status?.accepted === true
+  )
+}
+
 export function pendingAgentRecovery(run?: RunRecord): boolean {
   if (!run || !['waiting_input', 'paused'].includes(run.state)) return false
   const recovery = run.waiting_reason?.resolution_schema?.agent_recovery as

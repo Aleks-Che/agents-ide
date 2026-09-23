@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 from pydantic import Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session
 
 from agents_ide.domain.schemas import ApiOutput
@@ -41,7 +42,9 @@ class SidebarActivity(ApiOutput):
     chats: dict[str, ActivityStatus] = Field(default_factory=dict)
 
 
-def _runs_awaiting_input(session: Session) -> set[str]:
+def _runs_awaiting_input(
+    session: Session, project_id: str | None = None, chat_id: str | None = None
+) -> set[str]:
     # Questions and permission prompts do not change the Run's running state.
     # Only the current attempt can require a reply; ignore stale attempt events.
     events = session.execute(
@@ -53,6 +56,8 @@ def _runs_awaiting_input(session: Session) -> set[str]:
             Project.archived_at.is_(None),
             Chat.archived_at.is_(None),
             Run.state == "running",
+            Run.project_id == project_id if project_id else true(),
+            Run.chat_id == chat_id if chat_id else true(),
             RunEvent.step_attempt_id == Run.current_attempt_id,
             RunEvent.type.in_(["agent.input_requested", "agent.input_closed"]),
         )
@@ -83,20 +88,24 @@ def _runs_awaiting_input(session: Session) -> set[str]:
     return {run_id for run_id, _ in pending}
 
 
-def sidebar_activity(session: Session) -> SidebarActivity:
-    result = SidebarActivity()
+@dataclass(frozen=True)
+class ActivitySource:
+    id: str
+    kind: str
+    project_id: str
+    chat_id: str | None
+    state: str
+    running: bool
+    attention: bool
 
-    def add(project_id: str, chat_id: str | None, *, running: bool, attention: bool) -> None:
-        if not running and not attention:
-            return
-        statuses = [result.projects.setdefault(project_id, ActivityStatus())]
-        if chat_id is not None:
-            statuses.append(result.chats.setdefault(chat_id, ActivityStatus()))
-        for status in statuses:
-            status.running |= running
-            status.attention |= attention
 
-    pending_inputs = _runs_awaiting_input(session)
+def activity_sources(
+    session: Session, project_id: str | None = None, chat_id: str | None = None
+) -> list[ActivitySource]:
+    """Shared source of truth for badges and contextual assistance."""
+    result: list[ActivitySource] = []
+
+    pending_inputs = _runs_awaiting_input(session, project_id, chat_id)
     # Rank before filtering states: a completed/cancelled replacement also
     # supersedes old failures and waiting runs. Running processes still count.
     ranked_runs = (
@@ -115,6 +124,8 @@ def sidebar_activity(session: Session) -> SidebarActivity:
         .where(
             Project.archived_at.is_(None),
             Chat.archived_at.is_(None),
+            Run.project_id == project_id if project_id else true(),
+            Run.chat_id == chat_id if chat_id else true(),
         )
         .subquery()
     )
@@ -134,14 +145,20 @@ def sidebar_activity(session: Session) -> SidebarActivity:
                 )
             )
         )
-        add(
-            run.project_id,
-            run.chat_id,
-            running=run.state in RUNNING_STATES and not attention,
-            attention=attention,
+        result.append(
+            ActivitySource(
+                run.id,
+                "run",
+                run.project_id,
+                run.chat_id,
+                run.state,
+                running=run.state in RUNNING_STATES and not attention,
+                attention=attention,
+            )
         )
     ranked_jobs = (
         select(
+            PlanningJob.id,
             PlanningJob.project_id,
             PlanningJob.chat_id,
             PlanningJob.state,
@@ -157,6 +174,8 @@ def sidebar_activity(session: Session) -> SidebarActivity:
         .where(
             Project.archived_at.is_(None),
             Chat.archived_at.is_(None),
+            PlanningJob.project_id == project_id if project_id else true(),
+            PlanningJob.chat_id == chat_id if chat_id else true(),
         )
         .subquery()
     )
@@ -165,11 +184,28 @@ def sidebar_activity(session: Session) -> SidebarActivity:
             ranked_jobs.c.state.in_(PLANNING_RUNNING_STATES | PLANNING_ATTENTION_STATES)
         )
     ):
-        add(
-            job.project_id,
-            job.chat_id,
-            running=job.state in PLANNING_RUNNING_STATES,
-            attention=job.state in PLANNING_ATTENTION_STATES
-            and (job.chat_id is None or job.recency == 1),
+        result.append(
+            ActivitySource(
+                job.id,
+                "planning",
+                job.project_id,
+                job.chat_id,
+                job.state,
+                running=job.state in PLANNING_RUNNING_STATES,
+                attention=job.state in PLANNING_ATTENTION_STATES
+                and (job.chat_id is None or job.recency == 1),
+            )
         )
+    return [source for source in result if source.running or source.attention]
+
+
+def sidebar_activity(session: Session) -> SidebarActivity:
+    result = SidebarActivity()
+    for source in activity_sources(session):
+        statuses = [result.projects.setdefault(source.project_id, ActivityStatus())]
+        if source.chat_id is not None:
+            statuses.append(result.chats.setdefault(source.chat_id, ActivityStatus()))
+        for status in statuses:
+            status.running |= source.running
+            status.attention |= source.attention
     return result

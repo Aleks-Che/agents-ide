@@ -16,6 +16,7 @@ import { object } from '../pipelines/graph'
 import {
   allowedCommands,
   pendingAgentRecovery,
+  pendingGitChanges,
   resolutionPayload,
 } from './controls'
 import { GroupSummarySection } from './GroupSummarySection'
@@ -23,15 +24,18 @@ import { RunTimeline } from './RunTimeline'
 import { RunWorkspace } from './RunWorkspace'
 import { LoopProgress } from './LoopProgress'
 import { ArtifactDetail } from './ArtifactDetail'
+import { GitChangesResolution } from './GitChangesResolution'
 import { duration, stateDescriptions, waitingDescriptions } from './observation'
 const RunGraph = lazy(() => import('./RunGraph'))
 
 export function RunScreen({
   runId,
   onClose,
+  initialResolution = false,
 }: {
   runId: string
   onClose: () => void
+  initialResolution?: boolean
 }) {
   const csrf = useCsrfToken()
   const client = useQueryClient()
@@ -71,7 +75,7 @@ export function RunScreen({
     queryFn: () => runsApi.snapshot(runId),
     refetchInterval: 6000,
   })
-  const [resolutionOpen, setResolutionOpen] = useState(false)
+  const [resolutionOpen, setResolutionOpen] = useState(initialResolution)
   const refresh = () => {
     for (const queryKey of [
       ['run', runId],
@@ -125,7 +129,7 @@ export function RunScreen({
   const actions = data
     ? allowedCommands(data, diagnostics.data?.resume_target)
     : []
-  const readyToContinue = pendingAgentRecovery(data)
+  const readyToContinue = pendingAgentRecovery(data) || pendingGitChanges(data)
   return (
     <Modal onClose={onClose} busy={command.isPending} labelledBy="run-title">
       <div className="dialog wide run-screen">
@@ -312,6 +316,7 @@ export function RunScreen({
               <ResolutionForm
                 key={waiting?.code ?? 'resolution'}
                 run={data}
+                busy={command.isPending || uncertain || !csrf}
                 onSubmit={(payload) => send('resolve', payload)}
                 onClose={() => setResolutionOpen(false)}
               />
@@ -535,10 +540,12 @@ export function ResolutionForm({
   run,
   onSubmit,
   onClose,
+  busy = false,
 }: {
   run: RunRecord
   onSubmit: (payload: Record<string, unknown>) => void
   onClose: () => void
+  busy?: boolean
 }) {
   const [text, setText] = useState('')
   const [action, setAction] = useState('')
@@ -557,6 +564,19 @@ export function ResolutionForm({
   const recoveringAgent = ['continue_session', 'next_candidate'].includes(
     action,
   )
+  if (
+    reason === 'external_change_detected' &&
+    object(waiting?.resolution_schema?.git_changes).can_review
+  ) {
+    return (
+      <GitChangesResolution
+        run={run}
+        onSubmit={onSubmit}
+        onClose={onClose}
+        busy={busy}
+      />
+    )
+  }
   return (
     <form
       aria-label="Решение ожидания"

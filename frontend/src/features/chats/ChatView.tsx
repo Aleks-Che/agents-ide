@@ -22,6 +22,7 @@ import { ChatRunProgress } from '../runs/ChatRunProgress'
 import { runsApi } from '../../api/runs'
 import { formatDateTime } from '../../app/format'
 import { useCsrfToken } from '../../app/session'
+import { useAssistance } from '../assistance/context'
 import { CouncilPanel, CouncilReviewer } from '../planning/CouncilPanel'
 import {
   planningApi,
@@ -46,6 +47,7 @@ export function ChatView({
   onDraftChange,
   onOpenTemplates,
 }: ChatViewProps) {
+  const assistance = useAssistance()
   const client = useQueryClient()
   const csrf = useCsrfToken()
   const [launchOpen, setLaunchOpen] = useState(false)
@@ -180,6 +182,21 @@ export function ChatView({
         <div>
           <span className="eyebrow">Диалог</span>
           <h2 id="chat-title">{chat.title}</h2>
+          {projectId && (
+            <button
+              type="button"
+              className="quiet"
+              onClick={() =>
+                assistance.open({
+                  zone: 'chat',
+                  project_id: projectId,
+                  chat_id: chat.id,
+                })
+              }
+            >
+              Спросить ИИ об этом диалоге
+            </button>
+          )}
           <span className="muted">
             Создан {formatDateTime(chat.created_at)} · обновлён{' '}
             {formatDateTime(chat.updated_at)}

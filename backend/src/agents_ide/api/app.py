@@ -20,6 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from starlette.exceptions import HTTPException
 
 from agents_ide import __version__
+from agents_ide.api.assistance import router as assistance_router
 from agents_ide.api.domain import router as domain_router
 from agents_ide.config import Settings
 from agents_ide.errors import AppError
@@ -199,6 +200,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return session
 
     app.include_router(domain_router, dependencies=[Depends(current_session)])
+    app.include_router(assistance_router, dependencies=[Depends(current_session)])
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

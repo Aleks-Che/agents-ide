@@ -18,6 +18,9 @@ import {
 import { LibraryView } from '../features/bindings/LibraryView'
 import { RunsView } from '../features/runs/RunsView'
 import { getSidebarActivity } from '../api/activity'
+import type { AssistanceTarget } from '../api/assistance'
+import { AssistanceProvider } from '../features/assistance/AssistanceProvider'
+import { assistanceZone } from '../features/assistance/targets'
 
 const pairingCommand = 'agents-ide auth pair-code'
 
@@ -318,213 +321,252 @@ function SignedInShell({
     chats.data?.find((chat) => chat.id === selectedChatId) ??
     chats.data?.[0] ??
     null
+  const assistanceTarget: AssistanceTarget =
+    view === 'settings'
+      ? { zone: 'settings' }
+      : view === 'library'
+        ? { zone: 'templates' }
+        : selectedProject
+          ? view === 'runs'
+            ? { zone: 'runs', project_id: selectedProject.id }
+            : selectedChat
+              ? {
+                  zone: 'chat',
+                  project_id: selectedProject.id,
+                  chat_id: selectedChat.id,
+                }
+              : { zone: 'project', project_id: selectedProject.id }
+          : { zone: 'application' }
 
   return (
-    <div className="shell workspace-shell">
-      <aside className="sidebar">
-        <a className="brand" href="/" aria-label="Agents IDE — главная">
-          <span className="brand-mark">A</span> Agents IDE
-        </a>
-        <span className="section-label">РАБОЧАЯ ОБЛАСТЬ</span>
-        <ProjectsPanel
-          activity={activity.data?.projects}
-          selectedId={selectedProject?.id ?? null}
-          onRenamed={(project) => {
-            setSelectedProject((selected) =>
-              selected?.id === project.id ? project : selected,
-            )
-          }}
-          onRemoved={(projectId) => {
-            if (selectedProject?.id !== projectId) return
-            setSelectedProject(null)
-            setSelectedChatId(null)
-            if (view === 'runs') setView('chats')
-          }}
-          onSelect={(project) => {
-            setSelectedProject(project)
-            if (project.id !== selectedProject?.id) setSelectedChatId(null)
-            if (view !== 'library') setView('chats')
-          }}
-        />
-        <nav className="sidebar-nav" aria-label="Разделы">
-          <button
-            type="button"
-            className={`quiet nav-button${view === 'chats' ? ' selected' : ''}`}
-            aria-pressed={view === 'chats'}
-            onClick={() => setView('chats')}
-            disabled={!selectedProject}
-          >
-            Диалоги
-          </button>
-          <button
-            type="button"
-            className={`quiet nav-button${view === 'library' ? ' selected' : ''}`}
-            aria-pressed={view === 'library'}
-            onClick={() => {
-              setEditorTemplateId(null)
-              setView('library')
+    <AssistanceProvider
+      currentTarget={assistanceTarget}
+      onOpenSource={async (projectId, chatId) => {
+        const project = await projectsApi.get(projectId)
+        setSelectedProject(project)
+        setSelectedChatId(chatId)
+        setView(chatId ? 'chats' : 'runs')
+      }}
+      onOpenConnections={() => {
+        setSettingsSection('connections')
+        setView('settings')
+      }}
+    >
+      <div className="shell workspace-shell">
+        <aside className="sidebar">
+          <a className="brand" href="/" aria-label="Agents IDE — главная">
+            <span className="brand-mark">A</span> Agents IDE
+          </a>
+          <span className="section-label">РАБОЧАЯ ОБЛАСТЬ</span>
+          <ProjectsPanel
+            activity={activity.data?.projects}
+            selectedId={selectedProject?.id ?? null}
+            onRenamed={(project) => {
+              setSelectedProject((selected) =>
+                selected?.id === project.id ? project : selected,
+              )
             }}
-          >
-            Шаблоны
-          </button>
-          <button
-            type="button"
-            className={`quiet nav-button${view === 'runs' ? ' selected' : ''}`}
-            aria-pressed={view === 'runs'}
-            onClick={() => setView('runs')}
-            disabled={!selectedProject}
-          >
-            Запуски
-          </button>
-          <button
-            type="button"
-            className={`quiet nav-button${view === 'settings' ? ' selected' : ''}`}
-            aria-pressed={view === 'settings'}
-            onClick={() => setView('settings')}
-          >
-            Настройки
-          </button>
-        </nav>
-        <div className="sidebar-footer">
-          <span className="dot" /> Локальная среда
-        </div>
-      </aside>
-      <aside
-        className="subpanel"
-        hidden={view === 'settings' || view === 'library' || view === 'runs'}
-      >
-        <ChatsPanel
-          activity={activity.data?.chats}
-          key={selectedProject?.id ?? ''}
-          projectId={selectedProject?.id ?? ''}
-          selectedId={selectedChat?.id ?? null}
-          onSelect={(chat) => setSelectedChatId(chat.id)}
-        />
-      </aside>
-      <div className="workspace">
-        <header>
-          <span>
-            {view === 'settings'
-              ? 'Настройки'
-              : view === 'library'
-                ? 'Шаблоны'
-                : view === 'runs'
-                  ? selectedProject
-                    ? `Запуски · ${selectedProject.name}`
-                    : 'Запуски'
-                  : selectedProject
-                    ? selectedProject.name
-                    : 'Обзор'}
-            {view === 'chats' && selectedChat ? (
-              <>
-                <span className="slash">/</span>
-                {selectedChat.title}
-              </>
-            ) : null}
-          </span>
-          <span className="version">
-            {system?.version ? `v${system.version}` : 'Этап 9 · MVP'}
-          </span>
-        </header>
-        <main className="workspace-main">
-          {systemError ? (
-            <p role="status" className="error">
-              Связь со службами: {systemError}. Сохранённый экран остаётся
-              доступен.{' '}
-              <button
-                type="button"
-                className="quiet"
-                onClick={() => {
-                  setSettingsSection('logs')
-                  setView('settings')
-                }}
-              >
-                Журнал приложения
-              </button>
-            </p>
-          ) : system && system.worker.status !== 'running' ? (
-            <p role="status" className="hint">
-              Исполнитель недоступен. Задания ожидают запуска службы.{' '}
-              <button
-                type="button"
-                className="quiet"
-                onClick={() => {
-                  setSettingsSection('logs')
-                  setView('settings')
-                }}
-              >
-                Журнал приложения
-              </button>
-            </p>
-          ) : null}
-          {view === 'settings' ? (
-            <SettingsView
-              section={settingsSection}
-              onSectionChange={setSettingsSection}
-            />
-          ) : view === 'library' ? (
-            <LibraryView
-              projects={(projects.data ?? []) as Project[]}
-              selectedProjectId={selectedProject?.id ?? null}
-              initialEditorTemplateId={editorTemplateId}
-              onSelectProject={(project) => {
-                if (project.id !== selectedProject?.id) setSelectedChatId(null)
-                setSelectedProject(project)
-              }}
-              onOpenChats={() => setView('chats')}
-            />
-          ) : view === 'runs' ? (
-            <RunsView
-              key={selectedProject?.id ?? 'runs'}
-              project={selectedProject}
-              chats={chats.data ?? []}
-              selectedChatId={selectedChatId}
-              onSelectChat={setSelectedChatId}
-            />
-          ) : selectedProject ? (
-            <ChatView
-              key={selectedChat?.id ?? 'empty'}
-              projectId={selectedProject.id}
-              chat={selectedChat}
-              draftText={drafts[selectedChat?.id ?? ''] ?? ''}
-              onOpenTemplates={(templateId) => {
-                setEditorTemplateId(templateId ?? null)
+            onRemoved={(projectId) => {
+              if (selectedProject?.id !== projectId) return
+              setSelectedProject(null)
+              setSelectedChatId(null)
+              if (view === 'runs') setView('chats')
+            }}
+            onSelect={(project) => {
+              setSelectedProject(project)
+              if (project.id !== selectedProject?.id) setSelectedChatId(null)
+              if (view !== 'library') setView('chats')
+            }}
+          />
+          <nav className="sidebar-nav" aria-label="Разделы">
+            <button
+              type="button"
+              className={`quiet nav-button${view === 'chats' ? ' selected' : ''}`}
+              aria-pressed={view === 'chats'}
+              onClick={() => setView('chats')}
+              disabled={!selectedProject}
+            >
+              Диалоги
+            </button>
+            <button
+              type="button"
+              className={`quiet nav-button${view === 'library' ? ' selected' : ''}`}
+              aria-pressed={view === 'library'}
+              {...assistanceZone({ zone: 'templates' }, 'Шаблоны')}
+              onClick={() => {
+                setEditorTemplateId(null)
                 setView('library')
               }}
-              onDraftChange={(text) => {
-                if (selectedChat)
-                  setDrafts((previous) => ({
-                    ...previous,
-                    [selectedChat.id]: text,
-                  }))
-              }}
-              onArchived={(id) =>
-                setSelectedChatId((selected) =>
-                  selected === id ? null : selected,
-                )
-              }
-            />
-          ) : (
-            <WelcomePane
-              system={system}
-              loading={systemLoading}
-              error={systemError}
-            />
-          )}
-        </main>
-        <footer>
-          <span>Откройте диалог проекта и нажмите «Запустить шаблон».</span>
-          <button
-            type="button"
-            className="quiet"
-            onClick={onLogout}
-            disabled={logoutPending}
+            >
+              Шаблоны
+            </button>
+            <button
+              type="button"
+              className={`quiet nav-button${view === 'runs' ? ' selected' : ''}`}
+              aria-pressed={view === 'runs'}
+              onClick={() => setView('runs')}
+              disabled={!selectedProject}
+            >
+              Запуски
+            </button>
+            <button
+              type="button"
+              className={`quiet nav-button${view === 'settings' ? ' selected' : ''}`}
+              aria-pressed={view === 'settings'}
+              {...assistanceZone({ zone: 'settings' }, 'Настройки')}
+              onClick={() => setView('settings')}
+            >
+              Настройки
+            </button>
+          </nav>
+          <div className="sidebar-footer">
+            <span className="dot" /> Локальная среда
+          </div>
+        </aside>
+        <aside
+          className="subpanel"
+          hidden={view === 'settings' || view === 'library' || view === 'runs'}
+        >
+          <ChatsPanel
+            activity={activity.data?.chats}
+            key={selectedProject?.id ?? ''}
+            projectId={selectedProject?.id ?? ''}
+            selectedId={selectedChat?.id ?? null}
+            onSelect={(chat) => setSelectedChatId(chat.id)}
+          />
+        </aside>
+        <div className="workspace">
+          <header>
+            <span>
+              {view === 'settings'
+                ? 'Настройки'
+                : view === 'library'
+                  ? 'Шаблоны'
+                  : view === 'runs'
+                    ? selectedProject
+                      ? `Запуски · ${selectedProject.name}`
+                      : 'Запуски'
+                    : selectedProject
+                      ? selectedProject.name
+                      : 'Обзор'}
+              {view === 'chats' && selectedChat ? (
+                <>
+                  <span className="slash">/</span>
+                  {selectedChat.title}
+                </>
+              ) : null}
+            </span>
+            <span className="version">
+              {system?.version ? `v${system.version}` : 'Этап 9 · MVP'}
+            </span>
+          </header>
+          <main
+            className="workspace-main"
+            {...assistanceZone(
+              assistanceTarget,
+              selectedChat?.title ?? selectedProject?.name ?? 'Рабочая область',
+            )}
           >
-            Выйти
-          </button>
-        </footer>
+            {systemError ? (
+              <p role="status" className="error">
+                Связь со службами: {systemError}. Сохранённый экран остаётся
+                доступен.{' '}
+                <button
+                  type="button"
+                  className="quiet"
+                  onClick={() => {
+                    setSettingsSection('logs')
+                    setView('settings')
+                  }}
+                >
+                  Журнал приложения
+                </button>
+              </p>
+            ) : system && system.worker.status !== 'running' ? (
+              <p role="status" className="hint">
+                Исполнитель недоступен. Задания ожидают запуска службы.{' '}
+                <button
+                  type="button"
+                  className="quiet"
+                  onClick={() => {
+                    setSettingsSection('logs')
+                    setView('settings')
+                  }}
+                >
+                  Журнал приложения
+                </button>
+              </p>
+            ) : null}
+            {view === 'settings' ? (
+              <SettingsView
+                section={settingsSection}
+                onSectionChange={setSettingsSection}
+              />
+            ) : view === 'library' ? (
+              <LibraryView
+                projects={(projects.data ?? []) as Project[]}
+                selectedProjectId={selectedProject?.id ?? null}
+                initialEditorTemplateId={editorTemplateId}
+                onSelectProject={(project) => {
+                  if (project.id !== selectedProject?.id)
+                    setSelectedChatId(null)
+                  setSelectedProject(project)
+                }}
+                onOpenChats={() => setView('chats')}
+              />
+            ) : view === 'runs' ? (
+              <RunsView
+                key={selectedProject?.id ?? 'runs'}
+                project={selectedProject}
+                chats={chats.data ?? []}
+                selectedChatId={selectedChatId}
+                onSelectChat={setSelectedChatId}
+              />
+            ) : selectedProject ? (
+              <ChatView
+                key={selectedChat?.id ?? 'empty'}
+                projectId={selectedProject.id}
+                chat={selectedChat}
+                draftText={drafts[selectedChat?.id ?? ''] ?? ''}
+                onOpenTemplates={(templateId) => {
+                  setEditorTemplateId(templateId ?? null)
+                  setView('library')
+                }}
+                onDraftChange={(text) => {
+                  if (selectedChat)
+                    setDrafts((previous) => ({
+                      ...previous,
+                      [selectedChat.id]: text,
+                    }))
+                }}
+                onArchived={(id) =>
+                  setSelectedChatId((selected) =>
+                    selected === id ? null : selected,
+                  )
+                }
+              />
+            ) : (
+              <WelcomePane
+                system={system}
+                loading={systemLoading}
+                error={systemError}
+              />
+            )}
+          </main>
+          <footer>
+            <span>Откройте диалог проекта и нажмите «Запустить шаблон».</span>
+            <button
+              type="button"
+              className="quiet"
+              onClick={onLogout}
+              disabled={logoutPending}
+            >
+              Выйти
+            </button>
+          </footer>
+        </div>
       </div>
-    </div>
+    </AssistanceProvider>
   )
 }
 

@@ -48,6 +48,7 @@ class ObservedNode(BaseModel):
     result_ref: str | None = None
     attempt_id: str | None = None
     model_id: str | None = None
+    context_tokens: int | None = None
     resource_id: str | None = None
     input_request: dict[str, Any] | None = None
     restart_blocked_reason: str | None = None
@@ -210,6 +211,9 @@ def build_observation(session: Session, run: Run) -> RunObservation:
                 selection = json.loads(attempt.selection_json)
                 item.attempt_id = attempt.id
                 item.model_id = selection.get("model_id")
+                context_usage = runtime.get("agent_context_usage", {}).get(item.id, {})
+                if context_usage.get("attempt_id") == attempt.id:
+                    item.context_tokens = context_usage.get("tokens")
                 item.resource_id = selection.get("harness_profile_id") or selection.get(
                     "provider_connection_id"
                 )

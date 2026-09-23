@@ -235,7 +235,9 @@ def git_commit_node(
     runner: Runner, node: dict[str, Any], visit: visits.VisitState
 ) -> AgentResult | LLMResult | RunnerResult:
     config = runner.snapshot["dependencies"]["nodes"][node["id"]]
-    generation = config.get("message_generation") if config.get("generate_message") else None
+    from agents_ide.engine.run_configuration import commit_message_configuration
+
+    generation = commit_message_configuration(runner.snapshot, runner.runtime, node["id"])
     connection = None
     if generation:
         candidate = {

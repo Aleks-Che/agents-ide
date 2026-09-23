@@ -4,8 +4,9 @@ import json
 import re
 from typing import Any
 
-_THINKING = re.compile(r"<(think|thinking|analysis|reasoning)\s*>", re.IGNORECASE)
-_JSON_OR_THINKING = re.compile(r"<(think|thinking|analysis|reasoning)\s*>|[\[{]", re.IGNORECASE)
+_THINKING_TAG = r"<((?:mm:)?(?:think|thinking|analysis|reasoning))\b[^>]*>"
+_THINKING = re.compile(_THINKING_TAG, re.IGNORECASE)
+_JSON_OR_THINKING = re.compile(_THINKING_TAG + r"|[\[{]", re.IGNORECASE)
 
 
 def _thinking_end(text: str, opening: re.Match[str]) -> int:
@@ -25,14 +26,24 @@ def _json_start(text: str, offset: int = 0) -> int | None:
     return None
 
 
+def strip_leading_thinking(text: str) -> str:
+    """Remove provider reasoning before a final answer; never salvage an open block."""
+    candidate = text.lstrip()
+    while opening := _THINKING.match(candidate):
+        end = _thinking_end(candidate, opening)
+        if _THINKING.search(candidate, opening.end(), end):
+            raise ValueError("Nested thinking block")
+        candidate = candidate[end:].lstrip()
+    return candidate
+
+
 def parse_json_response(
     text: str, *, strip_thinking_tags: bool = False, extract_json: bool = False
 ) -> Any:
     candidate = text.strip()
     if strip_thinking_tags:
         # Only leading blocks are removable: tags inside JSON string values are data.
-        while opening := _THINKING.match(candidate):
-            candidate = candidate[_thinking_end(candidate, opening) :].lstrip()
+        candidate = strip_leading_thinking(candidate)
     try:
         return json.loads(candidate)
     except ValueError:

@@ -129,6 +129,7 @@ from agents_ide.services import (
     runs,
     templates,
 )
+from agents_ide.services.git_changes import GitChangesReview, review_changes
 from agents_ide.services.run_observation import HistoryCategory, HistoryPage, read_history
 from agents_ide.services.sidebar_activity import SidebarActivity, sidebar_activity
 
@@ -731,6 +732,11 @@ def run_diagnostics_endpoint(session: SessionDep, run_id: str) -> dict[str, Any]
             )
         ),
     }
+
+
+@router.get("/runs/{run_id}/git-changes", response_model=GitChangesReview)
+def git_changes_endpoint(session: SessionDep, run_id: str) -> GitChangesReview:
+    return review_changes(session, run_id)
 
 
 @router.get("/runs/{run_id}/snapshot", response_model=RunSnapshot)

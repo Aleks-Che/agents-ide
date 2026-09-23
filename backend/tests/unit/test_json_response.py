@@ -1,6 +1,17 @@
 import pytest
 
-from agents_ide.engine.json_response import parse_json_response
+from agents_ide.engine.json_response import parse_json_response, strip_leading_thinking
+
+
+def test_plain_answer_strips_provider_reasoning_but_preserves_answer_markup():
+    text = ' \n<MM:THINK mode="reasoning">private</MM:THINK>\n<analysis>private</analysis>**Ответ**'
+    assert strip_leading_thinking(text) == "**Ответ**"
+    assert (
+        strip_leading_thinking("Пример: `<think>текст</think>`") == "Пример: `<think>текст</think>`"
+    )
+    for incomplete in ("<think>private", "<think>private<think>nested</think>private</think>"):
+        with pytest.raises(ValueError):
+            strip_leading_thinking(incomplete)
 
 
 @pytest.mark.parametrize(

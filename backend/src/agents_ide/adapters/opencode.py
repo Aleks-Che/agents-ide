@@ -52,6 +52,22 @@ class ResponseLimit(ValueError):
     pass
 
 
+def _message_tokens(info: dict[str, Any]) -> int | None:
+    usage = info.get("tokens")
+    if not isinstance(usage, dict):
+        return None
+    cache = usage.get("cache")
+    if not isinstance(cache, dict):
+        return None
+    metrics = [usage.get(key) for key in ("input", "output", "reasoning")]
+    metrics.extend(cache.get(key) for key in ("read", "write"))
+    return (
+        sum(value for value in metrics if isinstance(value, int))
+        if all(type(value) is int and value >= 0 for value in metrics)
+        else None
+    )
+
+
 def _validate_loopback_url(value: str) -> str:
     try:
         p = urlsplit(value)
@@ -268,6 +284,15 @@ class OpenCodeAdapter(AgentAdapter):
             if request.emit_event:
                 request.emit_event(kind, payload)
 
+        def emit_context_usage(info: dict[str, Any]) -> None:
+            tokens = _message_tokens(info)
+            # New assistant messages start with zero counters before the model replies.
+            if info.get("role") == "assistant" and tokens is not None and tokens > 0:
+                emit(
+                    "budget.updated",
+                    {"context_tokens": tokens, "source_quality": "native"},
+                )
+
         def check() -> None:
             if request.check_owned:
                 request.check_owned()
@@ -372,7 +397,8 @@ class OpenCodeAdapter(AgentAdapter):
                 # must reach the user too, but unrelated sessions and child
                 # answer/tool streams must not enter the parent's history.
                 if sid != self.external_session_id and (
-                    kind not in {
+                    kind
+                    not in {
                         "permission.asked",
                         "permission.replied",
                         "question.asked",
@@ -564,6 +590,7 @@ class OpenCodeAdapter(AgentAdapter):
                     elif isinstance(props.get("delta"), str):
                         text_delta(props["delta"])
                 elif kind == "message.updated" and isinstance(info, dict):
+                    emit_context_usage(info)
                     if isinstance(info.get("id"), str) and isinstance(info.get("role"), str):
                         message_roles[info["id"]] = info["role"]
                     emit(
@@ -782,6 +809,7 @@ class OpenCodeAdapter(AgentAdapter):
                 or info.get("role") != "assistant"
             ):
                 return fail("invalid_provider_payload", ExternalOutcome.INVALID_FORMAT)
+            emit_context_usage(info)
             archive_native(
                 request.emit_event if record_tool_history else None,
                 "opencode",
@@ -900,19 +928,7 @@ class OpenCodeAdapter(AgentAdapter):
                 # The native envelope (including commentary/tool parts) has already
                 # been archived. The engine must validate the actual structured result.
                 text = json.dumps(structured, ensure_ascii=False, allow_nan=False)
-            usage = info.get("tokens", {})
-            metrics = []
-            if isinstance(usage, dict):
-                metrics = [usage.get(k) for k in ("input", "output", "reasoning")]
-                cache = usage.get("cache", {})
-                metrics += (
-                    [cache.get(k) for k in ("read", "write")] if isinstance(cache, dict) else [None]
-                )
-            tokens = (
-                sum(v for v in metrics if isinstance(v, int))
-                if metrics and all(type(v) is int and v >= 0 for v in metrics)
-                else None
-            )
+            tokens = _message_tokens(info)
             cost = info.get("cost")
             cost = (
                 float(cost)

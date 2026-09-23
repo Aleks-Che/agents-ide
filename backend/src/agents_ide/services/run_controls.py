@@ -93,8 +93,18 @@ def _resolve(session: Session, run: Run, command: RunCommand) -> dict[str, Any]:
         "reconciliation",
         "json_processing",
         "agent_recovery",
+        "git_changes",
+        "commit_connection",
     }:
         raise AppError("resolution_invalid", "Неизвестные поля решения", 422)
+    if "commit_connection" in payload:
+        from agents_ide.services.commit_connection import accept_connection
+
+        return accept_connection(session, run, command)
+    if "git_changes" in payload:
+        from agents_ide.services.git_changes import accept_changes
+
+        return accept_changes(session, run, command)
     if "agent_recovery" in payload:
         from agents_ide.services.agent_recovery import prepare_agent_recovery
 
@@ -436,6 +446,21 @@ def _check_resume(session: Session, run: Run) -> None:
             == "runtime_expression_invalid"
         ):
             _validate_current_prompt(session, run, snapshot, runtime, target)
+        elif (code, waiting.get("details", {}).get("reason")) == (
+            "configuration_invalid",
+            "resource_changed",
+        ) and any(
+            node["id"] == target.get("node_id") and node["type"] == "GitCommit"
+            for node in snapshot["graph"]["nodes"]
+        ):
+            from agents_ide.services.commit_connection import check_connection_resume
+
+            if not check_connection_resume(session, run):
+                raise AppError(
+                    "resolution_required",
+                    "Сначала проверьте и подтвердите обновление подключения.",
+                    409,
+                )
         elif code == "session_resume_unavailable":
             # Retry only the saved session; STOP explicitly starts this stage afresh.
             continue
@@ -444,6 +469,13 @@ def _check_resume(session: Session, run: Run) -> None:
             continue
         elif code == "external_change_detected" and legacy_interrupted_agent:
             continue
+        elif code == "external_change_detected":
+            from agents_ide.services.git_changes import check_head_resume
+
+            if not check_head_resume(session, run):
+                raise AppError(
+                    "resolution_required", "Причина ожидания не устранена", 409, {"blocker": code}
+                )
         elif code in {"unknown_external_result", "owner_expired", "reconciliation_required"}:
             if not runtime.get("work"):
                 raise AppError(

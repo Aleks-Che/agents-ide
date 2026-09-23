@@ -133,6 +133,18 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
     'chat-activity-spin',
   )
   await expect(progress.locator('.stage-card')).toHaveCount(1)
+  const contextUsage = progress.locator('[title^="Используемый контекст:"]')
+  await expect(contextUsage).toHaveCount(0)
+  checkpoint(run.id, 'context')
+  await expect(contextUsage).toHaveText('232k')
+  await expect(progress.locator('.stage-content > .muted')).toContainText(
+    'AgentTask · Без модели · посещение 1 · 232k',
+  )
+  await page.reload()
+  await projectOption.click()
+  await expect(contextUsage).toHaveText('232k')
+  checkpoint(run.id, 'context-compacted')
+  await expect(contextUsage).toHaveText('48k')
   for (const selector of [
     '.chat-run-header',
     '.stage-heading',
@@ -272,6 +284,7 @@ test('chat streams stages, sends attempt-scoped replies and controls STOP and ST
   checkpoint(run.id, 'second')
   await expect(progress.locator('.stage-card')).toHaveCount(1)
   await expect(progress.locator('.stage-heading')).toContainText('3. Review')
+  await expect(contextUsage).toHaveCount(0)
   await expect(progress.getByRole('log')).toContainText('Reviewing the result')
   const navigation = progress.getByRole('navigation', {
     name: 'Этапы выполнения',

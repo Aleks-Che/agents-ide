@@ -841,7 +841,13 @@ class CodexAdapter(AgentAdapter):
                     value = params.get("tokenUsage", {}).get("last", {}).get("totalTokens")
                     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                         tokens = value
-                    emit("budget.updated", tokens_used=tokens, cost=None, source_quality="native")
+                    emit(
+                        "budget.updated",
+                        tokens_used=tokens,
+                        context_tokens=tokens,
+                        cost=None,
+                        source_quality="native",
+                    )
                 elif method == "item/started":
                     item = params.get("item") or {}
                     if item.get("type") not in {"userMessage", "agentMessage", "reasoning", "plan"}:

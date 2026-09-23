@@ -1,0 +1,307 @@
+.assistance-launcher {
+  position: fixed;
+  right: 22px;
+  bottom: 20px;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 24px #0006;
+}
+.assistance-panel {
+  position: fixed;
+  right: 22px;
+  bottom: 78px;
+  width: min(460px, calc(100vw - 24px));
+  height: min(760px, calc(100dvh - 104px));
+  display: flex;
+  flex-direction: column;
+  z-index: 70;
+  border: 1px solid #52675d;
+  border-radius: 14px;
+  background: #172023;
+  box-shadow: 0 12px 60px #0009;
+  overflow: clip;
+  font-size: 13px;
+}
+.assistance-panel.expanded {
+  width: min(820px, calc(100vw - 32px));
+  height: calc(100dvh - 104px);
+}
+.assistance-panel.picking {
+  height: auto;
+  width: min(460px, calc(100vw - 24px));
+}
+.assistance-heading,
+.assistance-topic-row,
+.assistance-diagnostics-heading,
+.assistance-send-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.assistance-heading {
+  flex-shrink: 0;
+  padding: 15px 16px;
+  border-bottom: 1px solid #35413e;
+}
+.assistance-heading > div {
+  flex: 1;
+}
+.assistance-heading strong {
+  display: block;
+  font-size: 16px;
+}
+.assistance-heading span {
+  display: block;
+  color: #9eafaa;
+  margin-top: 4px;
+}
+.assistance-panel button.quiet {
+  padding: 7px;
+}
+.assistance-topic {
+  flex-shrink: 0;
+  padding: 12px 16px 6px;
+}
+.assistance-topic label,
+.assistance-composer > label {
+  display: block;
+  margin: 0 0 5px;
+  color: #acbdb5;
+}
+.assistance-topic-row input {
+  min-width: 0;
+  flex: 1;
+  font-size: 13px;
+  padding: 9px;
+}
+.assistance-topic-row button[aria-pressed='true'] {
+  background: #bedac9;
+  color: #19291f;
+}
+.assistance-panel .assistance-current {
+  font-size: 11px;
+  margin-top: 4px;
+}
+.assistance-body {
+  overflow: auto;
+  overscroll-behavior: contain;
+  min-height: 0;
+  flex: 1;
+  padding: 6px 16px 12px;
+}
+.assistance-panel p {
+  line-height: 1.55;
+  margin: 8px 0;
+}
+.assistance-diagnostics,
+.assistance-guide {
+  border: 1px solid #3b4b43;
+  background: #1d2b26;
+  padding: 11px;
+  border-radius: 9px;
+  margin: 6px 0 12px;
+}
+.assistance-guide {
+  background: #212b32;
+}
+.assistance-diagnostics-heading {
+  justify-content: space-between;
+}
+.assistance-panel summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  padding: 6px 0;
+}
+.assistance-panel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.assistance-tool {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #52675d;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.assistance-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+.assistance-suggestions button.quiet {
+  border: 1px solid #42564a;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 8px;
+}
+.assistance-suggestions .assistance-primary-question {
+  align-self: stretch;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.assistance-additional-questions:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.assistance-suggestions .assistance-more-questions {
+  align-self: flex-end;
+  min-width: 44px;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.assistance-more-questions.loading {
+  opacity: 1;
+  cursor: wait;
+}
+.assistance-question-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.assistance-question-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.assistance-more-questions.loading .assistance-question-dots span {
+  animation: assistance-question-bounce 1.1s ease-in-out infinite;
+}
+.assistance-more-questions.loading .assistance-question-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.assistance-more-questions.loading .assistance-question-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes assistance-question-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-5px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistance-more-questions.loading .assistance-question-dots span {
+    animation: none;
+  }
+}
+.assistance-question-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.assistance-message {
+  padding: 10px 12px;
+  border-radius: 9px;
+  margin: 12px 0;
+  background: #263332;
+  overflow-wrap: anywhere;
+}
+.assistance-message.user {
+  background: #344a3e;
+  margin-left: 28px;
+}
+.assistance-message span {
+  color: #b7c9bd;
+  font-size: 11px;
+}
+.assistance-message p {
+  white-space: pre-wrap;
+}
+.assistance-composer {
+  border-top: 1px solid #35413e;
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+.assistance-composer select,
+.assistance-composer textarea {
+  width: 100%;
+  font: inherit;
+  background: #111b1c;
+  border: 1px solid #42564a;
+  border-radius: 7px;
+  padding: 9px;
+  color: #e8edeb;
+}
+.assistance-composer textarea {
+  margin-top: 10px;
+  resize: vertical;
+  max-height: 160px;
+}
+.assistance-composer .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.assistance-send-row {
+  justify-content: space-between;
+  margin-top: 8px;
+}
+.assistance-send-row span {
+  max-width: 210px;
+  font-size: 10px;
+  color: #9eafaa;
+}
+.assistance-send-row button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+}
+.assistance-picking [data-assistance-target],
+.assistance-picking [data-assistance-target] * {
+  cursor: crosshair !important;
+}
+.assistance-highlight {
+  outline: 2px solid #c7e6ad !important;
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 4px #c7e6ad33 !important;
+}
+.assistance-picker-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: #bedac9;
+  color: #19291f;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  max-width: calc(100vw - 24px);
+  box-shadow: 0 4px 20px #0008;
+}
+.assistance-picker-banner button.quiet {
+  color: #19291f;
+}
+@media (max-width: 600px) {
+  .assistance-panel {
+    right: 12px;
+    bottom: 70px;
+  }
+  .assistance-launcher {
+    right: 12px;
+    bottom: 12px;
+  }
+  .assistance-picker-banner {
+    width: calc(100vw - 24px);
+    font-size: 12px;
+  }
+}

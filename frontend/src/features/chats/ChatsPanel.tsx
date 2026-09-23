@@ -1,4 +1,5 @@
 import { Modal } from '../../app/Modal'
+import { assistanceZone } from '../assistance/targets'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../api/client'
@@ -138,6 +139,10 @@ function ChatsList({
             <button
               type="button"
               role="option"
+              {...assistanceZone(
+                { zone: 'chat', project_id: projectId, chat_id: chat.id },
+                chat.title,
+              )}
               aria-selected={selected}
               className={`panel-item${selected ? ' selected' : ''}`}
               onClick={() => onSelect(chat)}

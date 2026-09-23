@@ -861,7 +861,7 @@ class Runner:
                 else "workspace_conflict"
                 if exc.code in {"workspace_conflict", "path_invalid", "path_unavailable"}
                 else "configuration_invalid",
-                {"reason": exc.code, "details": exc.details or {}},
+                {"reason": exc.code, "message": str(exc), "details": exc.details or {}},
             )
         except (ValueError, OSError, KeyError):
             return self._waiting(
@@ -991,9 +991,23 @@ class Runner:
             raise AppError("workspace_conflict", "Рабочий каталог изменился после Start", 409)
         expected_head = self.runtime.get("git", {}).get("head", workspace.get("git_head_sha"))
         if git and expected_head and git.head_sha != expected_head:
-            raise AppError("external_change_detected", "Git HEAD изменился после Start", 409)
+            raise AppError(
+                "external_change_detected",
+                "Git HEAD изменился после Start",
+                409,
+                {"check": "head", "expected_head": expected_head, "current_head": git.head_sha},
+            )
         if workspace.get("branch") and (not git or git.default_branch != workspace["branch"]):
-            raise AppError("external_change_detected", "Ветка worktree изменилась после Start", 409)
+            raise AppError(
+                "external_change_detected",
+                "Ветка worktree изменилась после Start",
+                409,
+                {
+                    "check": "branch",
+                    "expected_branch": workspace["branch"],
+                    "current_branch": git.default_branch if git else None,
+                },
+            )
         if self.simulated:
             from agents_ide.engine.workspace_checkpoint import fingerprint
 
@@ -2772,6 +2786,18 @@ class Runner:
                             )
                         )
                         for type_, payload in batch:
+                            context_tokens = payload.get("context_tokens")
+                            if (
+                                type_ == "budget.updated"
+                                and not late
+                                and type(context_tokens) is int
+                                and context_tokens >= 0
+                            ):
+                                context_usage = self.runtime.setdefault("agent_context_usage", {})
+                                context_usage[visit.node_id] = {
+                                    "attempt_id": _attempt_id,
+                                    "tokens": context_tokens,
+                                }
                             if type_ == "agent.user_message_status":
                                 from agents_ide.services.run_messages import finish_message
 

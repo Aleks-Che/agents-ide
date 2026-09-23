@@ -52,6 +52,7 @@ def test_wire_ids_scoping_final_message_usage_and_feedback(transport):
     assert result.succeeded, result
     assert result.raw_text == "hello from codex"
     assert result.tokens_used == 18  # Not cumulative 99 or cached/reasoning double-counted.
+    assert [p["context_tokens"] for t, p in events if t == "budget.updated"] == [18]
     assert result.cost_estimated is None
     assert len(result.tool_calls) == 1
     assert "FOREIGN" not in json.dumps(events)
@@ -435,6 +436,8 @@ def test_runner_durable_thread_turn_role_isolation_and_process_cleanup(
     )
     result = runner.execute(response.json()["id"])
     assert result.final_state == "completed", result
+    observation = client.get(f"/api/runs/{response.json()['id']}/snapshot").json()["observation"]
+    assert all(n["context_tokens"] == 18 for n in observation["nodes"] if n["type"] == "AgentTask")
     calls, trace, _ = runtime_launch
     assert len(calls) == 1
     assert not runner.registry.by_run(response.json()["id"])

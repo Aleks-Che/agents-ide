@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 from jsonschema import Draft202012Validator
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from agents_ide.adapters.base import AgentAdapterRequest, ExternalOutcome
 from agents_ide.adapters.opencode import (
@@ -124,6 +124,50 @@ def test_explicit_resume_uses_same_id_and_missing_session_creates_new(server):
     ).succeeded
     assert other.external_session_id != sid
     assert "agent.session_invalidated" in events
+
+
+def test_context_usage_tracks_latest_message_including_cache(server, monkeypatch):
+    handler, adapter, request = server
+    publish = handler.publish
+
+    def publish_usage(self, event):
+        if event and event["type"] == "message.part.delta":
+            sid = event["properties"]["sessionID"]
+            # Zero/unknown counters for a new message must not erase the last reading.
+            for index, usage in enumerate(
+                [
+                    {
+                        "input": 2000,
+                        "output": 300,
+                        "reasoning": 100,
+                        "cache": {"read": 220000, "write": 9600},
+                    },
+                    {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                    {},
+                ]
+            ):
+                publish(
+                    self,
+                    {
+                        "type": "message.updated",
+                        "properties": {
+                            "info": {
+                                "id": f"msg_usage_{index}",
+                                "sessionID": sid,
+                                "role": "assistant",
+                                "tokens": usage,
+                            }
+                        },
+                    },
+                )
+        publish(self, event)
+
+    monkeypatch.setattr(handler, "publish", publish_usage)
+    events = []
+    result = adapter.run(replace(request, emit_event=lambda t, p: events.append((t, p))))
+    assert result.succeeded
+    # The foreign session is ignored; the final response replaces the live reading.
+    assert [p["context_tokens"] for t, p in events if t == "budget.updated"] == [232000, 15]
 
 
 @pytest.mark.parametrize("valid", [True, False])
@@ -957,6 +1001,25 @@ def test_runner_keeps_password_isolates_roles_and_persists_sessions(
         events = list(db.scalars(select(RunEvent)))
         assert any(e.type == "agent.session_resumed" for e in events)
         assert "FOREIGN" not in "".join(e.payload_json for e in events)
+    snapshot_url = f"/api/runs/{run['id']}/snapshot"
+    observation = client.get(snapshot_url).json()["observation"]
+    assert [n["context_tokens"] for n in observation["nodes"] if n["type"] == "AgentTask"] == [
+        15,
+        15,
+        15,
+    ]
+    with client.app.state.session_factory() as db:
+        db.execute(delete(RunEvent).where(RunEvent.run_id == run["id"]))
+        db.commit()
+    assert client.get(snapshot_url).json()["observation"] == observation
+    with client.app.state.session_factory() as db:
+        saved = db.get(Run, run["id"])
+        runtime = json.loads(saved.runtime_json)
+        runtime["agent_context_usage"]["a0"]["attempt_id"] = "previous-attempt"
+        saved.runtime_json = json.dumps(runtime)
+        db.commit()
+    nodes = client.get(snapshot_url).json()["observation"]["nodes"]
+    assert next(n for n in nodes if n["id"] == "a0")["context_tokens"] is None
     assert (
         len(
             [

@@ -39,6 +39,8 @@ PROBE_MAX_TOKENS = 1024
 
 _GENERATION_KEYS = (
     "reasoning_effort",
+    "thinking",
+    "reasoning_split",
     "temperature",
     "top_p",
     "max_tokens",

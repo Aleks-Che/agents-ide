@@ -25,8 +25,18 @@ with Session(engine) as session:
         run.state = "failed" if mode == "historical-failed" else "waiting_input"
         run.state_version += 1
         run.waiting_reason_json = to_json(
-            {"code": "configuration_invalid", "allowed_actions": ["resolve", "resume", "cancel"]}
+            {
+                "code": "configuration_invalid",
+                "allowed_actions": ["resolve", "resume", "cancel"],
+            }
         )
+    elif mode in {"context", "context-compacted"}:
+        runtime = json.loads(run.runtime_json)
+        runtime.setdefault("agent_context_usage", {})[run.current_node_id] = {
+            "attempt_id": run.current_attempt_id,
+            "tokens": 232000 if mode == "context" else 48000,
+        }
+        run.runtime_json = to_json(runtime)
     elif mode == "loop-counts":
         runtime = json.loads(run.runtime_json)
         runtime["loop_counts"] = {"repair": 2}

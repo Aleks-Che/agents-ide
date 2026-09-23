@@ -482,7 +482,9 @@ def restart_run(session: Session, run_id: str, payload: RunRestart) -> Run:
     return replacement
 
 
-def submit_command(session: Session, run_id: str, payload: RunCommand) -> CommandAccepted:
+def submit_command(
+    session: Session, run_id: str, payload: RunCommand, *, initiator: str = "api"
+) -> CommandAccepted:
     begin_write(session)
     run = get_or_404(session, RunModel, run_id)
     payload_hash_value = payload_hash(payload.model_dump(mode="json"))
@@ -541,7 +543,7 @@ def submit_command(session: Session, run_id: str, payload: RunCommand) -> Comman
         payload_hash=payload_hash_value,
         payload_json=to_json(sanitize(payload.payload)),
         sequence=sequence,
-        initiator="api",
+        initiator=initiator,
         status=status,
         response_json=to_json(response) if response else None,
         created_at=now,
@@ -658,6 +660,7 @@ def _command_allowed(command_type: str, state: str) -> bool:
 def _run_from_model(model: RunModel) -> Run:
     from agents_ide.domain.active_intervals import interval_view
     from agents_ide.services.agent_recovery import recovery_options
+    from agents_ide.services.git_changes import resolution_status
 
     waiting = json.loads(model.waiting_reason_json or "null")
     if options := recovery_options(model):
@@ -667,6 +670,16 @@ def _run_from_model(model: RunModel) -> Run:
             "resolution_schema": {
                 **waiting.get("resolution_schema", {}),
                 "agent_recovery": options,
+            },
+        }
+
+    if git_status := resolution_status(model):
+        waiting = waiting or json.loads(model.runtime_json).get("waiting_reason") or {}
+        waiting = {
+            **waiting,
+            "resolution_schema": {
+                **waiting.get("resolution_schema", {}),
+                "git_changes": git_status,
             },
         }
 

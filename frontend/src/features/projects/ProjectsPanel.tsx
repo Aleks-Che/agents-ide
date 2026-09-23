@@ -1,4 +1,5 @@
 import { Modal } from '../../app/Modal'
+import { assistanceZone } from '../assistance/targets'
 import { EditorError } from '../settings/EditorError'
 import { useCallback, useState } from 'react'
 import {
@@ -216,6 +217,10 @@ function ProjectsList({
             <button
               type="button"
               role="option"
+              {...assistanceZone(
+                { zone: 'project', project_id: project.id },
+                project.name,
+              )}
               aria-selected={selected}
               className={`panel-item${selected ? ' selected' : ''}`}
               onClick={() => onSelect(project)}

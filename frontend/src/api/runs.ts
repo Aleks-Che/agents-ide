@@ -2,6 +2,7 @@ import { ApiError, request } from './client'
 import type { ApiSchemas } from './generated'
 
 export type RunRecord = ApiSchemas['Run']
+export type GitChangesReview = ApiSchemas['GitChangesReview']
 export type RunCommand = ApiSchemas['RunCommand']
 export type CommandAccepted = ApiSchemas['CommandAccepted']
 export type EventEnvelope = ApiSchemas['EventEnvelope']
@@ -85,6 +86,9 @@ export const MODEL_GROUP_EVENT_TYPES: ReadonlySet<string> = new Set([
 ])
 
 export const runsApi = {
+  gitChanges(runId: string): Promise<GitChangesReview> {
+    return request(`/runs/${runId}/git-changes`)
+  },
   artifactContent(
     runId: string,
     artifactId: string,
