@@ -407,6 +407,27 @@ def _build_temp_index(
     env = {"GIT_INDEX_FILE": str(index)}
     run_git(workspace, ["read-tree", parent], env=env)
     tracked = {entry.path: entry for entry in ls_tree(workspace, parent)}
+    # A fresh private index has no user stat cache, assume-unchanged or
+    # skip-worktree flags. Let one Git process compare tracked contents using
+    # its clean/EOL rules instead of starting hash-object for every clean file.
+    changed_tracked = set(
+        run_git(
+            workspace,
+            [
+                "diff",
+                "--name-only",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+                "-z",
+                parent,
+                "--",
+            ],
+            env=env,
+        )
+        .decode("utf-8", "strict")
+        .split("\0")
+    )
     updates = bytearray()
     for path, item in manifest.items():
         if path not in tracked and not allow_untracked:
@@ -415,6 +436,11 @@ def _build_temp_index(
             continue
         if item.get("missing"):
             updates.extend(f"0 {'0' * len(parent)}\t{path}\0".encode())
+            continue
+        mode = tracked[path].mode if os.name == "nt" and path in tracked else item["mode"]
+        if mode not in {"100644", "100755"}:
+            raise GitCommitError("path_violation", "Symlinks/submodules cannot enter a commit")
+        if path in tracked and path not in changed_tracked and mode == tracked[path].mode:
             continue
         data = read_workspace_file(workspace, path, MAX_BYTES)
         if hashlib.sha256(data).hexdigest() != item["sha256"]:
@@ -425,9 +451,6 @@ def _build_temp_index(
             .decode()
             .strip()
         )
-        mode = tracked[path].mode if os.name == "nt" and path in tracked else item["mode"]
-        if mode not in {"100644", "100755"}:
-            raise GitCommitError("path_violation", "Symlinks/submodules cannot enter a commit")
         updates.extend(f"{mode} {oid}\t{path}\0".encode())
     if updates:
         run_git(workspace, ["update-index", "-z", "--index-info"], data=bytes(updates), env=env)

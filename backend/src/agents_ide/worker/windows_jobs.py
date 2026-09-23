@@ -6,6 +6,34 @@ from functools import cache
 from typing import Any
 
 
+def process_exited(pid: int) -> bool | None:
+    """Check exit through a handle, including terminated processes retained by Popen.
+
+    psutil's creation-time fallback scans system process data for those retained
+    PIDs. Access denial is still unknown, never permission to reclaim their work.
+    """
+    import pywintypes
+    import win32api
+    import win32con
+    import win32event
+
+    if pid <= 0:
+        return None
+    try:
+        handle = win32api.OpenProcess(win32con.SYNCHRONIZE, False, pid)
+    except pywintypes.error as exc:
+        return True if exc.winerror == 87 else None  # ERROR_INVALID_PARAMETER: no such PID
+    try:
+        state = win32event.WaitForSingleObject(handle, 0)
+        if state == win32event.WAIT_OBJECT_0:
+            return True
+        return False if state == win32event.WAIT_TIMEOUT else None
+    except pywintypes.error:
+        return None
+    finally:
+        win32api.CloseHandle(handle)
+
+
 class _ProcessListHeader(ctypes.Structure):
     _fields_ = [
         ("assigned", wintypes.DWORD),

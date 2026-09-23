@@ -504,11 +504,6 @@ footer span {
     transform: rotate(360deg);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .chat-activity-spinner {
-    animation: none;
-  }
-}
 .panel-item .muted {
   font-size: 11px;
   color: #8b9a9f;

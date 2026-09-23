@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     )
     heartbeat_seconds: float = Field(default=5, ge=0.1, le=5)
     worker_stale_seconds: float = Field(default=15, ge=1, le=60)
-    session_seconds: int = Field(default=43200, ge=1, le=43200)
+    session_seconds: int = Field(default=60 * 24 * 60 * 60, ge=1, le=60 * 24 * 60 * 60)
     pairing_seconds: int = Field(default=300, ge=1, le=300)
     log_level: str = "INFO"
     # Legacy quotas are opt-in; saved templates must not silently cap automation.

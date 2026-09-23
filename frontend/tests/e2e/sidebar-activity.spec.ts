@@ -5,6 +5,7 @@ import { test, expect, pair, api, workspace } from './support'
 test('project and chat indicators update while another project is selected', async ({
   page,
 }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
   let activity: SidebarActivity = { projects: {}, chats: {} }
   await page.route('**/api/sidebar/activity', (route) =>
     route.fulfill({ json: activity }),
@@ -45,6 +46,23 @@ test('project and chat indicators update while another project is selected', asy
     'animation-name',
     'chat-activity-spin',
   )
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await expect(projectRunning.locator('svg')).toHaveCSS(
+    'animation-name',
+    'chat-activity-spin',
+  )
+  await expect(projectRunning.locator('svg')).toHaveCSS('opacity', '1')
+  const rotation = await projectRunning
+    .locator('svg')
+    .evaluate((element) => getComputedStyle(element).transform)
+  await expect
+    .poll(() =>
+      projectRunning
+        .locator('svg')
+        .evaluate((element) => getComputedStyle(element).transform),
+    )
+    .not.toBe(rotation)
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
   await expect(otherOption.getByRole('status')).toHaveCount(0)
   await expect(workingOption).toHaveAttribute('aria-selected', 'false')
 

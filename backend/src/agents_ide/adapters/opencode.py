@@ -217,6 +217,7 @@ class OpenCodeAdapter(AgentAdapter):
         threads: list[threading.Thread] = []
         questions: dict[str, list[dict[str, Any]]] = {}
         approvals: set[str] = set()
+        child_sessions: set[str] = set()
         malformed_output = threading.Event()
         text_tail = ""
         deadline = request.deadline_at or (
@@ -366,9 +367,34 @@ class OpenCodeAdapter(AgentAdapter):
                     or (part.get("sessionID") if isinstance(part, dict) else None)
                     or (info.get("sessionID") if isinstance(info, dict) else None)
                 )
-                if sid != self.external_session_id:
-                    return
                 kind = event["type"]
+                # A native task tool waits for its child session. Its prompts
+                # must reach the user too, but unrelated sessions and child
+                # answer/tool streams must not enter the parent's history.
+                if sid != self.external_session_id and (
+                    kind not in {
+                        "permission.asked",
+                        "permission.replied",
+                        "question.asked",
+                        "question.replied",
+                        "question.rejected",
+                    }
+                    or not self._owns_child_session(sid, str(resume), child_sessions)
+                ):
+                    return
+
+                def emit_interaction(kind: str, payload: dict[str, Any]) -> None:
+                    # The engine uses session_id as its continuation identity.
+                    # Keep the root binding even when a subagent needs a reply.
+                    emit(
+                        kind,
+                        {
+                            **payload,
+                            "session_id": resume,
+                            **({"source_session_id": sid} if sid != resume else {}),
+                        },
+                    )
+
                 tool_update = None
                 tool_key = None
                 tool_changed = True
@@ -430,7 +456,7 @@ class OpenCodeAdapter(AgentAdapter):
                         "opencode",
                         kind,
                         event,
-                        str(sid),
+                        str(resume),
                     )
                 if tool_key is not None:
                     tool_archived_at[tool_key] = time.monotonic()
@@ -440,17 +466,17 @@ class OpenCodeAdapter(AgentAdapter):
                     question_id = validate_id(props.get("id"))
                     question_list = questions_for_ui(props.get("questions"))
                     questions[question_id] = question_list
-                    emit(
+                    emit_interaction(
                         "agent.input_requested",
                         {"question_id": question_id, "questions": question_list},
                     )
                 elif kind in {"question.replied", "question.rejected"}:
                     question_id = str(props.get("requestID", ""))
                     questions.pop(question_id, None)
-                    emit("agent.input_closed", {"question_id": question_id})
+                    emit_interaction("agent.input_closed", {"question_id": question_id})
                 elif kind == "permission.asked":
                     permission_id = validate_id(props.get("id"))
-                    emit(
+                    emit_interaction(
                         "agent.permission_requested",
                         {
                             "session_id": sid,
@@ -471,7 +497,7 @@ class OpenCodeAdapter(AgentAdapter):
                             )
                         if reply.status_code != 200:
                             raise ValueError("Permission reply failed")
-                        emit(
+                        emit_interaction(
                             "agent.permission_resolved",
                             {
                                 "session_id": sid,
@@ -486,7 +512,7 @@ class OpenCodeAdapter(AgentAdapter):
                         and request.receive_message
                     ):
                         approvals.add(permission_id)
-                        emit(
+                        emit_interaction(
                             "agent.input_requested",
                             {
                                 "kind": "permission",
@@ -508,7 +534,7 @@ class OpenCodeAdapter(AgentAdapter):
                             json={"reply": "reject"},
                         )
                     if reply.status_code == 200:
-                        emit(
+                        emit_interaction(
                             "agent.permission_resolved",
                             {
                                 "session_id": sid,
@@ -516,11 +542,13 @@ class OpenCodeAdapter(AgentAdapter):
                                 "reply": "reject",
                             },
                         )
-                    self.interrupt(str(sid))
+                    self.interrupt(str(resume))
                 elif kind == "permission.replied":
                     permission_id = str(props.get("requestID", ""))
                     approvals.discard(permission_id)
-                    emit("agent.input_closed", {"question_id": f"permission:{permission_id}"})
+                    emit_interaction(
+                        "agent.input_closed", {"question_id": f"permission:{permission_id}"}
+                    )
                 elif kind == "message.part.delta" and props.get("field") == "text":
                     delta = props.get("delta")
                     if isinstance(delta, str):
@@ -936,6 +964,40 @@ class OpenCodeAdapter(AgentAdapter):
                 self.interrupt(self.external_session_id or "")
             for thread in threads:
                 thread.join(timeout=2.5)
+
+    def _owns_child_session(self, session_id: Any, root: str, known: set[str]) -> bool:
+        """Verify ancestry on demand, including children created before SSE attached."""
+        from pathlib import Path
+
+        if not isinstance(session_id, str) or not _ID.fullmatch(session_id):
+            return False
+        if session_id in known:
+            return True
+        ancestors: set[str] = set()
+        current = session_id
+        with self.client(timeout=self.health_timeout) as client:
+            while current != root and current not in known:
+                if current in ancestors or len(ancestors) >= 64:
+                    return False
+                ancestors.add(current)
+                response, raw = bounded_request(client, "GET", f"/session/{current}")
+                if response.status_code != 200:
+                    return False
+                data = json.loads(raw)
+                if (
+                    not isinstance(data, dict)
+                    or data.get("id") != current
+                    or not isinstance(data.get("directory"), str)
+                    or Path(data["directory"]).resolve()
+                    != Path(self.session.workspace_path).resolve()
+                ):
+                    return False
+                parent = data.get("parentID")
+                if not isinstance(parent, str) or not _ID.fullmatch(parent):
+                    return False
+                current = parent
+        known.update(ancestors)
+        return True
 
     def _permissions(self) -> list[dict[str, str]]:
         mode = self.session.settings.get("permission_mode", "no_tools")

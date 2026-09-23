@@ -40,7 +40,7 @@ uv run --locked --no-dev agents-ide auth pair-code
 ```
 
 Откройте **http://127.0.0.1:8765**. Код одноразовый, действует пять минут; сессия —
-12 часов. Новый код: `auth pair-code --rotate`. Cookie/CSRF/код не передаются в URL.
+два месяца (60 дней). Новый код: `auth pair-code --rotate`. Cookie/CSRF/код не передаются в URL.
 
 Для установки из checkout сначала соберите UI (Node 22.12+ в ветке 22, npm 10–11;
 проверены Node 22.20.0 и npm 11.10.0):

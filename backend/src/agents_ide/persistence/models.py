@@ -540,6 +540,7 @@ class ModelGroupMember(Base):
 class ProcessSupervision(Base):
     __tablename__ = "process_supervision"
     __table_args__ = (
+        Index("ix_process_attempt", "step_attempt_id"),
         CheckConstraint(
             "state IN ('started','interrupt_requested','killed','finished','unknown')",
             name="ck_process_state",

@@ -394,6 +394,9 @@ def test_supervisor_persists_before_execution_and_kills_surviving_child(
 
 
 def test_process_access_failure_is_not_proof_of_exit(monkeypatch):
+    from agents_ide.worker import windows_jobs
+
+    monkeypatch.setattr(windows_jobs, "process_exited", lambda _: False)
     def denied(_):
         raise psutil.AccessDenied()
 

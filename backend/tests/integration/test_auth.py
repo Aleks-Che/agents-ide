@@ -10,13 +10,16 @@ from agents_ide.api.app import create_app
 def test_pairing_is_single_use_and_cookie_is_local(client, settings):
     code_file = settings.data_dir / "runtime/pair-code"
     code = code_file.read_text()
+    started_at = time.time()
     response = client.post(
         "/api/auth/pair", json={"code": code}, headers={"Origin": settings.origin}
     )
+    paired_at = time.time()
     assert response.status_code == 200
     cookie = response.headers["set-cookie"]
     assert "HttpOnly" in cookie and "SameSite=strict" in cookie and "Path=/api" in cookie
     assert "Domain=" not in cookie and "Secure" not in cookie
+    assert "Max-Age=5184000" in cookie
     assert not code_file.exists()
     assert client.get("/api/auth/session").status_code == 200
     assert (
@@ -28,6 +31,7 @@ def test_pairing_is_single_use_and_cookie_is_local(client, settings):
     with client.app.state.engine.connect() as connection:
         row = connection.execute(text("SELECT * FROM auth_sessions")).mappings().one()
     assert row["token_hash"] != client.cookies.get("agents_ide_session")
+    assert started_at + 60 * 24 * 60 * 60 <= row["expires_at"] <= paired_at + 60 * 24 * 60 * 60
 
 
 def test_mutation_requires_csrf_and_revoked_cookie_fails(authenticated):

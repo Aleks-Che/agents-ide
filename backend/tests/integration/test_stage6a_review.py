@@ -322,8 +322,22 @@ def test_response_limit_is_enforced_while_streaming_and_aborts(server):
     assert any(r["path"].endswith("/abort") for r in handler.requests)
 
 
-def test_permission_is_rejected_and_not_a_fallback(server):
+@pytest.mark.parametrize("child", [False, True])
+def test_permission_is_rejected_and_not_a_fallback(server, child, monkeypatch):
     handler, adapter, request = server
+    publish = handler.publish
+
+    def publish_child(self, event):
+        if child and event and event["type"] == "permission.asked":
+            handler.sessions["ses_child"] = {
+                "id": "ses_child",
+                "parentID": event["properties"]["sessionID"],
+                "directory": adapter.session.workspace_path,
+            }
+            event = {**event, "properties": {**event["properties"], "sessionID": "ses_child"}}
+        publish(self, event)
+
+    monkeypatch.setattr(handler, "publish", publish_child)
     handler.pending_permission = True
     handler.delay = 0.4
     events = []
@@ -331,6 +345,8 @@ def test_permission_is_rejected_and_not_a_fallback(server):
     assert result.outcome == ExternalOutcome.PERMISSION_DENIED
     assert any(r["body"] == {"reply": "reject"} for r in handler.requests)
     assert "agent.permission_requested" in events and "agent.permission_resolved" in events
+    assert adapter.external_session_id in handler.aborts
+    assert "ses_child" not in handler.aborts
 
 
 def test_stream_loss_aborts_and_never_succeeds(server):
@@ -613,8 +629,26 @@ def test_native_environment_preserves_user_tools_and_policy():
 
 
 @pytest.mark.parametrize("automatic", [True, False])
-def test_native_permission_reply_is_explicit_or_automatic(server, automatic):
+@pytest.mark.parametrize("depth", [0, 1, 2])
+def test_native_permission_reply_is_explicit_or_automatic(server, automatic, depth, monkeypatch):
     handler, adapter, request = server
+    publish = handler.publish
+
+    def publish_child(self, event):
+        if event and event["type"] == "permission.asked":
+            parent = event["properties"]["sessionID"]
+            for level in range(depth):
+                child = f"ses_child_{level}"
+                handler.sessions[child] = {
+                    "id": child,
+                    "parentID": parent,
+                    "directory": adapter.session.workspace_path,
+                }
+                parent = child
+            event = {**event, "properties": {**event["properties"], "sessionID": parent}}
+        publish(self, event)
+
+    monkeypatch.setattr(handler, "publish", publish_child)
     adapter.session = replace(
         adapter.session, settings={"permission_mode": "native", "auto_approve": automatic}
     )
@@ -647,6 +681,87 @@ def test_native_permission_reply_is_explicit_or_automatic(server, automatic):
     assert not handler.aborts
     assert any(t == "agent.input_requested" for t, _ in events) != automatic
     assert any(t == "agent.permission_resolved" for t, _ in events)
+    assert all(
+        p["session_id"] == adapter.external_session_id for _, p in events if "session_id" in p
+    )
+    if depth:
+        assert any(p.get("source_session_id") == f"ses_child_{depth - 1}" for _, p in events)
+
+
+def test_child_question_is_delivered_and_closed_without_changing_root_session(server, monkeypatch):
+    handler, adapter, request = server
+    adapter.session = replace(adapter.session, settings={"permission_mode": "native"})
+    publish = handler.publish
+    events, incoming = [], []
+
+    def publish_child(self, event):
+        if event and event["type"] == "question.asked":
+            handler.sessions["ses_child"] = {
+                "id": "ses_child",
+                "parentID": event["properties"]["sessionID"],
+                "directory": adapter.session.workspace_path,
+            }
+            event = {**event, "properties": {**event["properties"], "sessionID": "ses_child"}}
+            publish(
+                self,
+                {
+                    "type": "message.part.delta",
+                    "properties": {"sessionID": "ses_child", "field": "text", "delta": "CHILD"},
+                },
+            )
+        publish(self, event)
+
+    def emit(kind, payload):
+        events.append((kind, payload))
+        if kind == "agent.input_requested":
+            incoming.append(
+                {
+                    "command_id": "reply",
+                    "text": "README.md",
+                    "question_id": payload["question_id"],
+                    "answers": [["README.md"]],
+                }
+            )
+
+    monkeypatch.setattr(handler, "publish", publish_child)
+    result = adapter.run(
+        replace(
+            request,
+            prompt="ask user slow",
+            emit_event=emit,
+            receive_message=lambda: incoming.pop(0) if incoming else None,
+        )
+    )
+    assert result.succeeded
+    assert any(
+        t == "agent.input_requested" and p.get("source_session_id") == "ses_child"
+        for t, p in events
+    )
+    assert any(t == "agent.input_closed" and p["question_id"] == "que_test" for t, p in events)
+    assert any(t == "agent.user_message_status" and p["delivered"] for t, p in events)
+    assert all(p.get("text") != "CHILD" for _, p in events)
+    assert all(
+        p["session_id"] == adapter.external_session_id for _, p in events if "session_id" in p
+    )
+
+
+@pytest.mark.parametrize("invalid", ["unrelated", "cycle", "directory", "identity", "missing"])
+def test_child_interaction_scope_rejects_unrelated_or_invalid_sessions(server, invalid):
+    handler, adapter, _ = server
+    data = {"id": "ses_child", "directory": adapter.session.workspace_path, "parentID": "ses_root"}
+    if invalid == "unrelated":
+        data.pop("parentID")
+    elif invalid == "cycle":
+        data["parentID"] = "ses_child"
+    elif invalid == "directory":
+        data["directory"] = str(Path(adapter.session.workspace_path) / "other")
+    elif invalid == "identity":
+        data["id"] = "ses_wrong"
+    if invalid != "missing":
+        handler.sessions["ses_child"] = data
+    known = set()
+    assert not adapter._owns_child_session("ses_child", "ses_root", known)
+    assert not known
 
 
 def test_broken_tool_stream_is_aborted_not_returned_as_success(server):

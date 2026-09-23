@@ -93,21 +93,19 @@ class ProcessGroup:
             import win32api
             import win32con
             import win32job
-            import win32process
 
             handle = win32api.OpenProcess(
                 win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE, False, child.pid
             )
             try:
                 win32job.AssignProcessToJobObject(self.job, handle)
+                process = psutil.Process(child.pid)
                 if before_resume:
-                    before_resume(psutil.Process(child.pid))
-                primary = psutil.Process(child.pid).threads()[0].id
-                thread = win32api.OpenThread(win32con.THREAD_SUSPEND_RESUME, False, primary)
-                try:
-                    win32process.ResumeThread(thread)
-                finally:
-                    win32api.CloseHandle(thread)
+                    before_resume(process)
+                # psutil resumes this process directly. Finding its primary
+                # thread through threads() enumerates Windows' system threads
+                # and dominated short Git launches on a busy desktop.
+                process.resume()
             except BaseException:
                 child.kill()
                 child.wait(timeout=5)
@@ -348,12 +346,14 @@ class ProcessRegistry:
         owner_generation: int,
         run_id: str,
         step_attempt_id: str | None,
+        parent_pid: int | None = None,
     ) -> ProcessRegistryEntry:
         create_time = float(process.create_time())
-        try:
-            parent_pid = process.ppid()
-        except (psutil.Error, OSError):
-            parent_pid = None
+        if parent_pid is None:
+            try:
+                parent_pid = process.ppid()
+            except (psutil.Error, OSError):
+                parent_pid = None
         try:
             executable = process.exe()
         except (psutil.Error, OSError):
@@ -425,6 +425,14 @@ class ProcessRegistry:
 
 def process_state(pid: int, create_time: float) -> str:
     """An access failure is unknown, never proof that a writer stopped."""
+    if sys.platform == "win32":
+        from agents_ide.worker.windows_jobs import process_exited
+
+        if process_exited(pid) is True:
+            return "dead"
+        # A recycled PID may now belong to a protected system process that
+        # denies SYNCHRONIZE but exposes creation time through psutil. Preserve
+        # the identity check before treating inspection failure as unknown.
     try:
         process = psutil.Process(pid)
         if abs(process.create_time() - create_time) > 0.000001:
@@ -652,6 +660,7 @@ class ProcessSupervisor:
                 owner_generation=self.generation,
                 run_id=self.run_id,
                 step_attempt_id=attempt_id,
+                parent_pid=os.getpid(),
             )
             entry.group = group
             holder["entry"] = entry

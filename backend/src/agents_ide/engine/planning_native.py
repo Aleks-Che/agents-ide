@@ -8,6 +8,7 @@ Only the selected attempt's artifact directory is exposed to Codex tools.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from collections.abc import Callable
@@ -94,6 +95,7 @@ class PlanningSupervisor(ProcessSupervisor):
                 owner_generation=self.generation,
                 run_id=self.run_id,
                 step_attempt_id=attempt_id,
+                parent_pid=os.getpid(),
             )
             entry.group = group
             holder["entry"] = entry

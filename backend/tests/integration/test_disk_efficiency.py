@@ -9,7 +9,7 @@ from contextlib import ExitStack
 
 import pytest
 from council_support import create, document, setup
-from sqlalchemy import event, insert
+from sqlalchemy import event, insert, select
 from test_stage4_review import make_run
 from test_stage5_review import command
 
@@ -18,7 +18,7 @@ from agents_ide.engine import planning_worker
 from agents_ide.engine.events_stream import fetch_events_after
 from agents_ide.engine.runner import Runner
 from agents_ide.persistence.database import create_database, migrate
-from agents_ide.persistence.models import Run, RunEvent
+from agents_ide.persistence.models import ProcessSupervision, Run, RunEvent
 from agents_ide.security.filesystem import prepare_data_dir
 from agents_ide.worker.main import dispatch_once
 
@@ -46,6 +46,72 @@ def test_database_reuses_connections_without_capping_concurrency(settings):
     assert len(closed) == len(opened)
     # No retained Windows database handles after shutdown/maintenance disposal.
     settings.database_path.rename(settings.database_path.with_suffix(".closed"))
+
+
+def test_progress_process_lookup_does_not_scan_old_process_history(authenticated, tmp_path):
+    run, factory = make_run(authenticated, tmp_path)
+    with factory() as session:
+        session.execute(
+            insert(ProcessSupervision),
+            [
+                {
+                    "id": f"old-process-{index}",
+                    "run_id": run["id"],
+                    "kind": "git",
+                    "role": "git",
+                    "owner_generation": 1,
+                    "pid": index + 1,
+                    "create_time": 1,
+                    "state": "finished",
+                    "workspace_json": json.dumps({"padding": "x" * 1024}),
+                }
+                for index in range(10_000)
+            ],
+        )
+        session.commit()
+
+    # Many stages have no supervised process. Even that empty lookup must not
+    # read historical workspace/tree payloads on every text/progress flush.
+    steps = []
+    with factory() as session:
+        driver = session.connection().connection.driver_connection
+        driver.set_progress_handler(lambda: steps.append(True) or 0, 100)
+        try:
+            rows = list(
+                session.scalars(
+                    select(ProcessSupervision).where(
+                        ProcessSupervision.step_attempt_id == "current-attempt"
+                    )
+                )
+            )
+        finally:
+            driver.set_progress_handler(None, 0)
+    assert not rows
+    assert len(steps) * 100 < 1000
+
+
+def test_migration_adopts_preinstalled_process_index(client, settings):
+    from alembic import command
+    from alembic.config import Config
+
+    from agents_ide.persistence.database import MIGRATIONS_DIRECTORY, SCHEMA_REVISION
+
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIRECTORY))
+    with client.app.state.engine.connect() as connection:
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0026_independent_workspaces")
+        connection.exec_driver_sql(
+            "CREATE INDEX ix_process_attempt ON process_supervision (step_attempt_id)"
+        )
+        connection.commit()
+        command.upgrade(config, "head")
+        assert connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalar() == (
+            SCHEMA_REVISION
+        )
+        assert connection.exec_driver_sql("PRAGMA index_info(ix_process_attempt)").all() == [
+            (0, 2, "step_attempt_id")
+        ]
 
 
 @pytest.mark.parametrize("history_view", [False, True])

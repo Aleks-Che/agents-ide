@@ -79,6 +79,43 @@ def test_owned_stdio_transport(tmp_path):
         group.close()
 
 
+@pytest.mark.windows
+@pytest.mark.skipif(os.name != "nt", reason="Windows suspended stdio startup")
+@pytest.mark.parametrize("reject", [False, True])
+def test_stdio_registers_before_execution_without_enumerating_threads(
+    tmp_path, monkeypatch, reject
+):
+    marker = tmp_path / "executed"
+    registered = []
+
+    def register(process):
+        registered.append(process.pid)
+        assert not marker.exists()
+        time.sleep(0.1)
+        assert not marker.exists()
+        if reject:
+            raise ValueError("registration rejected")
+
+    def threads(_):
+        pytest.fail("Resuming one new process must not enumerate Windows threads")
+
+    monkeypatch.setattr(psutil.Process, "threads", threads)
+    argv = [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"]
+    group = ProcessGroup()
+    try:
+        if reject:
+            with pytest.raises(ValueError, match="registration rejected"):
+                group.popen_stdio(argv, tmp_path, before_resume=register)
+            assert not marker.exists()
+        else:
+            child = group.popen_stdio(argv, tmp_path, before_resume=register)
+            child.communicate(timeout=5)
+            assert child.returncode == 0 and marker.exists()
+        assert len(registered) == 1
+    finally:
+        group.close()
+
+
 def test_job_retains_child_exit_code(tmp_path):
     group = ProcessGroup()
     try:
@@ -89,6 +126,42 @@ def test_job_retains_child_exit_code(tmp_path):
         assert group.exit_code() == 7
     finally:
         group.close()
+
+
+@pytest.mark.windows
+@pytest.mark.skipif(os.name != "nt", reason="Windows process handle exit check")
+def test_windows_exit_check_retains_identity_and_avoids_dead_pid_scan(tmp_path, monkeypatch):
+    from agents_ide.worker.processes import process_state
+
+    group = ProcessGroup()
+    child = group.popen_stdio([sys.executable, "-c", "import sys; sys.stdin.read()"], tmp_path)
+    created = psutil.Process(child.pid).create_time()
+    try:
+        assert process_state(child.pid, created) == "alive"
+        assert process_state(child.pid, created + 1) == "dead"
+        child.communicate("", timeout=5)
+        # Popen still retains its handle; psutil otherwise takes a slow fallback
+        # while Windows retains the terminated process object.
+        monkeypatch.setattr(psutil, "Process", lambda *_: pytest.fail("Dead PID inspected again"))
+        assert process_state(child.pid, created) == "dead"
+    finally:
+        group.close()
+
+
+@pytest.mark.windows
+@pytest.mark.skipif(os.name != "nt", reason="Windows process handle errors")
+@pytest.mark.parametrize("code,expected", [(5, None), (87, True)])
+def test_windows_handle_access_failure_is_not_exit(monkeypatch, code, expected):
+    import pywintypes
+    import win32api
+
+    from agents_ide.worker.windows_jobs import process_exited
+
+    def denied(*args):
+        raise pywintypes.error(code, "OpenProcess", "Test error")
+
+    monkeypatch.setattr(win32api, "OpenProcess", denied)
+    assert process_exited(123) is expected
 
 
 def test_capture_tree_tolerates_root_exit_during_inspection(monkeypatch):
