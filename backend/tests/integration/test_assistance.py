@@ -199,6 +199,13 @@ def test_ai_receives_fresh_diagnosis_history_and_guide_without_mutating_run(
     response = client.post("/api/assistance/messages", headers=headers, json=payload)
     assert response.json()["context"]["findings"] == []
     assert not seen[-1].context_package["evidence"]["findings"]
+    # A rejected restart has no new run or finding. Its diagnostic case must
+    # still reach the AI, including when the user pastes the preflight error.
+    assert "harness_catalog" in {
+        case["id"] for case in seen[-1].context_package["evidence"]["guide"]["diagnostic_cases"]
+    }
+    for entry in client.get("/api/assistance/catalog").json():
+        assert "harness_catalog" in {case["id"] for case in entry["diagnostic_cases"]}
     assert (
         client.post(
             "/api/assistance/messages",

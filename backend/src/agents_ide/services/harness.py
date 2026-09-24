@@ -201,6 +201,12 @@ def invalidate_native_catalog(session: Session, model: HarnessProfileModel) -> N
     session.flush()
 
 
+def model_catalog_is_verified(model: HarnessProfileModel) -> bool:
+    return model.catalog_fetched_at is not None and model.catalog_fingerprint == fingerprint(
+        model.harness_kind, model.executable_path
+    )
+
+
 def current_model_metadata(model: HarnessProfileModel) -> dict[str, Any]:
     """Last confirmed options for this executable/account/configuration.
 
@@ -208,10 +214,7 @@ def current_model_metadata(model: HarnessProfileModel) -> dict[str, Any]:
     Dispatch fetches and validates the live catalog again. A changed native
     fingerprint still invalidates all cached options immediately.
     """
-    if (
-        model.catalog_fingerprint != fingerprint(model.harness_kind, model.executable_path)
-        or model.catalog_fetched_at is None
-    ):
+    if not model_catalog_is_verified(model):
         return {}
     metadata: dict[str, Any] = json.loads(model.catalog_metadata_json or "{}")
     return metadata

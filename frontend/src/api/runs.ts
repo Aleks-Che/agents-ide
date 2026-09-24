@@ -1,5 +1,6 @@
 import { ApiError, request } from './client'
 import type { ApiSchemas } from './generated'
+import { refreshUnverifiedHarnessCatalogs } from './harness_catalog'
 
 export type RunRecord = ApiSchemas['Run']
 export type GitChangesReview = ApiSchemas['GitChangesReview']
@@ -137,16 +138,32 @@ export const runsApi = {
       csrf,
     )
   },
-  restart(
+  async restart(
     runId: string,
     body: ApiSchemas['RunRestart'],
     csrf: string,
   ): Promise<RunRecord> {
-    return request<RunRecord>(
-      `/runs/${runId}/restart`,
-      { method: 'POST', body: JSON.stringify(body) },
-      csrf,
-    )
+    const options = { method: 'POST', body: JSON.stringify(body) }
+    const send = () =>
+      request<RunRecord>(`/runs/${runId}/restart`, options, csrf)
+    try {
+      return await send()
+    } catch (error) {
+      // A rejected preflight creates no replacement. Refresh once, then replay
+      // the exact command so a lost response cannot create a duplicate run.
+      if (
+        !(error instanceof ApiError) ||
+        error.status !== 422 ||
+        error.body.code !== 'graph_validation_failed' ||
+        !Array.isArray(error.body.details.errors) ||
+        !(await refreshUnverifiedHarnessCatalogs(
+          error.body.details.errors,
+          csrf,
+        ))
+      )
+        throw error
+    }
+    return send()
   },
   snapshot(runId: string): Promise<RunSnapshot> {
     return request<RunSnapshot>(`/runs/${runId}/snapshot`)

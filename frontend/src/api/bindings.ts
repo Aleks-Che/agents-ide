@@ -1,5 +1,6 @@
 import { ApiError, request } from './client'
 import type { ApiSchemas } from './generated'
+import { refreshUnverifiedHarnessCatalogs } from './harness_catalog'
 
 export type PipelineTemplate = ApiSchemas['PipelineTemplate']
 export type PipelineVersion = ApiSchemas['PipelineVersion']
@@ -173,20 +174,8 @@ export const bindingsApi = {
         csrf,
       )
     let report = await check()
-    const refresh = new Set(
-      report.errors
-        .filter((issue) => issue.code === 'harness_catalog_unverified')
-        .map((issue) => issue.details?.harness_profile_id)
-        .filter((id): id is string => typeof id === 'string'),
-    )
-    for (const id of refresh) {
-      await request(
-        `/harness_profiles/${encodeURIComponent(id)}/models/refresh?force=true`,
-        { method: 'POST' },
-        csrf,
-      )
-    }
-    if (refresh.size) report = await check()
+    if (await refreshUnverifiedHarnessCatalogs(report.errors, csrf))
+      report = await check()
     const { ok, errors, warnings, execution_hash, ...preview } = report
     return { ok, errors, warnings, execution_hash, preview }
   },

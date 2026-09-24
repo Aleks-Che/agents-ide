@@ -622,10 +622,25 @@ def _candidates(
                     try:
                         validate_settings(settings)
                         from agents_ide.adapters.model_catalog import parameters_for
-                        from agents_ide.services.harness import current_model_metadata
+                        from agents_ide.services.harness import (
+                            current_model_metadata,
+                            model_catalog_is_verified,
+                        )
 
                         metadata = current_model_metadata(resource)
                         if candidate["params"] and candidate["model_id"] not in metadata:
+                            if model_catalog_is_verified(resource) and candidate[
+                                "model_id"
+                            ] not in json.loads(resource.catalog_models_json or "[]"):
+                                raise AppError(
+                                    "harness_model_unavailable",
+                                    f"Модель {candidate['model_id']} отсутствует в проверенном "
+                                    f"каталоге {resource.name}. "
+                                    "Если каталог устарел, обновите его. "
+                                    "Если модель по-прежнему отсутствует, выберите актуальный ID "
+                                    "в настройках группы моделей или узла шаблона.",
+                                    422,
+                                )
                             raise AppError(
                                 "harness_catalog_unverified",
                                 "Обновите каталог моделей: настройки harness изменились "

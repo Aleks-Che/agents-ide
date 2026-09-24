@@ -415,6 +415,38 @@ def test_codex_preflight_rejects_unverified_configuration(
     assert expected in response.text
 
 
+@pytest.mark.parametrize(
+    "catalog,fingerprint,expected",
+    [
+        (["replacement-model"], "current", "harness_model_unavailable"),
+        ([], "current", "harness_model_unavailable"),
+        (["replacement-model"], "old", "harness_catalog_unverified"),
+        (["gpt-5.6-sol"], "current", "harness_catalog_unverified"),
+    ],
+)
+def test_preflight_distinguishes_missing_model_from_unverified_catalog(
+    authenticated, tmp_path, monkeypatch, catalog, fingerprint, expected
+):
+    from agents_ide.persistence.models import HarnessProfile
+
+    monkeypatch.setattr("agents_ide.services.harness.fingerprint", lambda *args: "current")
+    payload = seed(authenticated, tmp_path, params={"reasoning_effort": "max"})
+    client, headers = authenticated
+    with client.app.state.session_factory.begin() as session:
+        profile = session.scalar(select(HarnessProfile))
+        profile.catalog_fingerprint = fingerprint
+        profile.catalog_fetched_at = 1  # TTL alone does not invalidate confirmed options.
+        profile.catalog_models_json = json.dumps(catalog)
+        profile.catalog_metadata_json = "{}"
+    response = client.post("/api/runs", headers=headers, json=payload)
+    assert response.status_code == 422, response.text
+    errors = response.json()["details"]["errors"]
+    assert {issue["code"] for issue in errors} == {expected}
+    assert all(issue["details"]["model_id"] == "gpt-5.6-sol" for issue in errors)
+    if expected == "harness_model_unavailable":
+        assert all("отсутствует в проверенном каталоге" in issue["message"] for issue in errors)
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_runner_durable_thread_turn_role_isolation_and_process_cleanup(
     authenticated, settings, tmp_path, runtime_launch, legacy

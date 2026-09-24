@@ -123,9 +123,7 @@ def models(session: Session) -> list[AssistanceModel]:
 def _reason(code: str | None, message: str | None, state: str) -> tuple[str, str, str]:
     if code == "external_change_detected":
         specific = {
-            "Files outside the allowlist changed": (
-                "Изменены защищённые файлы рабочей области."
-            ),
+            "Files outside the allowlist changed": ("Изменены защищённые файлы рабочей области."),
             "Branch or HEAD changed externally": "Ветка или HEAD изменились после запуска.",
             "User index changed during commit": "Индекс Git изменился во время коммита.",
             "User index is locked": "Индекс Git заблокирован другой операцией.",
@@ -525,7 +523,10 @@ def collect_context(
     if worker["status"] != "running":
         signals.add("worker_unavailable")
     entry.diagnostic_cases = [
-        case for case in entry.diagnostic_cases if signals.intersection(case.signals)
+        case
+        for case in entry.diagnostic_cases
+        # Rejected launches have no activity source; their errors can be pasted into chat.
+        if case.id == "harness_catalog" or signals.intersection(case.signals)
     ]
     tools: list[AssistanceTool] = []
     for finding in findings:

@@ -38,6 +38,7 @@ import { ArtifactDetail } from './ArtifactDetail'
 import { RunWorkspace } from './RunWorkspace'
 import { ResolutionForm } from './RunsPanel'
 import { LoopProgress } from './LoopProgress'
+import { RunErrorAlert } from './RunErrorAlert'
 
 type Stage = NonNullable<RunObservation['nodes']>[number]
 const stageStates: Record<string, string> = {
@@ -432,11 +433,7 @@ export function ChatRunProgress({
       {restart.isPending ? (
         <p role="status">Готовим перезапуск с первого этапа…</p>
       ) : null}
-      {restart.error ? (
-        <p className="error" role="alert">
-          {describeRunError(restart.error)}
-        </p>
-      ) : null}
+      {restart.error ? <RunErrorAlert error={restart.error} /> : null}
       {restartUncertain ? (
         <button
           onClick={() => restart.variables && restart.mutate(restart.variables)}

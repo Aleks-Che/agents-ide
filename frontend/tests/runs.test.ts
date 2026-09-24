@@ -122,3 +122,89 @@ describe('describeRunError', () => {
     expect(describeRunError(null)).toBe('Неизвестная ошибка')
   })
 })
+
+describe('restart catalog recovery', () => {
+  const body = { command_id: 'same-command', expected_state_version: 7 }
+  const failure = {
+    code: 'graph_validation_failed',
+    message: 'Граф не прошёл preflight',
+    details: {
+      errors: ['first', 'second'].map((node_id) => ({
+        code: 'harness_catalog_unverified',
+        node_id,
+        message: 'Refresh',
+        details: { harness_profile_id: 'h1' },
+      })),
+    },
+  }
+
+  it('refreshes a shared harness once and retries the exact restart command', async () => {
+    const fetch = captureFetch()
+    fetch
+      .mockResolvedValueOnce(stubJsonResponse(422, failure))
+      .mockResolvedValueOnce(stubJsonResponse(200, { status: 'fresh' }))
+      .mockResolvedValueOnce(stubJsonResponse(201, { id: 'replacement' }))
+    expect(await runsApi.restart('r1', body, 'csrf')).toEqual({
+      id: 'replacement',
+    })
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      '/api/runs/r1/restart',
+      '/api/harness_profiles/h1/models/refresh?force=true',
+      '/api/runs/r1/restart',
+    ])
+    expect(JSON.parse(fetch.mock.calls[2][1].body)).toEqual(body)
+    expect(fetch.mock.calls[0][1].body).toBe(fetch.mock.calls[2][1].body)
+    expect(fetch.mock.calls[1][1].headers.get('X-CSRF-Token')).toBe('csrf')
+  })
+
+  it('does not loop when refresh leaves the model unverified', async () => {
+    const fetch = captureFetch()
+    fetch
+      .mockResolvedValueOnce(stubJsonResponse(422, failure))
+      .mockResolvedValueOnce(stubJsonResponse(200, { status: 'fresh' }))
+      .mockResolvedValueOnce(stubJsonResponse(422, failure))
+    await expect(runsApi.restart('r1', body, 'csrf')).rejects.toMatchObject({
+      body: failure,
+    })
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    [500, failure],
+    [409, { code: 'version_conflict', message: 'Conflict', details: {} }],
+    [
+      422,
+      {
+        ...failure,
+        details: { errors: [{ code: 'harness_model_unavailable' }] },
+      },
+    ],
+  ])(
+    'does not refresh or retry unrelated failure %s',
+    async (status, error) => {
+      const fetch = captureFetch()
+      fetch.mockResolvedValueOnce(stubJsonResponse(status, error))
+      await expect(runsApi.restart('r1', body, 'csrf')).rejects.toBeInstanceOf(
+        ApiError,
+      )
+      expect(fetch).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it('does not restart when the catalog refresh fails', async () => {
+    const fetch = captureFetch()
+    fetch
+      .mockResolvedValueOnce(stubJsonResponse(422, failure))
+      .mockResolvedValueOnce(
+        stubJsonResponse(422, {
+          code: 'harness_catalog_unavailable',
+          message: 'Cannot load models',
+          details: {},
+        }),
+      )
+    await expect(runsApi.restart('r1', body, 'csrf')).rejects.toThrow(
+      'Cannot load models',
+    )
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+})
