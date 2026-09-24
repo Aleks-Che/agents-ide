@@ -43,6 +43,11 @@ class GitHeadReview(ApiOutput):
 
 
 def head_boundary(run: Run) -> bool:
+    return dispatch_boundary(run, "AgentTask")
+
+
+def dispatch_boundary(run: Run, node_type: Literal["AgentTask", "GitCommit"]) -> bool:
+    """A saved Git guard stop before dispatch, without a current execution or attempt."""
     runtime = json.loads(run.runtime_json or "{}")
     waiting = json.loads(run.waiting_reason_json or "null") or runtime.get("waiting_reason") or {}
     target = json.loads(run.resume_target_json or "{}")
@@ -55,10 +60,11 @@ def head_boundary(run: Run) -> bool:
         and target.get("execution_id") is None
         and target.get("action") == "dispatch_next"
         and target.get("node_id") == run.current_node_id
+        and runtime.get("next_node_id") == run.current_node_id
         and set(target.get("blockers", [])) <= {"external_change_detected"}
         and runtime.get("git", {}).get("phase") == "ready"
         and any(
-            node["id"] == run.current_node_id and node.get("type") == "AgentTask"
+            node["id"] == run.current_node_id and node.get("type") == node_type
             for node in effective_snapshot(run).get("graph", {}).get("nodes", [])
         )
     )

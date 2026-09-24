@@ -43,7 +43,7 @@ def prepare_blocked_connection(
 ):
     calls, messages = [], []
     if guard_first:
-        (repository / ".gitignore").write_text("*.log\n")
+        (repository / ".gitignore").write_text("*.cache\n")
         command(repository, "add", ".gitignore")
         command(repository, "commit", "-qm", "ignore review logs")
         (repository / "frontend").mkdir()

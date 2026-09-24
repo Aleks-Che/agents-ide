@@ -21,7 +21,7 @@ repository = repository_fixture
 
 @pytest.fixture
 def blocked(authenticated, repository, settings, monkeypatch):
-    (repository / ".gitignore").write_text("*.log\n.env\n")
+    (repository / ".gitignore").write_text("*.cache\n")
     command(repository, "add", ".gitignore")
     command(repository, "commit", "-qm", "ignore local files")
     (repository / "review-check.log").write_text("previous log\n")
@@ -79,7 +79,7 @@ def test_compare_accept_selected_audit_idempotency_and_resume(
     assert files["README.md"]["comparison"] == "text"
     assert "-keep" in files["README.md"]["diff"]
     assert "+updated document" in files["README.md"]["diff"]
-    assert files["review-check.log"]["risk"] == "medium"
+    assert files["review-check.log"]["risk"] == "unknown"
     assert files["review-check.log"]["comparison"] == "metadata_only"
     assert files[".env"]["risk"] == "high"
     assert files[".env"]["comparison"] == "hidden"

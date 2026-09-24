@@ -24,7 +24,12 @@ from agents_ide.engine.worktrees import effective_workspace
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import Run
 from agents_ide.security.workspace_read import read_workspace_file
-from agents_ide.services.git_head_changes import GitHeadReview, compare_head, head_boundary
+from agents_ide.services.git_head_changes import (
+    GitHeadReview,
+    compare_head,
+    dispatch_boundary,
+    head_boundary,
+)
 from agents_ide.services.mapping import get_or_404
 from agents_ide.services.run_controls import _git_check_retry, unsettled_attempts
 from agents_ide.worker.processes import stored_processes_stopped
@@ -77,6 +82,22 @@ class GitChangesAcceptance(ApiModel):
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(to_json(value).encode()).hexdigest()
+
+
+def _file_boundary_key(run: Run) -> str | None:
+    """Bind a decision to this dispatch stop, not a later worker at the same node."""
+    if not dispatch_boundary(run, "GitCommit"):
+        return None
+    runtime = json.loads(run.runtime_json)
+    return _digest(
+        {
+            "node": run.current_node_id,
+            "worker_generation": run.worker_generation,
+            "cycle": runtime.get("cycle_id"),
+            "visits": runtime.get("visits"),
+            "target": json.loads(run.resume_target_json or "{}"),
+        }
+    )
 
 
 def _state(value: dict[str, Any] | None) -> GitFileState | None:
@@ -219,14 +240,6 @@ def _change(
             "high",
             "Код, настройки, секреты, удаление или режим файла могут влиять на работу.",
         )
-    elif suffix == ".log" and before and before.get("ignored") and after and after.get("ignored"):
-        risk, assessment = (
-            "medium",
-            (
-                "По имени и политике это игнорируемый журнал. Вероятное влияние на код небольшое, "
-                "но назначение и безвредность содержимого не подтверждены."
-            ),
-        )
     diff, note, truncated = None, "Сравнение содержимого не запрашивалось.", False
     if sensitive:
         note = "Содержимое потенциально чувствительного файла скрыто."
@@ -278,7 +291,8 @@ def _review(
         blockers.append("Принятие возможно только у остановившегося запуска.")
     eligible = _git_check_retry(session, run, snapshot, waiting)
     boundary = head_boundary(run)
-    if not eligible and not boundary:
+    file_boundary = _file_boundary_key(run)
+    if not eligible and not boundary and not file_boundary:
         blockers.append("Нужен остановившийся Git-этап до сохранения намерения коммита.")
     if not stored_processes_stopped(session, run):
         blockers.append("Остановка прежних процессов не подтверждена.")
@@ -312,27 +326,23 @@ def _review(
             )
         if not git.git_policy_matches(fingerprint, baseline.get("fingerprint", {})):
             blockers.append("Изменились Git hooks или настройки подписи.")
-        if boundary and runtime.get("git_paused_workspace_hash"):
+        if (boundary or file_boundary) and runtime.get("git_paused_workspace_hash"):
             from agents_ide.engine.context_sources import workspace_hash
 
             if workspace_hash(workspace) != runtime["git_paused_workspace_hash"]:
                 blockers.append(
                     "Изменился снимок файлов, сохранённый при паузе. "
-                    "Принятие HEAD не снимает эту блокировку."
+                    "Принятие изменений не снимает эту блокировку."
                 )
         if any(
             item["code"] != "??" and item["code"][0] != "." for item in git.list_status(workspace)
         ):
             blockers.append("Индекс содержит подготовленные изменения.")
         manifest = git.file_manifest(workspace)
-        previous = baseline.get("protected", {})
         allowed = baseline.get("allowlist") or state.get("allowlist", [])
-        current = {
-            path: value
-            for path, value in manifest.items()
-            if path in previous
-            or (not value.get("ignored") and not git.is_path_allowed(path, allowed))
-        }
+        previous, current = git.protected_states(
+            workspace, baseline.get("protected", {}), manifest, allowed
+        )
         changed = sorted(
             path
             for path in previous.keys() | current.keys()
@@ -453,13 +463,17 @@ def resolution_status(run: Run) -> dict[str, Any]:
             and accepted_head.get("head") == runtime["git"].get("head"),
         }
     accepted = runtime["git"].get("accepted_changes", {})
+    file_boundary = _file_boundary_key(run)
     return {
         "can_review": True,
         "kind": "protected_files",
         "attempt_id": run.current_attempt_id,
+        "before_dispatch": bool(file_boundary),
         "accepted": bool(
-            run.current_attempt_id
-            and accepted.get("attempt_id") == run.current_attempt_id
+            (
+                (run.current_attempt_id and accepted.get("attempt_id") == run.current_attempt_id)
+                or (file_boundary and accepted.get("boundary_key") == file_boundary)
+            )
             and accepted.get("remaining_changes") == 0
         ),
     }
@@ -546,6 +560,8 @@ def accept_changes(session: Session, run: Run, command: RunCommand) -> dict[str,
                 "command_id": command.command_id,
                 "comparison_id": review.comparison_id,
                 "attempt_id": run.current_attempt_id,
+                "node_id": run.current_node_id,
+                "boundary_key": _file_boundary_key(run),
                 "acknowledge_risk": True,
                 "changes": [
                     {
@@ -571,6 +587,7 @@ def accept_changes(session: Session, run: Run, command: RunCommand) -> dict[str,
     remaining = len(review.changes) + review.omitted_changes - len(paths)
     state["accepted_changes"] = {
         "attempt_id": run.current_attempt_id,
+        "boundary_key": _file_boundary_key(run),
         "artifact_id": audit.id,
         "remaining_changes": remaining,
     }
@@ -585,15 +602,35 @@ def accept_changes(session: Session, run: Run, command: RunCommand) -> dict[str,
 
 
 def check_head_resume(session: Session, run: Run) -> bool:
-    """Only a reviewed boundary decision authorizes this otherwise blocked resume."""
+    """Resume a boundary only when all guards pass and HEAD matches the expected one."""
     if not head_boundary(run):
         return False
     state = json.loads(run.runtime_json).get("git", {})
     accepted = state.get("accepted_head", {})
-    if accepted.get("node_id") != run.current_node_id or accepted.get("head") != state.get("head"):
-        return False
     review = _review(session, run, include_diff=False)[0]
     if review.blockers or not review.head or review.head.relation != "same":
+        if accepted.get("node_id") != run.current_node_id or accepted.get("head") != state.get(
+            "head"
+        ):
+            return False
+        raise AppError(
+            "git_acceptance_stale",
+            "После принятия состояние изменилось. Откройте сравнение снова.",
+            409,
+        )
+    return True
+
+
+def check_files_resume(session: Session, run: Run) -> bool:
+    """A fresh clean review also resolves old stops caused only by ignored files."""
+    boundary_key = _file_boundary_key(run)
+    accepted = json.loads(run.runtime_json).get("git", {}).get("accepted_changes", {})
+    if not boundary_key:
+        return False
+    review = _review(session, run, include_diff=False)[0]
+    if review.blockers or review.changes or review.omitted_changes:
+        if accepted.get("boundary_key") != boundary_key:
+            return False
         raise AppError(
             "git_acceptance_stale",
             "После принятия состояние изменилось. Откройте сравнение снова.",

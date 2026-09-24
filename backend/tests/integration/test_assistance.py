@@ -267,7 +267,7 @@ def test_git_inspection_identifies_protected_changes_and_preserves_index(
     assert evidence["workspace_source"] == (
         "run_workspace" if separate_workspace else "project_workspace"
     )
-    assert {item["path"] for item in evidence["protected_changes"]} == {"README.md", ".env"}
+    assert {item["path"] for item in evidence["protected_changes"]} == {"README.md"}
     assert evidence["checks_performed"] == ["head", "branch", "protected_files"]
     assert "index" in evidence["checks_not_performed"]
     assert all(item["content_changed"] for item in evidence["protected_changes"])

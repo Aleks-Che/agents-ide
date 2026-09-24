@@ -376,8 +376,8 @@ def test_new_ignored_setup_files_do_not_block_commit(repository, isolated):
     (workspace / "src/a.txt").write_text("agent change\n")
     # Both single ignored files and self-ignoring caches reproduce the failures.
     manifest = git.file_manifest(workspace)
-    assert manifest[".env"]["ignored"]
-    assert manifest[".pytest_cache/README.md"]["ignored"]
+    assert ".env" not in manifest
+    assert ".pytest_cache/README.md" not in manifest
     operation = intent(value, allowlist=("**",))
     result = git.execute(workspace, value, operation)
     assert result.sha
@@ -394,7 +394,7 @@ def test_new_ignored_setup_files_do_not_block_commit(repository, isolated):
 
 
 @pytest.mark.parametrize("change", ["modify", "delete"])
-def test_preexisting_ignored_files_remain_protected(repository, change):
+def test_preexisting_ignored_files_do_not_affect_commit(repository, change):
     (repository / ".gitignore").write_text(".env\n")
     command(repository, "add", ".gitignore")
     command(repository, "commit", "-qm", "ignore local environment")
@@ -406,9 +406,9 @@ def test_preexisting_ignored_files_remain_protected(repository, change):
         private.write_text("changed setting\n")
     else:
         private.unlink()
-    with pytest.raises(git.GitCommitError, match="outside the allowlist"):
-        git.execute(repository, value, intent(value, allowlist=("**",)))
-    assert command(repository, "rev-parse", "HEAD") == value.head_sha
+    assert ".env" not in value.protected
+    assert git.execute(repository, value, intent(value, allowlist=("**",))).sha
+    assert command(repository, "ls-files", ".env") == ""
 
 
 def test_ignored_dependency_tree_does_not_exhaust_manifest_or_freshness_budget(

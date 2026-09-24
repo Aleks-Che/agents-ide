@@ -181,11 +181,12 @@ def run_git(
     data: bytes = b"",
     env: dict[str, str] | None = None,
     timeout: float | None = None,
+    allowed_exit_codes: tuple[int, ...] = (0,),
 ) -> bytes:
     result = (_TRANSPORT.get() or GitTransport()).run(
         workspace, args, data=data, env=env, timeout=timeout
     )
-    if result.returncode:
+    if result.returncode not in allowed_exit_codes:
         raise GitError(
             "git_failed",
             "Git command failed",

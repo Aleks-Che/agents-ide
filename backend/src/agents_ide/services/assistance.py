@@ -124,7 +124,7 @@ def _reason(code: str | None, message: str | None, state: str) -> tuple[str, str
     if code == "external_change_detected":
         specific = {
             "Files outside the allowlist changed": (
-                "Изменены защищённые файлы: вне разрешённого списка или ранее игнорируемые."
+                "Изменены защищённые файлы рабочей области."
             ),
             "Branch or HEAD changed externally": "Ветка или HEAD изменились после запуска.",
             "User index changed during commit": "Индекс Git изменился во время коммита.",
@@ -198,13 +198,9 @@ def inspect_git(run: Run) -> dict[str, Any]:
         with using_transport(GitTransport(deadline=time.monotonic() + 10)):
             manifest = git.file_manifest(workspace)
             allowed = baseline.get("allowlist") or state.get("allowlist", [])
-            previous = baseline.get("protected", {})
-            current = {
-                path: value
-                for path, value in manifest.items()
-                if path in previous
-                or (not value.get("ignored") and not git.is_path_allowed(path, allowed))
-            }
+            previous, current = git.protected_states(
+                workspace, baseline.get("protected", {}), manifest, allowed
+            )
             changed = sorted(
                 path
                 for path in previous.keys() | current.keys()
@@ -255,6 +251,11 @@ def inspect_git(run: Run) -> dict[str, Any]:
 
 def _git_recovery_rules(kind: str | None) -> list[str]:
     rules = [
+        "Неотслеживаемые файлы, исключённые текущими правилами .gitignore, не влияют на "
+        "проверку состояния, включая старые baseline. Их не нужно принимать, удалять или "
+        "добавлять в коммит. Если git_acceptance.can_resume=true, предложите «Продолжить»: "
+        "свежая проверка не нашла блокирующих расхождений. "
+        "Отслеживаемые Git файлы проверяются даже при совпадении с .gitignore.",
         "При git_acceptance.review.can_accept=true и наличии подходящего инструмента "
         "для этого run_id в tools предложите «Решить через помощника»: просмотр сравнения "
         "и подтверждение из confirmation_label инструмента. "
@@ -294,6 +295,10 @@ def _git_recovery_rules(kind: str | None) -> list[str]:
         ]
     if kind == "protected_files":
         return rules + [
+            "Принятие защищённых файлов доступно и до первой попытки GitCommit "
+            "(before_dispatch=true, attempt.id=null). Если review.can_accept=true, "
+            "предлагайте инструмент для этого run_id: после подтверждения он продолжит "
+            "текущий GitCommit без повторения завершённых этапов.",
             "Для protected_files используйте accept_git_files_and_resume, а не инструмент HEAD. "
             "В чате выбрать конкретные файлы, подтвердить риск и нажать "
             "«Принять выбранные изменения и продолжить». Для продолжения должны быть "
@@ -373,7 +378,11 @@ def _finding(
             evidence["git_acceptance"] = resolution_status(run)
             evidence["git_policy"] = {
                 "allowed_paths": (baseline.get("allowlist") or state.get("allowlist", []))[:100],
-                "preexisting_ignored_files_protected": True,
+                "preexisting_ignored_files_protected": False,
+                "ignore_rules": (
+                    "Текущие правила Git: неотслеживаемые игнорируемые файлы исключены. "
+                    "Отслеживаемые файлы проверяются даже при совпадении с .gitignore."
+                ),
                 "requires_reviewed_git_changes_resolution": True,
                 "recovery_rules": _git_recovery_rules(evidence["git_acceptance"].get("kind")),
             }
@@ -384,6 +393,12 @@ def _finding(
                         review = review_changes(session, run.id, include_diff=False)
                         evidence["git_acceptance"]["review"] = review.model_dump(
                             exclude={"comparison_id", "workspace_path", "state_version"}
+                        )
+                        evidence["git_acceptance"]["can_resume"] = (
+                            not review.blockers
+                            and not review.changes
+                            and not review.omitted_changes
+                            and (review.head is None or review.head.relation == "same")
                         )
                     except (AppError, OSError, ValueError):
                         evidence["git_acceptance"]["review_error"] = (
@@ -419,7 +434,17 @@ def _finding(
             question = "Почему этап остановился из-за изменений Git и как их принять?"
         acceptance = evidence.get("git_acceptance", {})
         review = acceptance.get("review", {})
-        if acceptance.get("kind") == "head":
+        if acceptance.get("can_resume"):
+            explanation = (
+                "Свежая проверка Git не обнаружила блокирующих расхождений. "
+                "Запуск ожидает команды продолжения."
+            )
+            next_step = (
+                "Сейчас расхождений, блокирующих Git, нет. Неотслеживаемые файлы из .gitignore "
+                "исключены из проверки. Нажмите «Продолжить»: сервер повторит проверки. "
+                "Принимать игнорируемые файлы не требуется."
+            )
+        if acceptance.get("kind") == "head" and not acceptance.get("can_resume"):
             explanation = "Проверка рабочей области остановила запуск перед началом этапа агента."
             next_step = (
                 "Нажмите «Сравнить и принять изменения»: проверьте коммиты и разницу HEAD. "
@@ -522,6 +547,7 @@ def collect_context(
             or finding.state != "waiting_input"
             or not acceptance.get("can_review")
             or acceptance.get("accepted")
+            or acceptance.get("can_resume")
         ):
             continue
         tool = git_acceptance_tool(

@@ -4,7 +4,12 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { test, expect, pair, api, workspace } from './support'
 
-for (const mode of ['manual', 'assistant'] as const) {
+for (const mode of [
+  'manual',
+  'assistant',
+  'assistant-before-dispatch',
+  'ignored-before-dispatch',
+] as const) {
   test(`AI diagnosis accepts protected files with stale checks (${mode})`, async ({
     page,
   }) => {
@@ -13,14 +18,17 @@ for (const mode of ['manual', 'assistant'] as const) {
     mkdirSync(path.join(root, 'src'))
     mkdirSync(path.join(root, 'frontend'))
     writeFileSync(path.join(root, 'src/a.txt'), 'base\n')
-    writeFileSync(path.join(root, '.gitignore'), '*.log\n')
+    writeFileSync(
+      path.join(root, '.gitignore'),
+      mode === 'ignored-before-dispatch' ? '*.log\n' : '*.cache\n',
+    )
     writeFileSync(
       path.join(root, 'frontend/review-check.log'),
       'old log content\n',
     )
     const git = (...args: string[]) =>
       execFileSync('git', ['-C', root, ...args], { windowsHide: true })
-    git('add', '.')
+    git('add', 'src/a.txt', '.gitignore')
     git(
       '-c',
       'user.name=Test',
@@ -51,7 +59,7 @@ for (const mode of ['manual', 'assistant'] as const) {
             {
               id: 'commit',
               type: 'GitCommit',
-              config: { allowlist: ['**'], generate_message: false },
+              config: { allowlist: ['src/**'], generate_message: false },
             },
             { id: 'end', type: 'End' },
           ],
@@ -88,6 +96,10 @@ for (const mode of ['manual', 'assistant'] as const) {
         path.resolve('tests/e2e/seed_git_changes.py'),
         process.env.AGENTS_IDE_E2E_DATA_DIR!,
         run.id,
+        ...(mode === 'assistant-before-dispatch' ? ['before-dispatch'] : []),
+        ...(mode === 'ignored-before-dispatch'
+          ? ['ignored-before-dispatch']
+          : []),
       ],
       { windowsHide: true },
     )
@@ -105,13 +117,40 @@ for (const mode of ['manual', 'assistant'] as const) {
     await assistant
       .getByRole('button', {
         name:
-          mode === 'assistant'
+          mode !== 'manual'
             ? 'Решить через помощника'
             : 'Сравнить и принять изменения',
       })
       .click()
     const form = page.getByRole('form', { name: 'Принятие изменений Git' })
-    if (mode === 'assistant') {
+    if (mode === 'ignored-before-dispatch') {
+      const originalContents = readFileSync(
+        path.join(root, 'frontend/review-check.log'),
+      )
+      await expect(form.getByText(/Принимать файлы не требуется/)).toBeVisible()
+      await expect(form.getByRole('checkbox')).toHaveCount(0)
+      await expect(
+        form.getByRole('button', {
+          name: 'Принять выбранные изменения и продолжить',
+        }),
+      ).toHaveCount(0)
+      await form.getByRole('button', { name: 'Закрыть', exact: true }).click()
+      await assistant
+        .getByRole('button', { name: 'Свернуть помощника' })
+        .click()
+      await page
+        .getByRole('region', { name: 'Выполнение шаблона', exact: true })
+        .getByRole('button', { name: 'Продолжить выполнение', exact: true })
+        .click()
+      await expect
+        .poll(async () => (await api(page, 'GET', `/runs/${run.id}`)).state)
+        .toBe('queued')
+      expect(
+        readFileSync(path.join(root, 'frontend/review-check.log')),
+      ).toEqual(originalContents)
+      return
+    }
+    if (mode !== 'manual') {
       await expect(
         assistant.getByRole('form', { name: 'Принятие изменений Git' }),
       ).toBeVisible()
@@ -130,9 +169,18 @@ for (const mode of ['manual', 'assistant'] as const) {
       expect(
         unchanged.waiting_reason.resolution_schema.git_changes.accepted,
       ).toBe(false)
+      if (mode === 'assistant-before-dispatch') {
+        expect(
+          unchanged.waiting_reason.resolution_schema.git_changes.attempt_id,
+        ).toBeNull()
+        expect(
+          unchanged.waiting_reason.resolution_schema.git_changes
+            .before_dispatch,
+        ).toBe(true)
+      }
     }
     await expect(form.getByText('Риск:', { exact: false })).toContainText(
-      'Средний',
+      'Не установлен',
     )
     await expect(
       form.getByText('Исходный текст не сохранён;', { exact: false }),
@@ -142,7 +190,7 @@ for (const mode of ['manual', 'assistant'] as const) {
     })
     const accept = form.getByRole('button', {
       name:
-        mode === 'assistant'
+        mode !== 'manual'
           ? 'Принять выбранные изменения и продолжить'
           : 'Принять выбранные изменения',
       exact: true,
@@ -156,7 +204,7 @@ for (const mode of ['manual', 'assistant'] as const) {
       .check()
     await expect(accept).toBeDisabled()
     await acknowledged.check()
-    if (mode === 'assistant') {
+    if (mode !== 'manual') {
       await expect(
         assistant.getByRole('button', { name: 'Свернуть помощника' }),
       ).toBeInViewport({ ratio: 1 })

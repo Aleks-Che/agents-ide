@@ -470,9 +470,9 @@ def _check_resume(session: Session, run: Run) -> None:
         elif code == "external_change_detected" and legacy_interrupted_agent:
             continue
         elif code == "external_change_detected":
-            from agents_ide.services.git_changes import check_head_resume
+            from agents_ide.services.git_changes import check_files_resume, check_head_resume
 
-            if not check_head_resume(session, run):
+            if not (check_head_resume(session, run) or check_files_resume(session, run)):
                 raise AppError(
                     "resolution_required", "Причина ожидания не устранена", 409, {"blocker": code}
                 )

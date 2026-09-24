@@ -53,7 +53,7 @@ class WritingAgent(AgentAdapter):
         return AgentResult(ExternalOutcome.SUCCEEDED, "done", {"output": "done"}, None)
 
 
-def binding_for(authenticated, workspace, *, commit=True, mode="worktree"):
+def binding_for(authenticated, workspace, *, commit=True, mode="worktree", allowlist=None):
     client, headers = authenticated
 
     def post(url, body):
@@ -121,7 +121,7 @@ def binding_for(authenticated, workspace, *, commit=True, mode="worktree"):
                 "id": "commit",
                 "type": "GitCommit",
                 "config": {
-                    "allowlist": ["src/**"],
+                    "allowlist": ["src/**"] if allowlist is None else allowlist,
                     "verification_node_id": "verify",
                 },
             }

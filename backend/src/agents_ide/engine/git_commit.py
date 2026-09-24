@@ -211,21 +211,8 @@ def file_manifest(workspace: Path) -> dict[str, dict[str, Any]]:
             .split("\0"),
         )
     )
-    # Protect individual ignored files, but do not traverse ignored trees such
-    # as node_modules, virtualenvs or local databases. They cannot enter staging.
-    ignored = set(
-        filter(
-            None,
-            run_git(
-                workspace,
-                ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
-            )
-            .decode()
-            .split("\0"),
-        )
-    )
-    ignored = {path for path in ignored if not path.endswith("/")}
-    paths.update(ignored)
+    # Match Git status: tracked paths stay visible, ignored untracked files do
+    # not participate in guards, freshness hashes, size limits or staging.
     if len(paths) > MAX_FILES:
         raise GitCommitError("git_manifest_limit", "Workspace manifest exceeds file limit")
     result: dict[str, dict[str, Any]] = {}
@@ -247,9 +234,36 @@ def file_manifest(workspace: Path) -> dict[str, dict[str, Any]]:
             "sha256": hashlib.sha256(data).hexdigest(),
             "size": len(data),
             "mode": mode,
-            "ignored": path in ignored,
+            "ignored": False,
         }
     return result
+
+
+def protected_states(
+    workspace: Path,
+    previous: dict[str, dict[str, Any]],
+    manifest: dict[str, dict[str, Any]],
+    allowed: Iterable[str],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Apply current Git ignore rules to old baselines as well as new snapshots."""
+    ignored: set[str] = set()
+    if previous:
+        # Git handles nested rules, negations and missing files; without
+        # --no-index it never excludes tracked files that match an ignore rule.
+        output = run_git(
+            workspace,
+            ["check-ignore", "-z", "--stdin"],
+            data=b"\0".join(path.encode("utf-8") for path in previous) + b"\0",
+            allowed_exit_codes=(0, 1),
+        )
+        ignored = set(filter(None, output.decode("utf-8", "strict").split("\0")))
+    expected = {path: value for path, value in previous.items() if path not in ignored}
+    current = {
+        path: value
+        for path, value in manifest.items()
+        if path in expected or not is_path_allowed(path, allowed)
+    }
+    return expected, current
 
 
 def manifest_hash(manifest: dict[str, dict[str, Any]]) -> str:
@@ -330,7 +344,7 @@ def capture_baseline(
         current_tree_sha(workspace),
         tuple(ls_tree(workspace)),
         status,
-        {p: v for p, v in manifest.items() if v.get("ignored") or not is_path_allowed(p, allowed)},
+        {p: v for p, v in manifest.items() if not is_path_allowed(p, allowed)},
         fingerprint,
         {"baseline": BASELINE_REF_TEMPLATE.format(run_id=run_id)},
         tuple(fingerprint["hooks"]),
@@ -380,17 +394,10 @@ def check_workspace(
         if item["code"] != "??" and item["code"][0] != ".":
             raise GitCommitError("git_index_dirty", "User staged changes after Start")
     manifest = file_manifest(workspace)
-    # Fresh worktrees acquire ignored setup/test files (.env, pytest caches).
-    # They cannot enter the index and were not user files present at Start.
-    # Still protect every pre-existing ignored file and every nonignored path
-    # outside the allowlist.
-    protected = {
-        p: v
-        for p, v in manifest.items()
-        if p in baseline.protected
-        or (not v.get("ignored") and not is_path_allowed(p, baseline.allowlist or allowlist))
-    }
-    if protected != baseline.protected:
+    expected, protected = protected_states(
+        workspace, baseline.protected, manifest, baseline.allowlist or allowlist
+    )
+    if protected != expected:
         raise GitCommitError("external_change_detected", "Files outside the allowlist changed")
     return manifest
 

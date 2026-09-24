@@ -91,6 +91,10 @@ export function GitChangesResolution({
   const incomplete =
     resumeAfterAcceptance && data?.kind === 'protected_files' && remaining > 0
   const disabled = busy || review.isFetching
+  const unchangedFiles =
+    data?.kind === 'protected_files' &&
+    !data.changes.length &&
+    !data.omitted_changes
   return (
     <form
       ref={form}
@@ -125,7 +129,7 @@ export function GitChangesResolution({
           ? 'Сравнение коммитов и принятие HEAD'
           : 'Сравнение защищённых файлов'}
       </h4>
-      {resumeAfterAcceptance && (
+      {resumeAfterAcceptance && !unchangedFiles && (
         <p role="status">
           Ожидается ваше подтверждение.{' '}
           {data?.kind === 'head'
@@ -159,7 +163,7 @@ export function GitChangesResolution({
           <p className="hint">
             Рабочая область: <code>{data.workspace_path}</code>
           </p>
-          <p>{data.effect}</p>
+          {!unchangedFiles && <p>{data.effect}</p>}
           {data.blockers.length > 0 && (
             <ul role="alert">
               {data.blockers.map((blocker) => (
@@ -170,8 +174,9 @@ export function GitChangesResolution({
           {data.head && <GitHeadComparison head={data.head} />}
           {!data.changes.length && data.kind !== 'head' && (
             <p>
-              Расхождений защищённых файлов нет. При продолжении сервер повторно
-              проверит условия Git-этапа.
+              Расхождений защищённых файлов нет. Принимать файлы не требуется.
+              Если других блокировок нет, закройте сравнение и нажмите
+              «Продолжить» в управлении запуском. Сервер повторит проверки.
             </p>
           )}
           {data.kind === 'head' ? (
@@ -191,7 +196,7 @@ export function GitChangesResolution({
               />
               Принять текущий HEAD как основу следующего этапа
             </label>
-          ) : (
+          ) : !unchangedFiles ? (
             <fieldset disabled={disabled || !data.can_accept}>
               <legend>Выберите изменения для принятия</legend>
               {data.changes.map((file) => (
@@ -247,7 +252,7 @@ export function GitChangesResolution({
                 </article>
               ))}
             </fieldset>
-          )}
+          ) : null}
           {data.omitted_changes > 0 && (
             <p>
               Ещё расхождений: {data.omitted_changes}. Они не будут приняты этой
@@ -261,23 +266,25 @@ export function GitChangesResolution({
               автоматически не принимаются.
             </p>
           )}
-          <label>
-            <input
-              type="checkbox"
-              disabled={disabled || !hasSelection}
-              checked={acknowledged}
-              onChange={(event) => {
-                setSelection({
-                  comparison: data.comparison_id,
-                  paths: selected,
-                  acceptHead,
-                  acknowledged: event.target.checked,
-                })
-              }}
-            />
-            Я изучил сравнение и принимаю риск выбранных изменений, включая
-            указанные ограничения данных.
-          </label>
+          {!unchangedFiles && (
+            <label>
+              <input
+                type="checkbox"
+                disabled={disabled || !hasSelection}
+                checked={acknowledged}
+                onChange={(event) => {
+                  setSelection({
+                    comparison: data.comparison_id,
+                    paths: selected,
+                    acceptHead,
+                    acknowledged: event.target.checked,
+                  })
+                }}
+              />
+              Я изучил сравнение и принимаю риск выбранных изменений, включая
+              указанные ограничения данных.
+            </label>
+          )}
         </>
       )}
       <footer>
@@ -289,33 +296,37 @@ export function GitChangesResolution({
         >
           Закрыть
         </button>
-        <button
-          type="submit"
-          disabled={
-            disabled ||
-            !data?.can_accept ||
-            !hasSelection ||
-            incomplete ||
-            !acknowledged ||
-            data.state_version !== run.state_version
-          }
-        >
-          {data?.kind === 'head'
-            ? resumeAfterAcceptance
-              ? 'Принять HEAD и продолжить'
-              : 'Принять HEAD'
-            : resumeAfterAcceptance
-              ? 'Принять выбранные изменения и продолжить'
-              : 'Принять выбранные изменения'}
-        </button>
+        {!unchangedFiles && (
+          <button
+            type="submit"
+            disabled={
+              disabled ||
+              !data?.can_accept ||
+              !hasSelection ||
+              incomplete ||
+              !acknowledged ||
+              data.state_version !== run.state_version
+            }
+          >
+            {data?.kind === 'head'
+              ? resumeAfterAcceptance
+                ? 'Принять HEAD и продолжить'
+                : 'Принять HEAD'
+              : resumeAfterAcceptance
+                ? 'Принять выбранные изменения и продолжить'
+                : 'Принять выбранные изменения'}
+          </button>
+        )}
       </footer>
-      <p className="hint">
-        {resumeAfterAcceptance
-          ? data?.kind === 'head'
-            ? 'После подтверждения помощник примет HEAD и сразу выполнит «Продолжить». Следующий этап агента сможет менять файлы. Если повторная проверка не пройдёт, оба действия будут отменены.'
-            : 'После подтверждения помощник обновит эталон выбранных файлов и выполнит «Продолжить». Содержимое файлов не меняется, игнорируемые файлы в коммит не добавляются. Если повторная проверка не пройдёт, оба действия будут отменены.'
-          : 'После принятия нажмите «Продолжить». Оставшиеся расхождения могут снова остановить этап.'}
-      </p>
+      {!unchangedFiles && (
+        <p className="hint">
+          {resumeAfterAcceptance
+            ? data?.kind === 'head'
+              ? 'После подтверждения помощник примет HEAD и сразу выполнит «Продолжить». Следующий этап агента сможет менять файлы. Если повторная проверка не пройдёт, оба действия будут отменены.'
+              : 'После подтверждения помощник обновит эталон выбранных файлов и выполнит «Продолжить». Содержимое файлов не меняется, игнорируемые файлы в коммит не добавляются. Если повторная проверка не пройдёт, оба действия будут отменены.'
+            : 'После принятия нажмите «Продолжить». Оставшиеся расхождения могут снова остановить этап.'}
+        </p>
+      )}
     </form>
   )
 }
