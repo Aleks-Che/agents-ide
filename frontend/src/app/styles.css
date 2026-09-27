@@ -723,6 +723,11 @@ footer span {
   margin: 0;
   min-width: 0;
 }
+.general-settings-fields > label:not(.checkbox-row) {
+  display: grid;
+  gap: 6px;
+  max-width: 260px;
+}
 .commit-message-fields {
   display: flex;
   flex-direction: column;

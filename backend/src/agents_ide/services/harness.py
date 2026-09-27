@@ -111,6 +111,7 @@ def refresh_model_catalog(
     model = get_or_404(session, HarnessProfileModel, harness_id)
     with _catalog_locks[model.harness_kind]:
         session.refresh(model)
+        _recover_missing_executable(session, model)
         catalog = model_catalog(session, harness_id)
         session.commit()  # Publish invalidation before probe releases its read snapshot.
         if force or catalog.status != "fresh":
@@ -123,6 +124,28 @@ def refresh_model_catalog(
                     422,
                 )
         return model_catalog(session, harness_id)
+
+
+def _recover_missing_executable(session: Session, model: HarnessProfileModel) -> None:
+    """Follow installation upgrades without replacing an existing custom binary."""
+    if model.archived_at is not None or (
+        model.executable_path and Path(model.executable_path).is_file()
+    ):
+        return
+    from agents_ide.services.harness_discovery import discover_executables
+
+    expected_version = model.version
+    executable = discover_executables().get(model.harness_kind)
+    if not executable or executable == model.executable_path:
+        return
+    begin_write(session)
+    session.refresh(model)
+    if model.version != expected_version or model.archived_at is not None:
+        raise AppError("version_conflict", "Profile changed during discovery", 409)
+    # Bundled Codex upgrades move the binary to a new versioned directory.
+    # Keep the same profile so every group and template retains its settings.
+    model.executable_path = executable
+    invalidate_native_catalog(session, model)
 
 
 def create_harness(session: Session, payload: HarnessProfileCreate) -> HarnessProfile:

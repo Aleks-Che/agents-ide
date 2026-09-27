@@ -27,6 +27,13 @@ export function stageOutput(all: EventEnvelope[]): StageOutputEntry[] {
           text,
           role: `assistant:${event.step_attempt_id}`,
         })
+    } else if (event.type === 'agent.watchdog') {
+      output.push({
+        key: event.sequence,
+        occurredAt: event.occurred_at,
+        text: String(event.payload.message ?? 'Автовосстановление агента'),
+        role: 'system',
+      })
     } else if (event.type === 'agent.tool_call') {
       const tool = toolProgress(event)
       const previous = tools.get(tool.id)

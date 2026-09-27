@@ -269,7 +269,7 @@ def test_git_inspection_identifies_protected_changes_and_preserves_index(
                 },
             }
         )
-        evidence = assistance.inspect_git(row)
+        evidence = assistance.inspect_git(session, row)
     assert evidence["status"] == "checked"
     assert evidence["workspace_source"] == (
         "run_workspace" if separate_workspace else "project_workspace"

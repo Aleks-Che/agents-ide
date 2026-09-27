@@ -200,6 +200,99 @@ def test_refresh_reloads_after_native_auth_changes(
     assert "synthetic" not in result.text
 
 
+@pytest.mark.parametrize("force", [False, True])
+def test_restart_recovers_catalog_after_installed_binary_moves(
+    authenticated, installations, monkeypatch, tmp_path, force
+):
+    from pathlib import Path
+
+    from test_stage6b_review import seed
+
+    client, headers = authenticated
+    calls = []
+
+    def probe(executable, *_):
+        calls.append(executable)
+        if not Path(executable).is_file():
+            raise FileNotFoundError(executable)
+        return "codex-test", CatalogModels(
+            {"gpt-5.6-sol": {"source": "native_catalog", "reasoning_efforts": ["high"]}}
+        )
+
+    monkeypatch.setattr(codex_runtime, "probe_executable", probe)
+    payload = seed(authenticated, tmp_path, params={"reasoning_effort": "high"})
+    profile = client.get("/api/harness_profiles").json()[0]
+    base = f"/api/harness_profiles/{profile['id']}"
+    old_binary = tmp_path / "old-codex.exe"
+    old_binary.touch()
+    assert (
+        client.patch(
+            base,
+            headers=headers,
+            json={"expected_version": profile["version"], "executable_path": str(old_binary)},
+        ).status_code
+        == 200
+    )
+    assert client.post(base + "/models/refresh", headers=headers).status_code == 200
+    response = client.post("/api/runs", headers=headers, json=payload)
+    assert response.status_code == 201, response.text
+    run = response.json()
+    profile = client.get(base).json()
+
+    old_binary.unlink()
+    new_binary = Path(installations["codex"])
+    new_binary.touch()
+    restart_url = f"/api/runs/{run['id']}/restart"
+    body = {"command_id": "restart-after-upgrade", "expected_state_version": run["state_version"]}
+    rejected = client.post(restart_url, headers=headers, json=body)
+    assert rejected.status_code == 422
+    assert "harness_catalog_unverified" in rejected.text
+    assert len(client.get("/api/runs").json()) == 1
+
+    refreshed = client.post(base + f"/models/refresh?force={str(force).lower()}", headers=headers)
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["status"] == "fresh"
+    current = client.get(base).json()
+    assert current["executable_path"] == str(new_binary)
+    assert current["settings"] == profile["settings"]
+    assert current["id"] == profile["id"]
+    assert calls == [str(old_binary), str(new_binary)]
+
+    restarted = client.post(restart_url, headers=headers, json=body)
+    assert restarted.status_code == 201, restarted.text
+    assert restarted.json()["id"] != run["id"]
+    assert (
+        client.post(restart_url, headers=headers, json=body).json()["id"] == restarted.json()["id"]
+    )
+    assert len(client.get("/api/runs").json()) == 2
+    assert client.get(f"/api/runs/{run['id']}").json()["snapshot_hash"] == run["snapshot_hash"]
+
+
+def test_refresh_keeps_existing_custom_executable(
+    authenticated, installations, monkeypatch, tmp_path
+):
+    client, headers = authenticated
+    custom_binary = tmp_path / "custom-codex.exe"
+    custom_binary.touch()
+    profile = client.post(
+        "/api/harness_profiles",
+        headers=headers,
+        json={"name": "Custom", "harness_kind": "codex", "executable_path": str(custom_binary)},
+    ).json()
+    calls = []
+
+    def probe(executable, *_):
+        calls.append(executable)
+        return "codex-test", CatalogModels({})
+
+    monkeypatch.setattr(codex_runtime, "probe_executable", probe)
+    response = client.post(
+        f"/api/harness_profiles/{profile['id']}/models/refresh?force=true", headers=headers
+    )
+    assert response.status_code == 200, response.text
+    assert calls == [str(custom_binary)]
+
+
 def test_npm_wrapper_resolves_native_binary_without_running_it(tmp_path, monkeypatch):
     wrapper = tmp_path / "opencode.cmd"
     wrapper.write_text("must never execute")

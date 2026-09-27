@@ -267,6 +267,7 @@ def preflight(
                 )
             else:
                 from agents_ide.engine.git_commit import capture_baseline, normalize_allowlist
+                from agents_ide.services.general_settings import workspace_fingerprint_limit_bytes
 
                 allowed: set[str] = set()
                 for node in graph["nodes"]:
@@ -284,6 +285,7 @@ def preflight(
                     "preflight",
                     tuple(allowed),
                     dirty_policy=configuration["dirty_policy"],
+                    max_bytes=workspace_fingerprint_limit_bytes(session),
                 )
                 if configuration["branch_policy"] == "current" and baseline.branch is None:
                     report.add_error(

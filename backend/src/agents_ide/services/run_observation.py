@@ -27,7 +27,7 @@ CATEGORIES = {
     "messages": ("agent.message_delta", "attempt.text_delta", "agent.user_message", "agent.input_"),
     "tools": ("agent.tool_call", "agent.permission_"),
     "models": ("model_group.", "attempt.started", "attempt.finished", "attempt.retry_"),
-    "commands": ("control.", "command.", "git."),
+    "commands": ("control.", "command.", "git.", "agent.watchdog"),
     "checks": ("condition.", "evidence.", "plan.", "artifact."),
 }
 

@@ -390,6 +390,9 @@ class CodexAdapter(AgentAdapter):
             return self._run(request)
 
     def _run(self, request: AgentAdapterRequest) -> AgentResult:
+        from agents_ide.adapters.activity import ActivityPulse
+
+        activity = ActivityPulse(request.emit_event)
         record_tool_history = getattr(request, "record_tool_history", False)
         started = time.monotonic()
         deadline = request.deadline_at or (
@@ -424,6 +427,8 @@ class CodexAdapter(AgentAdapter):
                 raise InterruptedError
 
         def emit(event_type: str, **payload: Any) -> None:
+            if event_type in OMITTED_HISTORY_EVENTS and event_type != "agent.native_event":
+                activity()
             if not record_tool_history and event_type in OMITTED_HISTORY_EVENTS:
                 return
             if request.emit_event:

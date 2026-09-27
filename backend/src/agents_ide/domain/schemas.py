@@ -241,8 +241,15 @@ class CommitMessageSettings(ApiModel):
         return value
 
 
+class HarnessWatchdogSettings(ApiModel):
+    enabled: bool = True
+    idle_minutes: int = Field(default=30, ge=1, le=1440, strict=True)
+
+
 class GeneralSettings(ApiModel):
     commit_message: CommitMessageSettings = Field(default_factory=CommitMessageSettings)
+    harness_watchdog: HarnessWatchdogSettings = Field(default_factory=HarnessWatchdogSettings)
+    workspace_fingerprint_limit_mib: int | None = Field(default=64, ge=1, strict=True)
     revision: int = Field(default=0, ge=0)
 
 

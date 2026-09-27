@@ -96,6 +96,7 @@ def run_worker(settings: Settings) -> None:
         try:
             last_heartbeat = 0.0
             last_gc = time.monotonic()
+            last_watchdog = 0.0
             db_failures = 0
             while not stopping.is_set():
                 from agents_ide.launcher import stop_requested
@@ -132,6 +133,25 @@ def run_worker(settings: Settings) -> None:
                         stopping.set()
                         break
                 tasks.reap()
+                if (
+                    not db_failures
+                    and not requested(settings)
+                    and time.monotonic() - last_watchdog >= 5
+                ):
+                    from agents_ide.worker.harness_watchdog import check_harnesses
+
+                    try:
+                        check_harnesses(
+                            factory,
+                            active_runs={
+                                thread.name.removeprefix("run-")
+                                for thread in tasks.threads
+                                if thread.name.startswith("run-")
+                            },
+                        )
+                    except Exception:
+                        logger.exception("worker.harness_watchdog_failed")
+                    last_watchdog = time.monotonic()
                 if (
                     not tasks.threads
                     and not requested(settings)

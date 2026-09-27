@@ -38,6 +38,7 @@ from agents_ide.services.assistance_evidence import run_evidence
 from agents_ide.services.assistance_recovery import recovery_context
 from agents_ide.services.assistance_tools import AssistanceTool, git_acceptance_tool
 from agents_ide.services.connections import combined_catalog
+from agents_ide.services.general_settings import workspace_fingerprint_limit_bytes
 from agents_ide.services.git_changes import resolution_status, review_changes
 from agents_ide.services.mapping import get_or_404
 from agents_ide.services.sidebar_activity import ActivitySource, activity_sources
@@ -178,7 +179,7 @@ def _reason(code: str | None, message: str | None, state: str) -> tuple[str, str
     )
 
 
-def inspect_git(run: Run) -> dict[str, Any]:
+def inspect_git(session: Session, run: Run) -> dict[str, Any]:
     """Compare guard baseline without staging, writing, or exposing file contents."""
     runtime = json.loads(run.runtime_json or "{}")
     state = runtime.get("git") or {}
@@ -194,7 +195,9 @@ def inspect_git(run: Run) -> dict[str, Any]:
     workspace = Path(workspace_path)
     try:
         with using_transport(GitTransport(deadline=time.monotonic() + 10)):
-            manifest = git.file_manifest(workspace)
+            manifest = git.file_manifest(
+                workspace, max_bytes=workspace_fingerprint_limit_bytes(session)
+            )
             allowed = baseline.get("allowlist") or state.get("allowlist", [])
             previous, current = git.protected_states(
                 workspace, baseline.get("protected", {}), manifest, allowed
@@ -385,7 +388,7 @@ def _finding(
                 "recovery_rules": _git_recovery_rules(evidence["git_acceptance"].get("kind")),
             }
             if inspect_workspace:
-                evidence["git_check"] = inspect_git(run)
+                evidence["git_check"] = inspect_git(session, run)
                 if evidence["git_acceptance"].get("can_review"):
                     try:
                         review = review_changes(session, run.id, include_diff=False)

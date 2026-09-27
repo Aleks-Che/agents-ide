@@ -236,7 +236,13 @@ def _git_check_retry(
     session: Session, run: Run, snapshot: dict[str, Any], waiting: dict[str, Any]
 ) -> str | None:
     """A failed Git guard can be checked again before any durable commit intent."""
-    if waiting.get("code") != "external_change_detected" or not run.current_attempt_id:
+    size_limit = (
+        waiting.get("code") == "configuration_invalid"
+        and waiting.get("details", {}).get("reason") == "git_manifest_size_limit"
+    )
+    if (
+        waiting.get("code") != "external_change_detected" and not size_limit
+    ) or not run.current_attempt_id:
         return None
     attempt = session.get(StepAttempt, run.current_attempt_id)
     execution = session.get(StepExecution, attempt.execution_id) if attempt else None
@@ -244,7 +250,12 @@ def _git_check_retry(
         not attempt
         or attempt.status != "unknown"
         or attempt.error_code
-        not in {"external_change_detected", "git_index_dirty", "path_violation"}
+        not in {
+            "external_change_detected",
+            "git_index_dirty",
+            "path_violation",
+            "git_manifest_size_limit",
+        }
         or not execution
         or execution.run_id != run.id
         or execution.id != run.current_execution_id
@@ -461,6 +472,15 @@ def _check_resume(session: Session, run: Run) -> None:
                     "Сначала проверьте и подтвердите обновление подключения.",
                     409,
                 )
+        elif (
+            code == "configuration_invalid"
+            and waiting.get("details", {}).get("reason")
+            in {"git_manifest_size_limit", "path_violation"}
+            and (not run.current_attempt_id or git_retry)
+        ):
+            # Includes old pre-dispatch size errors reported as path_violation.
+            # The worker repeats the full check with the current general settings.
+            continue
         elif code == "session_resume_unavailable":
             # Retry only the saved session; STOP explicitly starts this stage afresh.
             continue

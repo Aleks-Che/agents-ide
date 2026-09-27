@@ -59,6 +59,12 @@ def test_resume_rechecks_git_guards_before_intent_only(
 
     def legacy_check(workspace, baseline, allowlist, **kwargs):
         manifest = current_check(workspace, baseline, allowlist, **kwargs)
+        if cause == "new_ignored" and (workspace / ".env").exists():
+            # The old scanner included ignored files. Current manifests exclude
+            # them, so simulate the old guard failure explicitly.
+            raise git.GitCommitError(
+                "external_change_detected", "Files outside the allowlist changed"
+            )
         if cause == "config_changed":
             if git.git_fingerprint(workspace) != baseline.fingerprint:
                 raise git.GitCommitError(

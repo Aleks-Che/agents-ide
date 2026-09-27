@@ -19,7 +19,11 @@ from typing import Any
 from agents_ide.domain.common import content_hash
 from agents_ide.engine.git_process import GitError as GitCommitError
 from agents_ide.engine.git_process import optional_git, run_git
-from agents_ide.security.workspace_read import read_workspace_file
+from agents_ide.security.workspace_read import (
+    WorkspaceFileTooLarge,
+    hash_workspace_file,
+    read_workspace_file,
+)
 
 INTENT_TRAILER = "Agents-Ide-Intent"
 BASELINE_REF_TEMPLATE = "refs/agents-ide/run/{run_id}/baseline"
@@ -202,7 +206,9 @@ def ls_tree(workspace: Path, ref: str = "HEAD") -> list[FileEntry]:
     return entries
 
 
-def file_manifest(workspace: Path) -> dict[str, dict[str, Any]]:
+def file_manifest(
+    workspace: Path, *, max_bytes: int | None = MAX_BYTES
+) -> dict[str, dict[str, Any]]:
     paths = set(
         filter(
             None,
@@ -223,16 +229,47 @@ def file_manifest(workspace: Path) -> dict[str, dict[str, Any]]:
             result[path] = {"missing": True}
             continue
         try:
-            data = read_workspace_file(workspace, path, MAX_BYTES - total)
-            total += len(data)
-        except (ValueError, OSError) as exc:
+            sha256, size = hash_workspace_file(
+                workspace, path, None if max_bytes is None else max_bytes - total
+            )
+            total += size
+        except WorkspaceFileTooLarge as exc:
+            assert max_bytes is not None
+            minimum = total + exc.size
             raise GitCommitError(
-                "path_violation", "Cannot safely fingerprint workspace", details={"path": path}
+                "git_manifest_size_limit",
+                "Превышен лимит объёма файлов для проверки рабочей копии: "
+                f"не менее {minimum / 1024**2:.2f} МиБ ({minimum} байт) "
+                f"при лимите {max_bytes / 1024**2:g} МиБ ({max_bytes} байт). "
+                f"Файл: {path}. Увеличьте лимит или выберите «Без лимита» "
+                "в Настройки → Общие → Проверка рабочей копии, затем продолжите запуск.",
+                details={
+                    "path": path,
+                    "limit_bytes": max_bytes,
+                    "minimum_bytes": minimum,
+                    "bytes_read": total,
+                    "file_bytes": exc.size,
+                },
+            ) from exc
+        except (ValueError, OSError) as exc:
+            reason = {
+                "linked_path": "путь содержит символическую ссылку или junction",
+                "linked_file": "файл имеет несколько жёстких ссылок",
+                "outside_workspace": "путь выходит за пределы рабочей копии",
+                "unstable_file": "файл изменился во время чтения; повторите проверку",
+            }.get(str(exc), "файл недоступен для безопасного чтения")
+            raise GitCommitError(
+                "path_violation",
+                f"Не удалось проверить файл рабочей копии «{path}»: {reason}.",
+                details={
+                    "path": path,
+                    "reason": str(exc) if isinstance(exc, ValueError) else "read_error",
+                },
             ) from exc
         mode = "100755" if os.name != "nt" and target.stat().st_mode & 0o111 else "100644"
         result[path] = {
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "size": len(data),
+            "sha256": sha256,
+            "size": size,
             "mode": mode,
             "ignored": False,
         }
@@ -320,6 +357,7 @@ def capture_baseline(
     *,
     dirty_policy: str = "strict",
     allow_existing_changes: bool = False,
+    max_bytes: int | None = MAX_BYTES,
 ) -> Baseline:
     root = run_git(workspace, ["rev-parse", "--show-toplevel"]).decode().strip()
     if Path(root).resolve() != workspace.resolve():
@@ -336,7 +374,7 @@ def capture_baseline(
             raise GitCommitError(
                 "git_dirty", "Existing changes overlap the run", details={"path": path}
             )
-    manifest = file_manifest(workspace)
+    manifest = file_manifest(workspace, max_bytes=max_bytes)
     fingerprint = git_fingerprint(workspace)
     return Baseline(
         read_head_sha(workspace),
@@ -385,6 +423,7 @@ def check_workspace(
     *,
     expected_head: str,
     branch: str,
+    max_bytes: int | None = MAX_BYTES,
 ) -> dict[str, dict[str, Any]]:
     if read_head_sha(workspace) != expected_head or read_branch(workspace) != branch:
         raise GitCommitError("external_change_detected", "Branch or HEAD changed externally")
@@ -393,7 +432,7 @@ def check_workspace(
     for item in list_status(workspace):
         if item["code"] != "??" and item["code"][0] != ".":
             raise GitCommitError("git_index_dirty", "User staged changes after Start")
-    manifest = file_manifest(workspace)
+    manifest = file_manifest(workspace, max_bytes=max_bytes)
     expected, protected = protected_states(
         workspace, baseline.protected, manifest, baseline.allowlist or allowlist
     )
@@ -449,7 +488,14 @@ def _build_temp_index(
             raise GitCommitError("path_violation", "Symlinks/submodules cannot enter a commit")
         if path in tracked and path not in changed_tracked and mode == tracked[path].mode:
             continue
-        data = read_workspace_file(workspace, path, MAX_BYTES)
+        try:
+            data = read_workspace_file(workspace, path, item["size"])
+        except (ValueError, OSError) as exc:
+            raise GitCommitError(
+                "external_change_detected",
+                "File changed or became unreadable while building tree",
+                details={"path": path},
+            ) from exc
         if hashlib.sha256(data).hexdigest() != item["sha256"]:
             raise GitCommitError("external_change_detected", "File changed while building tree")
         # Apply Git's declared clean/EOL rules. Filters are supervised and checked afterwards.
@@ -519,6 +565,7 @@ def execute(
     recover_only: bool = False,
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
     generate_message: Callable[[dict[str, Any]], str] | None = None,
+    max_bytes: int | None = MAX_BYTES,
 ) -> CommitResult:
     if recover_only:
         if (
@@ -531,6 +578,7 @@ def execute(
                 intent.allowlist,
                 expected_head=intent.parent_sha,
                 branch=intent.branch,
+                max_bytes=max_bytes,
             )
             if manifest_hash(manifest) != intent.manifest_hash:
                 raise GitCommitError("external_change_detected", "Files changed after no_changes")
@@ -547,13 +595,18 @@ def execute(
             _sync_clean_index(workspace, intent, existing)
         elif any(e["code"] != "??" and e["code"][0] != "." for e in list_status(workspace)):
             raise GitCommitError("external_change_detected", "Index changed during recovery")
-        if manifest_hash(file_manifest(workspace)) != intent.manifest_hash:
+        if manifest_hash(file_manifest(workspace, max_bytes=max_bytes)) != intent.manifest_hash:
             raise GitCommitError("external_change_detected", "Working files changed after commit")
         if not git_policy_matches(git_fingerprint(workspace), baseline.fingerprint):
             raise GitCommitError("external_change_detected", "Git policy changed during recovery")
         return CommitResult(intent, existing, intent.expected_tree, False, recovered=True)
     manifest = check_workspace(
-        workspace, baseline, intent.allowlist, expected_head=intent.parent_sha, branch=intent.branch
+        workspace,
+        baseline,
+        intent.allowlist,
+        expected_head=intent.parent_sha,
+        branch=intent.branch,
+        max_bytes=max_bytes,
     )
     initial_index = index_hash(workspace)
     with tempfile.TemporaryDirectory(prefix="agents-ide-commit-") as tmp:
@@ -565,7 +618,7 @@ def execute(
             Path(tmp),
             intent.allow_untracked,
         )
-        if manifest_hash(file_manifest(workspace)) != manifest_hash(manifest):
+        if manifest_hash(file_manifest(workspace, max_bytes=max_bytes)) != manifest_hash(manifest):
             raise GitCommitError("external_change_detected", "Files changed during Git filtering")
         intent.expected_tree = tree
         intent.manifest_hash = manifest_hash(manifest)
@@ -575,7 +628,7 @@ def execute(
             intent.message = safe_generated_message(
                 generate_message(staged_message_diff(workspace, index, intent.parent_sha))
             )
-            if manifest_hash(file_manifest(workspace)) != intent.manifest_hash:
+            if manifest_hash(file_manifest(workspace, max_bytes=max_bytes)) != intent.manifest_hash:
                 raise GitCommitError(
                     "external_change_detected", "Files changed during message generation"
                 )
@@ -600,6 +653,7 @@ def execute(
             intent.allowlist,
             expected_head=intent.parent_sha,
             branch=intent.branch,
+            max_bytes=max_bytes,
         )
         if index_hash(workspace) != initial_index:
             raise GitCommitError("external_change_detected", "Index changed before Git commit")
@@ -632,7 +686,10 @@ def execute(
                     "verified": valid,
                 },
             )
-        if not valid or manifest_hash(file_manifest(workspace)) != intent.manifest_hash:
+        if (
+            not valid
+            or manifest_hash(file_manifest(workspace, max_bytes=max_bytes)) != intent.manifest_hash
+        ):
             raise GitCommitError(
                 "external_change_detected",
                 "Hook changed the committed tree or working files",

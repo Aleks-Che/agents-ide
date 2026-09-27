@@ -21,6 +21,11 @@ def get_settings(session: Session) -> GeneralSettings:
     )
 
 
+def workspace_fingerprint_limit_bytes(session: Session) -> int | None:
+    limit = get_settings(session).workspace_fingerprint_limit_mib
+    return None if limit is None else limit * 1024 * 1024
+
+
 def save_settings(session: Session, payload: GeneralSettings) -> GeneralSettings:
     begin_write(session)
     row = session.get(SettingsRow, 1)

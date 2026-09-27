@@ -31,7 +31,7 @@ const prefixes: Record<HistoryCategory, string[]> = {
     'attempt.finished',
     'attempt.retry_',
   ],
-  commands: ['control.', 'command.', 'git.'],
+  commands: ['control.', 'command.', 'git.', 'agent.watchdog'],
   checks: ['condition.', 'evidence.', 'plan.', 'artifact.'],
 }
 

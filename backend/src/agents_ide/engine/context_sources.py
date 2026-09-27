@@ -132,11 +132,11 @@ def _read_file(
     }, None
 
 
-def workspace_hash(workspace: Path) -> str | None:
+def workspace_hash(workspace: Path, *, max_bytes: int | None = 64 * 1024 * 1024) -> str | None:
     """Conservative freshness proof; a bounded/unreadable tree has no proof."""
     import os
 
-    from agents_ide.security.workspace_read import read_workspace_file
+    from agents_ide.security.workspace_read import hash_workspace_file
 
     digest = hashlib.sha256()
     count = total = 0
@@ -157,11 +157,13 @@ def workspace_hash(workspace: Path) -> str | None:
                     continue
                 if not (workspace / relative).exists() and not (workspace / relative).is_symlink():
                     continue
-                raw = read_workspace_file(workspace, relative, 64 * 1024 * 1024 - total)
-                total += len(raw)
+                sha256, size = hash_workspace_file(
+                    workspace, relative, None if max_bytes is None else max_bytes - total
+                )
+                total += size
                 digest.update(relative.encode())
                 digest.update(b"\0")
-                digest.update(hashlib.sha256(raw).digest())
+                digest.update(bytes.fromhex(sha256))
             return digest.hexdigest()
         for directory, dirs, names in os.walk(workspace, followlinks=False):
             dirs[:] = sorted(
@@ -173,13 +175,15 @@ def workspace_hash(workspace: Path) -> str | None:
                 if not _safe_relative(relative):
                     continue
                 count += 1
-                if count > 10000 or total > 64 * 1024 * 1024:
+                if count > 10000 or (max_bytes is not None and total > max_bytes):
                     return None
-                raw = read_workspace_file(workspace, relative, 64 * 1024 * 1024 - total)
-                total += len(raw)
+                sha256, size = hash_workspace_file(
+                    workspace, relative, None if max_bytes is None else max_bytes - total
+                )
+                total += size
                 digest.update(relative.encode())
                 digest.update(b"\0")
-                digest.update(hashlib.sha256(raw).digest())
+                digest.update(bytes.fromhex(sha256))
         return digest.hexdigest()
     except (OSError, ValueError):
         return None
@@ -227,6 +231,9 @@ def collect_context(
 ) -> ContextCollection:
     from agents_ide.engine.artifacts import encode, sanitize
     from agents_ide.persistence.models import StepExecution
+    from agents_ide.services.general_settings import workspace_fingerprint_limit_bytes
+
+    fingerprint_limit = workspace_fingerprint_limit_bytes(session)
 
     max_files = min(int(config.get("max_files", DEFAULT_MAX_FILES)), DEFAULT_MAX_FILES)
     max_file = min(
@@ -250,7 +257,7 @@ def collect_context(
 
     tracked_raw = git(["ls-files", "-z"])
     tracked = set(tracked_raw.split("\0")) if tracked_raw is not None else None
-    before_hash = workspace_hash(workspace)
+    before_hash = workspace_hash(workspace, max_bytes=fingerprint_limit)
     head = git(["rev-parse", "--verify", "HEAD"], 1024)
     package: dict[str, Any] = {
         "kind": CONTEXT_SCHEMA,
@@ -463,7 +470,7 @@ def collect_context(
                 )
         else:
             omit(_omission("source", "unsupported_kind"))
-    if workspace_hash(workspace) != before_hash or before_hash is None:
+    if workspace_hash(workspace, max_bytes=fingerprint_limit) != before_hash or before_hash is None:
         package["workspace_hash"] = None
         omit(_omission("workspace", "unstable_or_unverified"))
     package["omission_count"] = omission_count

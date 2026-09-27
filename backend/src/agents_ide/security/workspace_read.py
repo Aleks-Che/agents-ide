@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from collections.abc import Iterator
@@ -54,7 +55,28 @@ def hold_command_directory(root: Path, cwd: Path) -> Iterator[None]:
             handle.Close()
 
 
-def read_workspace_file(root: Path, relative: str, cap: int) -> bytes:
+class WorkspaceFileTooLarge(ValueError):
+    def __init__(self, size: int, cap: int):
+        super().__init__("too_large")
+        self.size = size
+        self.cap = cap
+
+
+def read_workspace_file(root: Path, relative: str, cap: int | None) -> bytes:
+    return b"".join(_workspace_file_chunks(root, relative, cap))
+
+
+def hash_workspace_file(root: Path, relative: str, cap: int | None) -> tuple[str, int]:
+    """Fingerprint large files without retaining their contents in memory."""
+    digest = hashlib.sha256()
+    size = 0
+    for chunk in _workspace_file_chunks(root, relative, cap):
+        digest.update(chunk)
+        size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def _workspace_file_chunks(root: Path, relative: str, cap: int | None) -> Iterator[bytes]:
     root = root.resolve(strict=True)
     target = root / relative
     if not target.is_relative_to(root):
@@ -84,17 +106,23 @@ def read_workspace_file(root: Path, relative: str, cap: int) -> bytes:
             final = Path(f"/proc/self/fd/{stream.fileno()}").resolve(strict=True)
         if final != target or not final.is_relative_to(root):
             raise ValueError("outside_workspace")
-        if before.st_size > cap:
-            raise ValueError("too_large")
-        # BufferedReader reserves the requested size even for tiny files. The
-        # manifest cap can be 64 MiB per read; size the allocation to this file
-        # and retain one extra byte so growth during the read is detectable.
-        raw = stream.read(before.st_size + 1)
+        if cap is not None and before.st_size > cap:
+            raise WorkspaceFileTooLarge(before.st_size, cap)
+        # Bound memory even with no volume limit. Read at most the initial size
+        # plus one byte, so growth is detected and an active writer cannot keep
+        # an unlimited read going indefinitely.
+        size = 0
+        while size <= before.st_size:
+            chunk = stream.read(min(1024 * 1024, before.st_size + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk)
+            if cap is not None and size > cap:
+                raise WorkspaceFileTooLarge(size, cap)
+            yield chunk
         after = os.fstat(stream.fileno())
-        if len(raw) > cap:
-            raise ValueError("too_large")
         if (
-            len(raw) != before.st_size
+            size != before.st_size
             or (before.st_ino, before.st_size, before.st_mtime_ns, before.st_nlink)
             != (
                 after.st_ino,
@@ -105,4 +133,3 @@ def read_workspace_file(root: Path, relative: str, cap: int) -> bytes:
             or target.stat().st_ino != before.st_ino
         ):
             raise ValueError("unstable_file")
-        return raw

@@ -181,6 +181,14 @@ class Runner:
                 raise AppError("queue_job_lost", "Worker запретил фиксацию результата", 409)
             session.commit()
 
+    @property
+    def workspace_fingerprint_limit_bytes(self) -> int | None:
+        from agents_ide.services.general_settings import workspace_fingerprint_limit_bytes
+
+        # Read current settings so an existing waiting run can resume after a limit change.
+        with self.session_factory() as session:
+            return workspace_fingerprint_limit_bytes(session)
+
     def _event(
         self,
         session: Session,
@@ -656,7 +664,10 @@ class Runner:
                 from agents_ide.engine.context_sources import workspace_hash
 
                 if (
-                    workspace_hash(Path(self.snapshot["workspace"]["workspace_path"]))
+                    workspace_hash(
+                        Path(self.snapshot["workspace"]["workspace_path"]),
+                        max_bytes=self.workspace_fingerprint_limit_bytes,
+                    )
                     != paused_hash
                 ):
                     return self._waiting(
@@ -1229,7 +1240,10 @@ class Runner:
         if self.runtime.get("git") and not self.simulated:
             from agents_ide.engine.context_sources import workspace_hash
 
-            checkpoint_hash = workspace_hash(Path(self.snapshot["workspace"]["workspace_path"]))
+            checkpoint_hash = workspace_hash(
+                Path(self.snapshot["workspace"]["workspace_path"]),
+                max_bytes=self.workspace_fingerprint_limit_bytes,
+            )
             if checkpoint_hash is None:
                 raise AppError("missing_data", "Workspace checkpoint unavailable", 409)
             self.runtime["git_paused_workspace_hash"] = checkpoint_hash
@@ -1265,7 +1279,8 @@ class Runner:
         if not needed:
             return None
         checkpoint_hash = context_sources.workspace_hash(
-            Path(self.snapshot["workspace"]["workspace_path"])
+            Path(self.snapshot["workspace"]["workspace_path"]),
+            max_bytes=self.workspace_fingerprint_limit_bytes,
         )
         if checkpoint_hash is None:
             raise AppError("missing_data", "Workspace checkpoint unavailable", 409)
@@ -1773,7 +1788,13 @@ class Runner:
 
         cap = 1024 * 1024
         workspace = Path(self.snapshot["workspace"]["workspace_path"])
-        current_hash = context_sources.workspace_hash(workspace) if not self.simulated else None
+        current_hash = (
+            context_sources.workspace_hash(
+                workspace, max_bytes=self.workspace_fingerprint_limit_bytes
+            )
+            if not self.simulated
+            else None
+        )
         evidence: dict[str, Any] = {
             "context": None,
             "command_reports": [],
@@ -1930,9 +1951,17 @@ class Runner:
                 code = result.error.code
                 if code == "limit_exceeded":
                     return self._waiting("limit_exceeded", {"limit": "max_calls"}, visit)
+                if code == "git_manifest_size_limit":
+                    return self._waiting(
+                        "configuration_invalid",
+                        {"reason": code, "message": result.error.message, **result.error.details},
+                        visit,
+                    )
                 if code in {"external_change_detected", "git_index_dirty", "path_violation"}:
                     return self._waiting(
-                        "external_change_detected", {"reason": code, **result.error.details}, visit
+                        "external_change_detected",
+                        {"reason": code, "message": result.error.message, **result.error.details},
+                        visit,
                     )
                 if self.runtime.get("git", {}).get("baseline", {}).get(
                     "signing_required"
@@ -2110,7 +2139,9 @@ class Runner:
                 on_start=lambda spec: self._command_started(visit, spec),
             )
             body = json.loads(result.raw_text or "{}")
-            body["workspace_hash"] = context_sources.workspace_hash(workspace)
+            body["workspace_hash"] = context_sources.workspace_hash(
+                workspace, max_bytes=self.workspace_fingerprint_limit_bytes
+            )
             object.__setattr__(result, "raw_text", artifacts.encode(body))
             return result
 
@@ -2152,7 +2183,9 @@ class Runner:
         self, visit: visits.VisitState, report: command_engine.CommandReport
     ) -> None:
         workspace = Path(self.snapshot["workspace"]["workspace_path"])
-        proof = context_sources.workspace_hash(workspace)
+        proof = context_sources.workspace_hash(
+            workspace, max_bytes=self.workspace_fingerprint_limit_bytes
+        )
         if self.registry is not None:
             from agents_ide.worker.processes import ProcessSupervisor
 
@@ -2804,7 +2837,10 @@ class Runner:
                                 finish_message(progress_session, progress_run, _attempt_id, payload)
                                 continue
                             for agent_session in agent_sessions:
-                                agent_session.last_external_event_at = utc_now()
+                                from agents_ide.adapters.activity import is_progress
+
+                                if not late and is_progress(type_, payload):
+                                    agent_session.last_external_event_at = utc_now()
                                 if payload.get("session_id") and not late:
                                     agent_session.external_session_id = payload["session_id"]
                                 if (
@@ -2857,6 +2893,9 @@ class Runner:
                                         _candidate, str(config.get("role", ""))
                                     )
                                     self.runtime.setdefault("native_sessions", {}).pop(key, None)
+                            if type_ == "attempt.progress" and payload.get("activity") is True:
+                                # Keep only the timestamp for suppressed tool telemetry.
+                                continue
                             self._event(
                                 progress_session,
                                 type_,
@@ -3284,7 +3323,8 @@ class Runner:
                 not self.simulated
                 and evidence.get("workspace_hash")
                 and context_sources.workspace_hash(
-                    Path(self.snapshot["workspace"]["workspace_path"])
+                    Path(self.snapshot["workspace"]["workspace_path"]),
+                    max_bytes=self.workspace_fingerprint_limit_bytes,
                 )
                 != evidence["workspace_hash"]
             ):
@@ -3684,7 +3724,8 @@ class Runner:
                     not final.get("complete")
                     or final.get("workspace_hash")
                     != context_sources.workspace_hash(
-                        Path(self.snapshot["workspace"]["workspace_path"])
+                        Path(self.snapshot["workspace"]["workspace_path"]),
+                        max_bytes=self.workspace_fingerprint_limit_bytes,
                     )
                 )
             ):
@@ -3823,7 +3864,8 @@ class Runner:
                 signature = content_hash(
                     {
                         "code": context_sources.workspace_hash(
-                            Path(self.snapshot["workspace"]["workspace_path"])
+                            Path(self.snapshot["workspace"]["workspace_path"]),
+                            max_bytes=self.workspace_fingerprint_limit_bytes,
                         ),
                         "items": [
                             (i.item_id, i.status) for i in load_plan_items(session, self.run_id)

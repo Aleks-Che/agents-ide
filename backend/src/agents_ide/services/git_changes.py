@@ -24,6 +24,7 @@ from agents_ide.engine.worktrees import effective_workspace
 from agents_ide.errors import AppError
 from agents_ide.persistence.models import Run
 from agents_ide.security.workspace_read import read_workspace_file
+from agents_ide.services.general_settings import workspace_fingerprint_limit_bytes
 from agents_ide.services.git_head_changes import (
     GitHeadReview,
     compare_head,
@@ -329,7 +330,10 @@ def _review(
         if (boundary or file_boundary) and runtime.get("git_paused_workspace_hash"):
             from agents_ide.engine.context_sources import workspace_hash
 
-            if workspace_hash(workspace) != runtime["git_paused_workspace_hash"]:
+            if (
+                workspace_hash(workspace, max_bytes=workspace_fingerprint_limit_bytes(session))
+                != runtime["git_paused_workspace_hash"]
+            ):
                 blockers.append(
                     "Изменился снимок файлов, сохранённый при паузе. "
                     "Принятие изменений не снимает эту блокировку."
@@ -338,7 +342,9 @@ def _review(
             item["code"] != "??" and item["code"][0] != "." for item in git.list_status(workspace)
         ):
             blockers.append("Индекс содержит подготовленные изменения.")
-        manifest = git.file_manifest(workspace)
+        manifest = git.file_manifest(
+            workspace, max_bytes=workspace_fingerprint_limit_bytes(session)
+        )
         allowed = baseline.get("allowlist") or state.get("allowlist", [])
         previous, current = git.protected_states(
             workspace, baseline.get("protected", {}), manifest, allowed

@@ -60,6 +60,18 @@ const activeRunStates = new Set([
   'recovering',
 ])
 
+function inputWaitingStatus(node?: Stage, run?: RunRecord) {
+  if (
+    run?.state !== 'running' ||
+    node?.status !== 'running' ||
+    !node.input_request
+  )
+    return undefined
+  return node.input_request.kind === 'permission'
+    ? 'Ожидает разрешения'
+    : 'Ожидает ответа'
+}
+
 function StageStatus({
   node,
   run,
@@ -71,19 +83,22 @@ function StageStatus({
   current: boolean
   readyToContinue: boolean
 }) {
+  const inputStatus = current ? inputWaitingStatus(node, run) : undefined
   return (
     <span className="execution-status">
       {current &&
       run &&
+      !inputStatus &&
       activeRunStates.has(run.state) &&
       !['succeeded', 'failed', 'skipped'].includes(node.status ?? 'pending') ? (
         <ActivitySpinner />
       ) : null}
-      {current && run?.state === 'waiting_input'
-        ? readyToContinue
-          ? 'Готов к продолжению'
-          : 'Нужно решение'
-        : (stageStates[node.status ?? 'pending'] ?? node.status)}
+      {inputStatus ??
+        (current && run?.state === 'waiting_input'
+          ? readyToContinue
+            ? 'Готов к продолжению'
+            : 'Нужно решение'
+          : (stageStates[node.status ?? 'pending'] ?? node.status))}
     </span>
   )
 }
@@ -223,6 +238,10 @@ export function ChatRunProgress({
   const current = observation?.current_node_id
   const cursor = `${current}:${observation?.current_execution_id}`
   const nodes = orderStages(observation)
+  const inputStatus = inputWaitingStatus(
+    nodes.find((node) => node.id === current),
+    run,
+  )
   const selectedId =
     selectedStage?.cursor === cursor ? selectedStage.id : current
   const opened = nodes.find((node) => node.id === selectedId) ?? nodes[0]
@@ -237,12 +256,15 @@ export function ChatRunProgress({
         <div>
           <h3>Выполнение шаблона</h3>
           <span role="status" className="execution-status">
-            {run && activeRunStates.has(run.state) ? <ActivitySpinner /> : null}
-            {readyToContinue
-              ? 'Готов к продолжению'
-              : run
-                ? (stateDescriptions[run.state] ?? run.state)
-                : 'Загружаем…'}
+            {run && !inputStatus && activeRunStates.has(run.state) ? (
+              <ActivitySpinner />
+            ) : null}
+            {inputStatus ??
+              (readyToContinue
+                ? 'Готов к продолжению'
+                : run
+                  ? (stateDescriptions[run.state] ?? run.state)
+                  : 'Загружаем…')}
           </span>
         </div>
         <div className="actions">

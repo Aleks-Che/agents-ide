@@ -219,6 +219,9 @@ class OpenCodeAdapter(AgentAdapter):
             return self._run(request)
 
     def _run(self, request: AgentAdapterRequest) -> AgentResult:
+        from agents_ide.adapters.activity import ActivityPulse
+
+        activity = ActivityPulse(request.emit_event)
         record_tool_history = getattr(request, "record_tool_history", False)
         started = time.monotonic()
         sent = False
@@ -228,6 +231,7 @@ class OpenCodeAdapter(AgentAdapter):
         message_roles: dict[str, str] = {}
         tool_progress: dict[tuple[str, str], dict[str, Any]] = {}
         tool_archived_at: dict[tuple[str, str], float] = {}
+        tool_activity: dict[tuple[str, str], tuple[Any, int]] = {}
         text_archived_at: dict[tuple[str, str], float] = {}
         errors: list[Exception] = []
         threads: list[threading.Thread] = []
@@ -279,6 +283,8 @@ class OpenCodeAdapter(AgentAdapter):
             )
 
         def emit(kind: str, payload: dict[str, Any]) -> None:
+            if kind in OMITTED_HISTORY_EVENTS and kind != "agent.native_event":
+                activity()
             if not record_tool_history and kind in OMITTED_HISTORY_EVENTS:
                 return
             if request.emit_event:
@@ -393,6 +399,23 @@ class OpenCodeAdapter(AgentAdapter):
                     or (info.get("sessionID") if isinstance(info, dict) else None)
                 )
                 kind = event["type"]
+                if (
+                    kind == "session.created"
+                    and isinstance(info, dict)
+                    and info.get("parentID") in {resume, *child_sessions}
+                    and isinstance(info.get("id"), str)
+                    and _ID.fullmatch(info["id"])
+                ):
+                    child_sessions.add(info["id"])
+                if sid in child_sessions and kind in {
+                    "message.part.updated",
+                    "message.part.delta",
+                    "message.updated",
+                }:
+                    # A task can be busy in its child session while the parent waits.
+                    # Preserve activity only; never mix child output into root history.
+                    activity()
+                    return
                 # A native task tool waits for its child session. Its prompts
                 # must reach the user too, but unrelated sessions and child
                 # answer/tool streams must not enter the parent's history.
@@ -446,6 +469,18 @@ class OpenCodeAdapter(AgentAdapter):
                     }
                     if isinstance(call_id, str):
                         tool_key = (str(part.get("messageID", "")), call_id)
+                        signature = (
+                            state.get("status"),
+                            len(
+                                str(
+                                    state.get("output")
+                                    or state.get("metadata", {}).get("output", "")
+                                )
+                            ),
+                        )
+                        if tool_activity.get(tool_key) != signature:
+                            tool_activity[tool_key] = signature
+                            activity()
                         now = time.monotonic()
                         tool_changed = tool_progress.get(tool_key) != tool_update
                         # OpenCode repeats the entire growing output for each chunk.

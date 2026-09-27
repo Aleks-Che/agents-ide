@@ -99,6 +99,7 @@ def prepare_git(runner: Runner) -> None:
                 allowed,
                 dirty_policy=runner.snapshot["resolved_settings"]["dirty_policy"],
                 allow_existing_changes=isolated,
+                max_bytes=runner.workspace_fingerprint_limit_bytes,
             )
             expected = runner.snapshot.get("dependencies", {}).get("git", {}).get("fingerprint")
             if (
@@ -144,7 +145,12 @@ def prepare_git(runner: Runner) -> None:
         baseline = git.Baseline.from_dict(state["baseline"])
         if state["phase"] == "ready":
             git.check_workspace(
-                workspace, baseline, allowed, expected_head=state["head"], branch=state["branch"]
+                workspace,
+                baseline,
+                allowed,
+                expected_head=state["head"],
+                branch=state["branch"],
+                max_bytes=runner.workspace_fingerprint_limit_bytes,
             )
         if state["phase"] != "ready":
             git.update_baseline_ref(workspace, runner.run_id, baseline.head_sha)
@@ -154,7 +160,12 @@ def prepare_git(runner: Runner) -> None:
             ):
                 git.ensure_run_branch(workspace, runner.run_id, baseline.head_sha)
             git.check_workspace(
-                workspace, baseline, allowed, expected_head=state["head"], branch=state["branch"]
+                workspace,
+                baseline,
+                allowed,
+                expected_head=state["head"],
+                branch=state["branch"],
+                max_bytes=runner.workspace_fingerprint_limit_bytes,
             )
             with runner._write() as (session, row):
                 state["phase"] = "ready"
@@ -203,7 +214,10 @@ def verification(
     evidence = request.get("context", {}).get("evidence", {})
     if not evidence.get("workspace_hash") or evidence[
         "workspace_hash"
-    ] != context_sources.workspace_hash(Path(runner.snapshot["workspace"]["workspace_path"])):
+    ] != context_sources.workspace_hash(
+        Path(runner.snapshot["workspace"]["workspace_path"]),
+        max_bytes=runner.workspace_fingerprint_limit_bytes,
+    ):
         raise AppError(
             "external_change_detected", "Verification evidence is no longer current", 409
         )
@@ -423,6 +437,7 @@ def git_commit_node(
                     intent,
                     on_event=event,
                     generate_message=generate if generation else None,
+                    max_bytes=runner.workspace_fingerprint_limit_bytes,
                 )
         except AppError as exc:
             if exc.code not in {
@@ -523,6 +538,7 @@ def reconcile_git(runner: Runner) -> bool:
             git.Baseline.from_dict(state["baseline"]),
             intent,
             recover_only=True,
+            max_bytes=runner.workspace_fingerprint_limit_bytes,
         )
     payload = _commit_body(result)
     state["head"] = result.sha or intent.parent_sha
@@ -643,7 +659,8 @@ def plan_control_node(
                     "complete": complete,
                     "execution_id": source.id,
                     "workspace_hash": context_sources.workspace_hash(
-                        Path(runner.snapshot["workspace"]["workspace_path"])
+                        Path(runner.snapshot["workspace"]["workspace_path"]),
+                        max_bytes=runner.workspace_fingerprint_limit_bytes,
                     ),
                 }
                 from agents_ide.domain.common import content_hash

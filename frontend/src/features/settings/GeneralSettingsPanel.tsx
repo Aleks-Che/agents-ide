@@ -17,11 +17,6 @@ export function GeneralSettingsPanel() {
           Общие настройки
         </span>
       </header>
-      <h3>Генерация сообщения коммита</h3>
-      <p className="hint">
-        Настройки по умолчанию для GitCommit. В каждом узле можно задать
-        собственные значения.
-      </p>
       {defaults.isLoading ? <p role="status">Загружаем настройки…</p> : null}
       {defaults.error ? (
         <p role="alert" className="error">
@@ -56,6 +51,104 @@ function GeneralSettingsForm({ initial }: { initial: GeneralSettings }) {
       }}
     >
       <fieldset className="general-settings-fields" disabled={save.isPending}>
+        <h3>Проверка рабочей копии</h3>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={value.workspace_fingerprint_limit_mib === null}
+            onChange={(event) => {
+              save.reset()
+              setValue({
+                ...value,
+                workspace_fingerprint_limit_mib: event.target.checked
+                  ? null
+                  : 64,
+              })
+            }}
+          />{' '}
+          Без лимита
+        </label>
+        <label>
+          Лимит объёма файлов, МиБ
+          <input
+            type="number"
+            min={1}
+            step={1}
+            required
+            disabled={value.workspace_fingerprint_limit_mib === null}
+            value={
+              value.workspace_fingerprint_limit_mib === null
+                ? ''
+                : (value.workspace_fingerprint_limit_mib ?? 64)
+            }
+            onChange={(event) => {
+              save.reset()
+              setValue({
+                ...value,
+                workspace_fingerprint_limit_mib: Number(event.target.value),
+              })
+            }}
+          />
+        </label>
+        <p className="hint">
+          Общий объём файлов при проверке состояния рабочей копии во всех
+          проектах. 1 МиБ = 1 048 576 байт. Игнорируемые Git файлы, которые не
+          добавлены в репозиторий, не учитываются. Изменение действует при
+          следующей проверке, в том числе после продолжения остановленного
+          запуска.
+        </p>
+        <h3>Восстановление зависших агентов</h3>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={value.harness_watchdog?.enabled ?? true}
+            onChange={(event) => {
+              save.reset()
+              setValue({
+                ...value,
+                harness_watchdog: {
+                  idle_minutes: value.harness_watchdog?.idle_minutes ?? 30,
+                  enabled: event.target.checked,
+                },
+              })
+            }}
+          />{' '}
+          Автоматически восстанавливать зависший harness
+        </label>
+        <label>
+          Без активности, минут
+          <input
+            type="number"
+            min={1}
+            max={1440}
+            step={1}
+            required
+            value={value.harness_watchdog?.idle_minutes ?? 30}
+            disabled={value.harness_watchdog?.enabled === false}
+            onChange={(event) => {
+              save.reset()
+              setValue({
+                ...value,
+                harness_watchdog: {
+                  enabled: value.harness_watchdog?.enabled ?? true,
+                  idle_minutes: Number(event.target.value),
+                },
+              })
+            }}
+          />
+        </label>
+        <p className="hint">
+          Для агентов в шаблонах всех проектов. Если нет новых ответов или
+          активности инструментов, приложение автоматически выполнит паузу и
+          продолжит сохранённую сессию. Ожидание вашего ответа или разрешения не
+          считается зависанием. Ручная пауза и остановка отменяют автоматическое
+          продолжение.
+        </p>
+        <h3>Генерация сообщения коммита</h3>
+        <p className="hint">
+          Настройки по умолчанию для GitCommit. В каждом узле можно задать
+          собственные значения.
+        </p>
         <CommitMessageFields
           value={value.commit_message ?? {}}
           connections={connections.data ?? []}

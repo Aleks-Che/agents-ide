@@ -1629,6 +1629,7 @@
               "agent.turn_started",
               "agent.user_message",
               "agent.user_message_status",
+              "agent.watchdog",
               "artifact.recorded",
               "assignment.applied",
               "attempt.finished",
@@ -1913,11 +1914,27 @@
           "commit_message": {
             "$ref": "#/components/schemas/CommitMessageSettings"
           },
+          "harness_watchdog": {
+            "$ref": "#/components/schemas/HarnessWatchdogSettings"
+          },
           "revision": {
             "default": 0,
             "minimum": 0.0,
             "title": "Revision",
             "type": "integer"
+          },
+          "workspace_fingerprint_limit_mib": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 64,
+            "title": "Workspace Fingerprint Limit Mib"
           }
         },
         "title": "GeneralSettings",
@@ -2828,6 +2845,25 @@
           "expected_version"
         ],
         "title": "HarnessProfileUpdate",
+        "type": "object"
+      },
+      "HarnessWatchdogSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "idle_minutes": {
+            "default": 30,
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Idle Minutes",
+            "type": "integer"
+          }
+        },
+        "title": "HarnessWatchdogSettings",
         "type": "object"
       },
       "HeadCommit": {

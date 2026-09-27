@@ -306,7 +306,7 @@ def test_stop_workspace_probe_does_not_hold_database_write_lock(
     )
     assert response.status_code == 200, response.text
 
-    def probe(_):
+    def probe(_, *, max_bytes):
         with factory() as session:
             # A heartbeat can obtain the write reservation during filesystem I/O.
             session.connection().exec_driver_sql("PRAGMA busy_timeout=100")

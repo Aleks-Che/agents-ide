@@ -110,6 +110,7 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "agent.turn_started",
         "agent.output_delta",
         "agent.plan_updated",
+        "agent.watchdog",
     }
 )
 
