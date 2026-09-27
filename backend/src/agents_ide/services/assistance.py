@@ -529,7 +529,8 @@ def collect_context(
         case
         for case in entry.diagnostic_cases
         # Rejected launches have no activity source; their errors can be pasted into chat.
-        if case.id == "harness_catalog" or signals.intersection(case.signals)
+        if case.id in {"harness_catalog", "workspace_fingerprint_limit"}
+        or signals.intersection(case.signals)
     ]
     tools: list[AssistanceTool] = []
     for finding in findings:
